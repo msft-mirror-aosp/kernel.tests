@@ -370,16 +370,8 @@ update_apt_sources bullseye
 
 setup_cuttlefish_user
 
-get_installed_packages >/root/originally-installed
-
-apt-get install -y libc6-dev:amd64
-
 setup_and_build_cuttlefish
 setup_and_build_iptables
-
-get_installed_packages >/root/installed
-
-remove_installed_packages /root/originally-installed /root/installed
 
 install_and_cleanup_cuttlefish
 install_and_cleanup_iptables
