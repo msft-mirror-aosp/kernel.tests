@@ -28,18 +28,11 @@ update_apt_sources bullseye
 
 setup_cuttlefish_user
 
-get_installed_packages >/root/originally-installed
-
 setup_and_build_cuttlefish
 setup_and_build_iptables
 
-get_installed_packages >/root/installed
-
-remove_installed_packages /root/originally-installed /root/installed
-
 install_and_cleanup_cuttlefish
 sed -i "s,^#\(bridge_interface=\),\1br0," /etc/default/cuttlefish-common
-
 install_and_cleanup_iptables
 
 create_systemd_getty_symlinks ttyS0 hvc1
