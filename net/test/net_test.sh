@@ -161,13 +161,7 @@ fi
 
 echo -e "Running $net_test $net_test_args\n"
 $net_test $net_test_args
-rv="$?"
 
 # Write exit code of net_test to a file so that the builder can use it
 # to signal failure if any tests fail.
-echo "${rv}" > "${net_test_exitcode}"
-
-# Additionally on UML make it the exit code of UML kernel binary itself.
-if [[ -e '/proc/exitcode' ]]; then
-  echo "${rv}" > /proc/exitcode
-fi
+echo $? >$net_test_exitcode

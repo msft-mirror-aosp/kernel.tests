@@ -16,15 +16,7 @@
 
 """Unit tests for csocket."""
 
-import socket
-# pylint: disable=g-importing-member
-from socket import AF_INET
-from socket import AF_INET6
-from socket import inet_pton
-from socket import SOCK_DGRAM
-from socket import SOL_IP
-# pylint: enable=g-importing-member
-
+from socket import *  # pylint: disable=wildcard-import
 import unittest
 
 import csocket
@@ -37,7 +29,7 @@ SOL_IPV6 = 41
 class CsocketTest(unittest.TestCase):
 
   def _BuildSocket(self, family, addr):
-    s = socket.socket(family, SOCK_DGRAM, 0)
+    s = socket(family, SOCK_DGRAM, 0)
     s.bind((addr, 0))
     return s
 
