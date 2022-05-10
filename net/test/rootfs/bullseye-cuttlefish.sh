@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright (C) 2019 The Android Open Source Project
+# Copyright (C) 2021 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,11 +16,28 @@
 #
 
 set -e
+set -u
 
-for s in bullseye; do
-  for a in i386 amd64 armhf arm64; do
-    ./build_rootfs.sh -s "${s}" -a "${a}"
-  done
-done
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
-echo 'All rootfs builds completed.'
+. $SCRIPT_DIR/bullseye-common.sh
+
+setup_dynamic_networking "eth1" "br0"
+
+update_apt_sources bullseye
+
+setup_cuttlefish_user
+
+setup_and_build_cuttlefish
+setup_and_build_iptables
+
+install_and_cleanup_cuttlefish
+sed -i "s,^#\(bridge_interface=\),\1br0," /etc/default/cuttlefish-common
+install_and_cleanup_iptables
+
+create_systemd_getty_symlinks ttyS0 hvc1
+
+setup_grub "net.ifnames=0 8250.nr_uarts=1"
+
+apt-get purge -y vim-tiny
+bullseye_cleanup
