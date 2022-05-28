@@ -140,10 +140,17 @@ sleep 1.1
 echo 60 > /proc/sys/kernel/random/urandom_min_reseed_secs
 
 # Make sure /sys is mounted
-[[ -d /sys/fs/bpf ]] || mount -t sysfs none /sys
+[[ -d /sys/fs ]] || mount -t sysfs sysfs -o nosuid,nodev,noexec /sys
 
-# Mount the bpf filesystem
-mount -t bpf none /sys/fs/bpf
+if ! [[ "$(uname -r)" =~ ^([0-3]|4[.][0-8])[.] ]]; then
+  # Mount the bpf filesystem on Linux version 4.9+
+  mount -t bpf bpf -o nosuid,nodev,noexec /sys/fs/bpf
+fi
+
+if ! [[ "$(uname -r)" =~ ^([0-3]|4[.][0-9]|4[.]1[0-3])[.] ]]; then
+  # Mount the Cgroup v2 filesystem on Linux version 4.14+
+  mount -t cgroup2 cgroup2 -o nosuid,nodev,noexec /sys/fs/cgroup
+fi
 
 # In case IPv6 is compiled as a module.
 [ -f /proc/net/if_inet6 ] || insmod $DIR/kernel/net-next/net/ipv6/ipv6.ko
