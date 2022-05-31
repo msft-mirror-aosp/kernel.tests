@@ -156,6 +156,9 @@ ip link set eth0 up
 # Allow people to run ping.
 echo '0 2147483647' > /proc/sys/net/ipv4/ping_group_range
 
+# Allow unprivileged use of eBPF (matches Android OS)
+echo 0 > /proc/sys/kernel/unprivileged_bpf_disabled
+
 # Read environment variables passed to the kernel to determine if script is
 # running on builder and to find which test to run.
 
