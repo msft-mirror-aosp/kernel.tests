@@ -90,8 +90,12 @@ def ReMountProc():
 
 
 def ReMountSys():
+  libc.umount2('/sys/fs/cgroup', MNT_DETACH)  # Ignore failure: might not be mounted
+  libc.umount2('/sys/fs/bpf', MNT_DETACH)  # Ignore failure: might not be mounted
   libc.umount2('/sys', MNT_DETACH)  # Ignore failure: might not be mounted
   Mount('sysfs', '/sys', 'sysfs')
+  Mount('bpf', '/sys/fs/bpf', 'bpf')
+  Mount('cgroup2', '/sys/fs/cgroup', 'cgroup2')
 
 
 def SetFileContents(f, s):
