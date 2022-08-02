@@ -43,6 +43,13 @@ if [ "${arch}" = "amd64" ]; then
   cat >/etc/apt/sources.list.d/google-cloud-sdk.list <<EOF
 deb https://packages.cloud.google.com/apt cloud-sdk main
 EOF
+  # Add eth0 dhcp in startup/boot
+  cat >/etc/network/interfaces.d/eth0 <<EOF
+auto eth0
+allow-hotplug eth0
+
+iface eth0 inet dhcp
+EOF
 fi
 
 update_apt_sources "bullseye bullseye-backports"
