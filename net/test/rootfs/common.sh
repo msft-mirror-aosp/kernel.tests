@@ -123,19 +123,31 @@ create_systemd_getty_symlinks() {
 
 # $1 - Additional default command line
 setup_grub() {
-  if [[ "${embed_kernel_initrd_dtb}" = "1" ]]; then
-    # For testing the image with a virtual device
+  if [[ "${embed_kernel_initrd_dtb}" = "0" && "${install_grub}" = "0" ]]; then
+    return
+  fi
+
+  if [[ "${install_grub}" = "1" ]]; then
+    # Mount fstab entry added by stage2
+    mount /boot/efi
+
+    # Install GRUB EFI (removable, for Cloud)
+    apt-get install -y grub-efi
+    grub-install --target $(uname -m)-efi --removable
+  else
+    # Install common grub components
     apt-get install -y grub2-common
-    cat >/etc/default/grub <<EOF
+    mkdir /boot/grub
+  fi
+
+  cat >/etc/default/grub <<EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=Debian
-GRUB_CMDLINE_LINUX_DEFAULT="quiet"
+GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_CMDLINE_LINUX="\\\$cmdline $1"
 EOF
-    mkdir /boot/grub
-    update-grub
-  fi
+  update-grub
 }
 
 cleanup() {
@@ -143,13 +155,17 @@ cleanup() {
   mkdir -p /var/lib/systemd/{coredump,linger,rfkill,timesync}
   chown systemd-timesync:systemd-timesync /var/lib/systemd/timesync
 
-  # If embedding isn't enabled, remove the embedded modules and initrd and
-  # uninstall the tools to regenerate the initrd, as they're unlikely to
-  # ever be used
+
+  # If embedding isn't enabled, remove the embedded modules and initrd
   if [[ "${embed_kernel_initrd_dtb}" = "0" ]]; then
-    apt-get purge -y initramfs-tools initramfs-tools-core klibc-utils kmod
     rm -f "/boot/initrd.img-$(uname -r)"
     rm -rf "/lib/modules/$(uname -r)"
+  fi
+
+  # If embedding isn't enabled *and* GRUB isn't being installed, uninstall
+  # the tools to regenerate the initrd, as they're unlikely to ever be used
+  if [[ "${embed_kernel_initrd_dtb}" = "0" && "${install_grub}" = "0" ]]; then
+    apt-get purge -y initramfs-tools initramfs-tools-core klibc-utils kmod
   fi
 
   # Miscellaneous cleanup
