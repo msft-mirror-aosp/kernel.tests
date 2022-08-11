@@ -29,7 +29,6 @@ setup_dynamic_networking "eth0" ""
 
 # Install required tool/packages
 apt-get update
-apt-get install xz-utils -y
 
 if [ "${arch}" = "amd64" ]; then
   # apt-key error, need gnupg package install

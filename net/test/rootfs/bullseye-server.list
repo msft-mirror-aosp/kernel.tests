@@ -7,3 +7,4 @@ openjdk-11-jre
 screen
 software-properties-common
 unzip
+xz-utils
