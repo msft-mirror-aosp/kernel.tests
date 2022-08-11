@@ -123,7 +123,7 @@ create_systemd_getty_symlinks() {
 
 # $1 - Additional default command line
 setup_grub() {
-  if [ -n "${embed_kernel_initrd_dtb}" ]; then
+  if [[ "${embed_kernel_initrd_dtb}" = "1" ]]; then
     # For testing the image with a virtual device
     apt-get install -y grub2-common
     cat >/etc/default/grub <<EOF
@@ -146,7 +146,7 @@ cleanup() {
   # If embedding isn't enabled, remove the embedded modules and initrd and
   # uninstall the tools to regenerate the initrd, as they're unlikely to
   # ever be used
-  if [ -z "${embed_kernel_initrd_dtb}" ]; then
+  if [[ "${embed_kernel_initrd_dtb}" = "0" ]]; then
     apt-get purge -y initramfs-tools initramfs-tools-core klibc-utils kmod
     rm -f "/boot/initrd.img-$(uname -r)"
     rm -rf "/lib/modules/$(uname -r)"

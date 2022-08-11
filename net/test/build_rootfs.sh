@@ -29,11 +29,12 @@ usage() {
 }
 
 mirror=http://ftp.debian.org/debian
+embed_kernel_initrd_dtb=0
 suite=bullseye
 arch=amd64
 
-embed_kernel_initrd_dtb=
 dtb_subdir=
+kernel=
 ramdisk=
 rootfs=
 dtb=
@@ -90,11 +91,7 @@ done
 
 # Disable Debian's "persistent" network device renaming
 cmdline="net.ifnames=0 rw 8250.nr_uarts=2 PATH=/usr/sbin:/bin:/usr/bin"
-
-# Pass down embedding option, if specified
-if [ -n "${embed_kernel_initrd_dtb}" ]; then
-  cmdline="${cmdline} embed_kernel_initrd_dtb=${embed_kernel_initrd_dtb}"
-fi
+cmdline="${cmdline} embed_kernel_initrd_dtb=${embed_kernel_initrd_dtb}"
 
 case "${arch}" in
   i386)
@@ -324,7 +321,7 @@ image_unmount2() {
 trap image_unmount2 EXIT
 
 # Embed the kernel and dtb images now, if requested
-if [ -n "${embed_kernel_initrd_dtb}" ]; then
+if [[ "${embed_kernel_initrd_dtb}" = "1" ]]; then
   if [ -n "${dtb}" ]; then
     sudo mkdir -p "${mount}/boot/dtb/${dtb_subdir}"
     sudo cp -a "${dtb}" "${mount}/boot/dtb/${dtb_subdir}"
