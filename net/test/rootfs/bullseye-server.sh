@@ -27,22 +27,6 @@ arch=$(uname -m)
 
 setup_dynamic_networking "eth0" ""
 
-# Install required tool/packages
-apt-get update
-
-if [ "${arch}" = "amd64" ]; then
-  # apt-key error, need gnupg package install
-  apt-get install curl -y
-  apt-get install gnupg -y
-
-  # Install apt-key for packages.cloud.google.com
-  curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-
-  # Enable cloud-sdk repository
-  cat >/etc/apt/sources.list.d/google-cloud-sdk.list <<EOF
-deb https://packages.cloud.google.com/apt cloud-sdk main
-EOF
-
 update_apt_sources "bullseye bullseye-backports"
 
 if [ "${arch}" = "amd64" ]; then
