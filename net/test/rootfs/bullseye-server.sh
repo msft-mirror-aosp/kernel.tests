@@ -25,7 +25,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 arch=$(uname -m)
 [ "${arch}" = "x86_64" ] && arch=amd64
 
-setup_dynamic_networking "en*" ""
+setup_dynamic_networking "eth0" ""
 
 # Install required tool/packages
 apt-get update
@@ -43,14 +43,6 @@ if [ "${arch}" = "amd64" ]; then
   cat >/etc/apt/sources.list.d/google-cloud-sdk.list <<EOF
 deb https://packages.cloud.google.com/apt cloud-sdk main
 EOF
-  # Add eth0 dhcp in startup/boot
-  cat >/etc/network/interfaces.d/eth0 <<EOF
-auto eth0
-allow-hotplug eth0
-
-iface eth0 inet dhcp
-EOF
-fi
 
 update_apt_sources "bullseye bullseye-backports"
 

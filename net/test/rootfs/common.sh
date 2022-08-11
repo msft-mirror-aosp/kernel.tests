@@ -65,8 +65,8 @@ setup_static_networking() {
   echo "nameserver 8.8.4.4" >>/etc/resolv.conf
 }
 
-# $1 - Network interface for bridge (or NetworkManager DHCP)
-# $2 - Bridge name. If set to the empty string, NetworkManager is used
+# $1 - Network interface for bridge (or traditional DHCP)
+# $2 - Bridge name. If not specified, no bridge is configured
 setup_dynamic_networking() {
   # So isc-dhcp-client can work with a read-only rootfs..
   cat >>/etc/fstab <<EOF
@@ -81,15 +81,10 @@ EOF
 
   # Set up automatic DHCP for *future* boots
   if [ -z "$2" ]; then
-    cat >/etc/systemd/network/dhcp.network <<EOF
-[Match]
-Name=$1
-
-[Network]
-DHCP=yes
+    cat >/etc/network/interfaces.d/$1.conf <<EOF
+auto $1
+iface $1 inet dhcp
 EOF
-    # Mask the NetworkManager-wait-online service to prevent hangs
-    systemctl mask NetworkManager-wait-online.service
   else
     cat >/etc/network/interfaces.d/$2.conf <<EOF
 auto $2
