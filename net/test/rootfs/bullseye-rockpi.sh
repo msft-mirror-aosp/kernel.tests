@@ -26,7 +26,7 @@ sed -i "s,debian,rockpi," /etc/hosts
 sed -i "s,debian,rockpi," /etc/hostname
 
 # Build U-Boot FIT based on the Debian initrd
-if [ -n "${embed_kernel_initrd_dtb}" ]; then
+if [[ "${embed_kernel_initrd_dtb}" = "1" ]]; then
   mkimage -f auto -A arm64 -O linux -T kernel -C none -a 0x02080000 \
     -d /boot/vmlinuz-$(uname -r) -i /boot/initrd.img-$(uname -r) \
     -b /boot/dtb/rockchip/rk3399-rock-pi-4b.dtb /boot/boot.fit
