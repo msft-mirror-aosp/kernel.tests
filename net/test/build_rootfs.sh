@@ -35,6 +35,7 @@ suite=bullseye
 arch=amd64
 
 dtb_subdir=
+initramfs=
 kernel=
 ramdisk=
 disk=
