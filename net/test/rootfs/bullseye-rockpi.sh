@@ -405,5 +405,7 @@ install_and_cleanup_iptables
 
 create_systemd_getty_symlinks ttyS2
 
+setup_grub "net.ifnames=0 8250.nr_uarts=4 earlycon=uart8250,mmio32,0xff1a0000 console=ttyS2,1500000n8 loglevel=7 kvm-arm.mode=nvhe sdhci.debug_quirks=0x20000000"
+
 apt-get purge -y vim-tiny
 bullseye_cleanup
