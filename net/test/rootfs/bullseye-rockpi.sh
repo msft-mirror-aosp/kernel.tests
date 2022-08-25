@@ -403,7 +403,7 @@ setup_and_build_iptables
 install_and_cleanup_cuttlefish
 install_and_cleanup_iptables
 
-create_systemd_getty_symlinks ttyS0 hvc1
+create_systemd_getty_symlinks ttyS2
 
 apt-get purge -y vim-tiny
 bullseye_cleanup
