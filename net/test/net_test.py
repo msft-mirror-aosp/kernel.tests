@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import fcntl
 import os
 import random
@@ -63,8 +64,8 @@ IPV6_FL_S_ANY = 255
 
 IFNAMSIZ = 16
 
-IPV4_PING = "\x08\x00\x00\x00\x0a\xce\x00\x03"
-IPV6_PING = "\x80\x00\x00\x00\x0a\xce\x00\x03"
+IPV4_PING = b"\x08\x00\x00\x00\x0a\xce\x00\x03"
+IPV6_PING = b"\x80\x00\x00\x00\x0a\xce\x00\x03"
 
 IPV4_ADDR = "8.8.8.8"
 IPV4_ADDR2 = "8.8.4.4"
@@ -80,10 +81,10 @@ IPV6_SEQ_DGRAM_HEADER = ("  sl  "
 UDP_HDR_LEN = 8
 
 # Arbitrary packet payload.
-UDP_PAYLOAD = str(scapy.DNS(rd=1,
-                            id=random.randint(0, 65535),
-                            qd=scapy.DNSQR(qname="wWW.GoOGle.CoM",
-                                           qtype="AAAA")))
+UDP_PAYLOAD = bytes(scapy.DNS(rd=1,
+                              id=random.randint(0, 65535),
+                              qd=scapy.DNSQR(qname="wWW.GoOGle.CoM",
+                                             qtype="AAAA")))
 
 # Unix group to use if we want to open sockets as non-root.
 AID_INET = 3003
@@ -331,7 +332,7 @@ def MakeFlowLabelOption(addr, label):
   action = IPV6_FL_A_GET
   share = IPV6_FL_S_ANY
   flags = IPV6_FL_F_CREATE
-  pad = "\x00" * 4
+  pad = b"\x00" * 4
   return struct.pack(fmt, addr, label, action, share, flags, 0, 0, pad)
 
 
@@ -393,11 +394,11 @@ class RunAsUid(RunAsUidGid):
 
 class NetworkTest(unittest.TestCase):
 
-  def assertRaisesRegex(self, *args, **kwargs):
-    if sys.version_info.major < 3:
-      return self.assertRaisesRegexp(*args, **kwargs)
-    else:
-      return super().assertRaisesRegex(*args, **kwargs)
+  @contextlib.contextmanager
+  def _errnoCheck(self, err_num):
+    with self.assertRaises(EnvironmentError) as context:
+      yield context
+    self.assertEqual(context.exception.errno, err_num)
 
   def assertRaisesErrno(self, err_num, f=None, *args):
     """Test that the system returns an errno error.
@@ -415,11 +416,11 @@ class NetworkTest(unittest.TestCase):
       f: (optional) A callable that should result in error
       *args: arguments passed to f
     """
-    msg = os.strerror(err_num)
     if f is None:
-      return self.assertRaisesRegex(EnvironmentError, msg)
+      return self._errnoCheck(err_num)
     else:
-      self.assertRaisesRegex(EnvironmentError, msg, f, *args)
+      with self._errnoCheck(err_num):
+        f(*args)
 
   def ReadProcNetSocket(self, protocol):
     # Read file.

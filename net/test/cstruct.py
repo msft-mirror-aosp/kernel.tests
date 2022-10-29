@@ -73,38 +73,41 @@ import struct
 import re
 
 
-def CalcSize(fmt):
+def _PythonFormat(fmt):
   if "A" in fmt:
     fmt = fmt.replace("A", "s")
-  # Remove the last digital since it will cause error in python3.
-  fmt = (re.split('\d+$', fmt)[0])
-  return struct.calcsize(fmt)
+  return re.split('\d+$', fmt)[0]
+
+def CalcSize(fmt):
+  return struct.calcsize(_PythonFormat(fmt))
 
 def CalcNumElements(fmt):
+  fmt = _PythonFormat(fmt)
   prevlen = len(fmt)
   fmt = fmt.replace("S", "")
   numstructs = prevlen - len(fmt)
-  size = CalcSize(fmt)
+  size = struct.calcsize(fmt)
   elements = struct.unpack(fmt, b"\x00" * size)
   return len(elements) + numstructs
+
+
+class StructMetaclass(type):
+
+  def __len__(cls):
+    return cls._length
+
+  def __init__(cls, unused_name, unused_bases, namespace):
+    # Make the class object have the name that's passed in.
+    type.__init__(cls, namespace["_name"], unused_bases, namespace)
 
 
 def Struct(name, fmt, fieldnames, substructs={}):
   """Function that returns struct classes."""
 
-  class Meta(type):
-
-    def __len__(cls):
-      return cls._length
-
-    def __init__(cls, unused_name, unused_bases, namespace):
-      # Make the class object have the name that's passed in.
-      type.__init__(cls, namespace["_name"], unused_bases, namespace)
-
   class CStruct(object):
     """Class representing a C-like structure."""
 
-    __metaclass__ = Meta
+    __metaclass__ = StructMetaclass
 
     # Name of the struct.
     _name = name
@@ -165,7 +168,7 @@ def Struct(name, fmt, fieldnames, substructs={}):
       data = data[:self._length]
       values = list(struct.unpack(self._format, data))
       for index, value in enumerate(values):
-        if isinstance(value, str) and index in self._nested:
+        if isinstance(value, bytes) and index in self._nested:
           values[index] = self._nested[index](value)
       self._SetValues(values)
 
@@ -175,7 +178,7 @@ def Struct(name, fmt, fieldnames, substructs={}):
       1. With no args, the whole struct is zero-initialized.
       2. With keyword args, the matching fields are populated; rest are zeroed.
       3. With one tuple as the arg, the fields are assigned based on position.
-      4. With one string arg, the Struct is parsed from bytes.
+      4. With one bytes arg, the Struct is parsed from bytes.
       """
       if tuple_or_bytes and kwargs:
         raise TypeError(
@@ -183,22 +186,23 @@ def Struct(name, fmt, fieldnames, substructs={}):
 
       if tuple_or_bytes is None:
         # Default construct from null bytes.
-        self._Parse("\x00" * len(self))
+        self._Parse(b"\x00" * len(self))
         # If any keywords were supplied, set those fields.
         for k, v in kwargs.items():
           setattr(self, k, v)
-      elif isinstance(tuple_or_bytes, str):
-        # Initializing from a string.
+      elif isinstance(tuple_or_bytes, bytes):
+        # Initializing from bytes.
         if len(tuple_or_bytes) < self._length:
-          raise TypeError("%s requires string of length %d, got %d" %
+          raise TypeError("%s requires a bytes object of length %d, got %d" %
                           (self._name, self._length, len(tuple_or_bytes)))
         self._Parse(tuple_or_bytes)
       else:
         # Initializing from a tuple.
         if len(tuple_or_bytes) != len(self._fieldnames):
-          raise TypeError("%s has exactly %d fieldnames (%d given)" %
+          raise TypeError("%s has exactly %d fieldnames: (%s), %d given: (%s)" %
                           (self._name, len(self._fieldnames),
-                           len(tuple_or_bytes)))
+                           ", ".join(self._fieldnames), len(tuple_or_bytes),
+                           ", ".join(str(x) for x in tuple_or_bytes)))
         self._SetValues(tuple_or_bytes)
 
     def _FieldIndex(self, attr):
@@ -236,7 +240,7 @@ def Struct(name, fmt, fieldnames, substructs={}):
 
     @staticmethod
     def _MaybePackStruct(value):
-      if hasattr(value, "__metaclass__"):# and value.__metaclass__ == Meta:
+      if isinstance(type(value), StructMetaclass):
         return value.Pack()
       else:
         return value
@@ -247,9 +251,9 @@ def Struct(name, fmt, fieldnames, substructs={}):
 
     def __str__(self):
       def FieldDesc(index, name, value):
-        if isinstance(value, str):
+        if isinstance(value, bytes):
           if index in self._asciiz:
-            value = value.rstrip("\x00")
+            value = value.rstrip(b"\x00")
           elif any(c not in string.printable for c in value):
             value = value.encode("hex")
         return "%s=%s" % (name, value)
