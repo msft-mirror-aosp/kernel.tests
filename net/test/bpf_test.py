@@ -84,9 +84,6 @@ import sock_diag
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
-HAVE_EBPF_ACCOUNTING = bpf.HAVE_EBPF_4_9
-HAVE_EBPF_SOCKET = bpf.HAVE_EBPF_4_14
-
 # bpf_ktime_get_ns() was made non-GPL requiring in 5.8 and at the same time
 # bpf_ktime_get_boot_ns() was added, both of these changes were backported to
 # Android Common Kernel in 4.14.221, 4.19.175, 5.4.97.
@@ -217,8 +214,6 @@ INS_BPF_PARAM_STORE = [
 ]
 
 
-@unittest.skipUnless(HAVE_EBPF_ACCOUNTING,
-                     "BPF helper function is not fully supported")
 class BpfTest(net_test.NetworkTest):
 
   def setUp(self):
@@ -357,8 +352,6 @@ class BpfTest(net_test.NetworkTest):
   #   net: bpf: Allow TC programs to call BPF_FUNC_skb_change_head
   #   commit 6f3f65d80dac8f2bafce2213005821fccdce194c
   #
-  @unittest.skipUnless(bpf.HAVE_EBPF_4_14,
-                       "no bpf_skb_change_head() support for pre-4.14 kernels")
   def testSkbChangeHead(self):
     # long bpf_skb_change_head(struct sk_buff *skb, u32 len, u64 flags)
     instructions = [
@@ -469,8 +462,6 @@ class BpfTest(net_test.NetworkTest):
       self.assertEqual(packet_count, LookupMap(self.map_fd, uid).value)
 
 
-@unittest.skipUnless(HAVE_EBPF_ACCOUNTING,
-                     "Cgroup BPF is not fully supported")
 class BpfCgroupTest(net_test.NetworkTest):
 
   @classmethod
@@ -572,8 +563,6 @@ class BpfCgroupTest(net_test.NetworkTest):
       for socktype in [socket.SOCK_DGRAM, socket.SOCK_STREAM]:
         self.checkSocketCreate(family, socktype, success)
 
-  @unittest.skipUnless(HAVE_EBPF_SOCKET,
-                       "Cgroup BPF socket is not supported")
   def testCgroupSocketCreateBlock(self):
     instructions = [
         BpfFuncCall(BPF_FUNC_get_current_uid_gid),
