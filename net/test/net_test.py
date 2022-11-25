@@ -96,6 +96,9 @@ KERN_INFO = 6
 LINUX_VERSION = csocket.LinuxVersion()
 LINUX_ANY_VERSION = (0, 0)
 
+def ByteToHex(b):
+  return "%02x" % (ord(b) if isinstance(b, str) else b)
+
 def GetWildcardAddress(version):
   return {4: "0.0.0.0", 6: "::"}[version]
 
@@ -222,7 +225,8 @@ def SetInterfaceHWAddr(ifname, hwaddr):
   hwaddr = binascii.unhexlify(hwaddr)
   if len(hwaddr) != 6:
     raise ValueError("Unknown hardware address length %d" % len(hwaddr))
-  ifr = struct.pack("%dsH6s" % IFNAMSIZ, ifname, scapy.ARPHDR_ETHER, hwaddr)
+  ifr = struct.pack("%dsH6s" % IFNAMSIZ, ifname.encode(), scapy.ARPHDR_ETHER,
+                    hwaddr)
   fcntl.ioctl(s, SIOCSIFHWADDR, ifr)
 
 
