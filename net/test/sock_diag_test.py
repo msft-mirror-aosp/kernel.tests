@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python
 #
 # Copyright 2015 The Android Open Source Project
 #
@@ -259,7 +259,7 @@ class SockDiagTest(SockDiagBaseTest):
         b"00040400"
     )
     states = 1 << tcp_test.TCP_ESTABLISHED
-    self.assertEqual(expected, binascii.hexlify(bytecode))
+    self.assertEquals(expected, binascii.hexlify(bytecode))
     self.assertEqual(76, len(bytecode))
     self.socketpairs = self._CreateLotsOfSockets(SOCK_STREAM)
     filteredsockets = self.sock_diag.DumpAllInetSockets(IPPROTO_TCP, bytecode,
