@@ -65,12 +65,17 @@ OPTIONS="$OPTIONS BLK_DEV_UBD HOSTFS"
 # QEMU specific options
 OPTIONS="$OPTIONS PCI VIRTIO VIRTIO_PCI VIRTIO_BLK NET_9P NET_9P_VIRTIO 9P_FS"
 OPTIONS="$OPTIONS CRYPTO_DEV_VIRTIO SERIAL_8250 SERIAL_8250_PCI"
+OPTIONS="$OPTIONS SERIAL_8250_CONSOLE PCI_HOST_GENERIC SERIAL_AMBA_PL011"
+OPTIONS="$OPTIONS SERIAL_AMBA_PL011_CONSOLE"
 
 # Obsolete options present at some time in Android kernels
 OPTIONS="$OPTIONS IP_NF_TARGET_REJECT_SKERR IP6_NF_TARGET_REJECT_SKERR"
 
 # These two break the flo kernel due to differences in -Werror on recent GCC.
 DISABLE_OPTIONS=" REISERFS_FS ANDROID_PMEM"
+
+# Disable frame size warning on arm64. GCC 10 generates >1k stack frames.
+DISABLE_OPTIONS="$DISABLE_OPTIONS FRAME_WARN"
 
 # How many TAP interfaces to create to provide the VM with real network access
 # via the host. This requires privileges (e.g., root access) on the host.
@@ -407,7 +412,7 @@ else
 
   # Map the --readonly flag to a QEMU block device flag
   if ((nowrite > 0)); then
-    blockdevice=",readonly"
+    blockdevice=",readonly=on"
   else
     blockdevice=
   fi
