@@ -386,7 +386,7 @@ if [[ -n "${system_partition}" ]]; then
   system_partition_size=$((${system_partition_num_sectors} * 512))
   system_partition_tempfile=$(mktemp)
   dd if="${disk}" of="${system_partition_tempfile}" bs=512 skip=${system_partition_start} count=${system_partition_num_sectors}
-  fsck.vfat -a "${system_partition_tempfile}" || true
+  /sbin/fsck.vfat -a "${system_partition_tempfile}" || true
   dd if="${system_partition_tempfile}" of="${disk}" bs=512 seek=${system_partition_start} count=${system_partition_num_sectors} conv=fsync,notrunc
   rm -f "${system_partition_tempfile}"
 fi
@@ -512,7 +512,7 @@ if [[ -n "${system_partition}" ]]; then
   system_partition_size=$((${system_partition_num_sectors} * 512))
   system_partition_tempfile=$(mktemp)
   dd if="${disk}" of="${system_partition_tempfile}" bs=512 skip=${system_partition_start} count=${system_partition_num_sectors}
-  fsck.vfat -a "${system_partition_tempfile}" || true
+  /sbin/fsck.vfat -a "${system_partition_tempfile}" || true
   dd if="${system_partition_tempfile}" of="${disk}" bs=512 seek=${system_partition_start} count=${system_partition_num_sectors} conv=fsync,notrunc
   rm -f "${system_partition_tempfile}"
 fi
