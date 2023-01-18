@@ -38,7 +38,7 @@ if [ ! -d /dev/fd ]; then
  ln -s /proc/self/fd /dev/fd
 fi
 
-update_apt_sources "bullseye bullseye-backports"
+update_apt_sources "bullseye bullseye-backports" "non-free"
 
 setup_cuttlefish_user
 
@@ -89,7 +89,7 @@ install_and_cleanup_cuttlefish
 # ttyS0 for GCE t2a
 create_systemd_getty_symlinks ttyAMA0 ttyS0
 
-setup_grub "net.ifnames=0 console=ttyAMA0 8250.nr_uarts=1 console=ttyS0 loglevel=4"
+setup_grub "net.ifnames=0 console=ttyAMA0 8250.nr_uarts=1 console=ttyS0 loglevel=4 amdgpu.runpm=0 amdgpu.dc=0"
 
 apt-get purge -y vim-tiny
 bullseye_cleanup
