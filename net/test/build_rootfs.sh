@@ -374,8 +374,14 @@ if [[ ${rootfs_partition} = "raw" ]]; then
     sudo e2fsck -p -f "${disk}" || true
 else
     rootfs_partition_start=$(partx -g -o START -s -n "${rootfs_partition}" "${disk}" | xargs)
+    rootfs_partition_end=$(partx -g -o END -s -n "${rootfs_partition}" "${disk}" | xargs)
+    rootfs_partition_num_sectors=$((${rootfs_partition_end} - ${rootfs_partition_start} + 1))
     rootfs_partition_offset=$((${rootfs_partition_start} * 512))
-    e2fsck -p -f "${disk}"?offset=${rootfs_partition_offset} || true
+    rootfs_partition_tempfile2=$(mktemp)
+    dd if="${disk}" of="${rootfs_partition_tempfile2}" bs=512 skip=${rootfs_partition_start} count=${rootfs_partition_num_sectors}
+    e2fsck -p -f "${rootfs_partition_tempfile2}" || true
+    dd if="${rootfs_partition_tempfile2}" of="${disk}" bs=512 seek=${rootfs_partition_start} count=${rootfs_partition_num_sectors} conv=fsync,notrunc
+    rm -f "${rootfs_partition_tempfile2}"
     e2fsck -fy "${disk}"?offset=${rootfs_partition_offset} || true
 fi
 if [[ -n "${system_partition}" ]]; then
@@ -500,8 +506,14 @@ if [[ ${rootfs_partition} = "raw" ]]; then
     sudo e2fsck -p -f "${disk}" || true
 else
     rootfs_partition_start=$(partx -g -o START -s -n "${rootfs_partition}" "${disk}" | xargs)
+    rootfs_partition_end=$(partx -g -o END -s -n "${rootfs_partition}" "${disk}" | xargs)
+    rootfs_partition_num_sectors=$((${rootfs_partition_end} - ${rootfs_partition_start} + 1))
     rootfs_partition_offset=$((${rootfs_partition_start} * 512))
-    e2fsck -p -f "${disk}"?offset=${rootfs_partition_offset} || true
+    rootfs_partition_tempfile2=$(mktemp)
+    dd if="${disk}" of="${rootfs_partition_tempfile2}" bs=512 skip=${rootfs_partition_start} count=${rootfs_partition_num_sectors}
+    e2fsck -p -f "${rootfs_partition_tempfile2}" || true
+    dd if="${rootfs_partition_tempfile2}" of="${disk}" bs=512 seek=${rootfs_partition_start} count=${rootfs_partition_num_sectors} conv=fsync,notrunc
+    rm -f "${rootfs_partition_tempfile2}"
     e2fsck -fy "${disk}"?offset=${rootfs_partition_offset} || true
 fi
 if [[ -n "${system_partition}" ]]; then
