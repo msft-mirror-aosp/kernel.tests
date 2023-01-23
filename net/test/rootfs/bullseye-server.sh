@@ -81,9 +81,12 @@ setup_and_build_cuttlefish
 
 install_and_cleanup_cuttlefish
 
-create_systemd_getty_symlinks ttyS0 hvc1
+# ttyAMA0 for ampere/gigabyte
+# ttyS0 for GCE t2a
+# hvc1 for nested Cuttlefish (login console only)
+create_systemd_getty_symlinks ttyAMA0 ttyS0 hvc1
 
-setup_grub "net.ifnames=0 8250.nr_uarts=1 console=ttyS0 loglevel=4"
+setup_grub "net.ifnames=0 console=ttyAMA0 8250.nr_uarts=1 console=ttyS0 loglevel=4"
 
 apt-get purge -y vim-tiny
 bullseye_cleanup
