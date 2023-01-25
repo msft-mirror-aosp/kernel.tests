@@ -1,7 +1,10 @@
 #include "bullseye-cuttlefish.list"
 aapt
 bzip2
+eject
+firmware-amd-graphics
 gcc
+gdisk
 libglvnd0
 make
 openjdk-11-jre
