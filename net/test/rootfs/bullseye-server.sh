@@ -47,6 +47,9 @@ for package in linux-image-${arch} qemu-system-arm qemu-system-x86; do
   apt-get install -y -t bullseye-backports ${package}
 done
 
+# Install firmware package for AMD graphics
+apt-get install -y firmware-amd-graphics
+
 get_installed_packages >/root/originally-installed
 
 # Using "Depends:" is more reliable than "Version:", because it works for
