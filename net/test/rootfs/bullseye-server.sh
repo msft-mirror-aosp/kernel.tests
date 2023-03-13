@@ -43,7 +43,7 @@ update_apt_sources "bullseye bullseye-backports" "non-free"
 setup_cuttlefish_user
 
 # Install JRE
-apt-get install -y openjdk-11-jre
+apt-get install -y openjdk-17-jre
 
 # Get kernel and QEMU from backports
 for package in linux-image-${arch} qemu-system-arm qemu-system-x86; do
