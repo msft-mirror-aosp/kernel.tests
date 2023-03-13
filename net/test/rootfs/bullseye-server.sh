@@ -102,5 +102,9 @@ create_systemd_getty_symlinks ttyAMA0 ttyS0
 
 setup_grub "net.ifnames=0 console=ttyAMA0 8250.nr_uarts=1 console=ttyS0 loglevel=4 amdgpu.runpm=0 amdgpu.dc=0"
 
+# Switch to NetworkManager. To disrupt the bootstrapping the least, do this
+# right at the end..
+rm -f /etc/network/interfaces.d/eth0.conf
+apt-get install -y network-manager
 apt-get purge -y vim-tiny
 bullseye_cleanup
