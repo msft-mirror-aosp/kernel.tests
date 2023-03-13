@@ -45,6 +45,11 @@ setup_cuttlefish_user
 # Install JRE
 apt-get install -y openjdk-17-jre
 
+# Ubuntu compatibility
+cat >>/etc/skel/.profile << EOF
+PATH="/usr/sbin:\$PATH"
+EOF
+
 # Get kernel and QEMU from backports
 for package in linux-image-${arch} qemu-system-arm qemu-system-x86; do
   apt-get install -y -t bullseye-backports ${package}
