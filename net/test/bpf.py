@@ -18,9 +18,9 @@
 
 import ctypes
 import os
-import platform
 import resource
 import socket
+import sys
 
 import csocket
 import cstruct
@@ -32,10 +32,6 @@ import net_test
 # around this problem and pick the right syscall nr, we can additionally check
 # the bitness of the python interpreter. Assume that the 64-bit architectures
 # are not running with COMPAT_UTS_MACHINE and must be 64-bit at all times.
-#
-# Is there a better way of doing this?
-# Is it correct to use os.uname()[4] instead of platform.machine() ?
-# Should we use 'sys.maxsize > 2**32' instead of platform.architecture()[0] ?
 __NR_bpf = {  # pylint: disable=invalid-name
     "aarch64-32bit": 386,
     "aarch64-64bit": 280,
@@ -47,7 +43,7 @@ __NR_bpf = {  # pylint: disable=invalid-name
     "x86_64-32bit": 357,
     "x86_64-64bit": 321,
     "riscv64-64bit": 280,
-}[os.uname()[4] + "-" + platform.architecture()[0]]
+}[os.uname()[4] + "-" + ("64" if sys.maxsize > 0x7FFFFFFF else "32") + "bit"]
 
 # After ACK merge of 5.10.168 is when support for this was backported from
 # upstream Linux 5.14 and was merged into ACK android{12,13}-5.10 branches.
