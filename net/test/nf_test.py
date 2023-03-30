@@ -55,7 +55,6 @@ class NetilterRejectTargetTest(multinetwork_base.MultiNetworkBaseTest):
       sock.connect((addr, 53))
     except IOError:
       pass
-    sock.close()
 
   def testRejectTcp4(self):
     self.CheckRejectedTcp(4, _TEST_IP4_ADDR)
@@ -75,7 +74,6 @@ class NetilterRejectTargetTest(multinetwork_base.MultiNetworkBaseTest):
       sock.sendto(net_test.UDP_PAYLOAD, (addr, 53))
     except IOError:
       pass
-    sock.close()
 
   def testRejectUdp4(self):
     self.CheckRejectedUdp(4, _TEST_IP4_ADDR)

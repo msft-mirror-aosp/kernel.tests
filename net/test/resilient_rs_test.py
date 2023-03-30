@@ -171,7 +171,5 @@ class ResilientRouterSolicitationTest(multinetwork_base.MultiNetworkBaseTest):
       self.assertLess(min_exp, t)
       self.assertGreater(max_exp, t)
 
-    tun.close()
-
 if __name__ == "__main__":
   unittest.main()

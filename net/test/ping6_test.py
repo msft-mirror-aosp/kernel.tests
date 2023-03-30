@@ -336,12 +336,10 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
   def testIPv4SendWithNoConnection(self):
     s = net_test.IPv4PingSocket()
     self.assertRaisesErrno(errno.EDESTADDRREQ, s.send, net_test.IPV4_PING)
-    s.close()
 
   def testIPv6SendWithNoConnection(self):
     s = net_test.IPv6PingSocket()
     self.assertRaisesErrno(errno.EDESTADDRREQ, s.send, net_test.IPV6_PING)
-    s.close()
 
   def testIPv4LoopbackPingWithConnect(self):
     s = net_test.IPv4PingSocket()
@@ -349,28 +347,24 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     data = net_test.IPV4_PING + b"foobarbaz"
     s.send(data)
     self.assertValidPingResponse(s, data)
-    s.close()
 
   def testIPv6LoopbackPingWithConnect(self):
     s = net_test.IPv6PingSocket()
     s.connect(("::1", 55))
     s.send(net_test.IPV6_PING)
     self.assertValidPingResponse(s, net_test.IPV6_PING)
-    s.close()
 
   def testIPv4PingUsingSendto(self):
     s = net_test.IPv4PingSocket()
     written = s.sendto(net_test.IPV4_PING, (net_test.IPV4_ADDR, 55))
     self.assertEqual(len(net_test.IPV4_PING), written)
     self.assertValidPingResponse(s, net_test.IPV4_PING)
-    s.close()
 
   def testIPv6PingUsingSendto(self):
     s = net_test.IPv6PingSocket()
     written = s.sendto(net_test.IPV6_PING, (net_test.IPV6_ADDR, 55))
     self.assertEqual(len(net_test.IPV6_PING), written)
     self.assertValidPingResponse(s, net_test.IPV6_PING)
-    s.close()
 
   def testIPv4NoCrash(self):
     # Python 2.x does not provide either read() or recvmsg.
@@ -380,7 +374,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     fd = s.fileno()
     reply = posix.read(fd, 4096)
     self.assertEqual(written, len(reply))
-    s.close()
 
   def testIPv6NoCrash(self):
     # Python 2.x does not provide either read() or recvmsg.
@@ -390,7 +383,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     fd = s.fileno()
     reply = posix.read(fd, 4096)
     self.assertEqual(written, len(reply))
-    s.close()
 
   def testCrossProtocolCrash(self):
     # Checks that an ICMP error containing a ping packet that matches the ID
@@ -419,7 +411,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     _, port = s.getsockname()
     scapy.send(GetIPv6Unreachable(port), verbose=False)
     # No crash? Good.
-    s.close()
 
   def testCrossProtocolCalls(self):
     """Tests that passing in the wrong family returns EAFNOSUPPORT.
@@ -463,15 +454,12 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
                       s4, ipv6sockaddr, net_test.IPV4_PING, None, 0)
     CheckEAFNoSupport(csocket.Sendmsg,
                       s6, ipv4sockaddr, net_test.IPV6_PING, None, 0)
-    s4.close()
-    s6.close()
 
   def testIPv4Bind(self):
     # Bind to unspecified address.
     s = net_test.IPv4PingSocket()
     s.bind(("0.0.0.0", 544))
     self.assertEqual(("0.0.0.0", 544), s.getsockname())
-    s.close()
 
     # Bind to loopback.
     s = net_test.IPv4PingSocket()
@@ -480,7 +468,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
 
     # Binding twice is not allowed.
     self.assertRaisesErrno(errno.EINVAL, s.bind, ("127.0.0.1", 22))
-    s.close()
 
     # But binding two different sockets to the same ID is allowed.
     s2 = net_test.IPv4PingSocket()
@@ -489,8 +476,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     s3 = net_test.IPv4PingSocket()
     s3.bind(("127.0.0.1", 99))
     self.assertEqual(("127.0.0.1", 99), s3.getsockname())
-    s2.close()
-    s3.close()
 
     # If two sockets bind to the same port, the first one to call read() gets
     # the response.
@@ -508,22 +493,16 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     s4.setsockopt(SOL_SOCKET, SO_REUSEADDR, 0)
     self.assertRaisesErrno(errno.EADDRINUSE, s6.bind, ("0.0.0.0", 167))
 
-    s4.close()
-    s5.close()
-    s6.close()
-
     # Can't bind after sendto.
     s = net_test.IPv4PingSocket()
     s.sendto(net_test.IPV4_PING, (net_test.IPV4_ADDR, 9132))
     self.assertRaisesErrno(errno.EINVAL, s.bind, ("0.0.0.0", 5429))
-    s.close()
 
   def testIPv6Bind(self):
     # Bind to unspecified address.
     s = net_test.IPv6PingSocket()
     s.bind(("::", 769))
     self.assertEqual(("::", 769, 0, 0), s.getsockname())
-    s.close()
 
     # Bind to loopback.
     s = net_test.IPv6PingSocket()
@@ -532,7 +511,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
 
     # Binding twice is not allowed.
     self.assertRaisesErrno(errno.EINVAL, s.bind, ("::1", 22))
-    s.close()
 
     # But binding two different sockets to the same ID is allowed.
     s2 = net_test.IPv6PingSocket()
@@ -541,22 +519,17 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     s3 = net_test.IPv6PingSocket()
     s3.bind(("::1", 99))
     self.assertEqual(("::1", 99, 0, 0), s3.getsockname())
-    s2.close()
-    s3.close()
 
     # Binding both IPv4 and IPv6 to the same socket works.
     s4 = net_test.IPv4PingSocket()
     s6 = net_test.IPv6PingSocket()
     s4.bind(("0.0.0.0", 444))
     s6.bind(("::", 666, 0, 0))
-    s4.close()
-    s6.close()
 
     # Can't bind after sendto.
     s = net_test.IPv6PingSocket()
     s.sendto(net_test.IPV6_PING, (net_test.IPV6_ADDR, 9132))
     self.assertRaisesErrno(errno.EINVAL, s.bind, ("::", 5429))
-    s.close()
 
   def testIPv4InvalidBind(self):
     s = net_test.IPv4PingSocket()
@@ -573,7 +546,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     except IOError as e:
       if e.errno == errno.EACCES:
         pass  # We're not root. let it go for now.
-    s.close()
 
   def testIPv6InvalidBind(self):
     s = net_test.IPv6PingSocket()
@@ -589,7 +561,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     except IOError as e:
       if e.errno == errno.EACCES:
         pass  # We're not root. let it go for now.
-    s.close()
 
   def testAfUnspecBind(self):
     # Binding to AF_UNSPEC is treated as IPv4 if the address is 0.0.0.0.
@@ -603,14 +574,12 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     sockaddr = csocket.Sockaddr(("127.0.0.1", 58234))
     sockaddr.family = AF_UNSPEC
     self.assertRaisesErrno(errno.EAFNOSUPPORT, csocket.Bind, s4, sockaddr)
-    s4.close()
 
     # This doesn't work for IPv6.
     s6 = net_test.IPv6PingSocket()
     sockaddr = csocket.Sockaddr(("::1", 58997))
     sockaddr.family = AF_UNSPEC
     self.assertRaisesErrno(errno.EAFNOSUPPORT, csocket.Bind, s6, sockaddr)
-    s6.close()
 
   def testIPv6ScopedBind(self):
     # Can't bind to a link-local address without a scope ID.
@@ -633,26 +602,22 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     # on the machine.
     self.assertRaisesErrno(errno.EADDRNOTAVAIL,
                            s.bind, ("fe80::f00", 1026, 0, 1))
-    s.close()
 
     # Scope IDs on non-link-local addresses are silently ignored.
     s = net_test.IPv6PingSocket()
     s.bind(("::1", 1234, 0, 1))
     self.assertEqual(("::1", 1234, 0, 0), s.getsockname())
-    s.close()
 
   def testBindAffectsIdentifier(self):
     s = net_test.IPv6PingSocket()
     s.bind((self.globaladdr, 0xf976))
     s.sendto(net_test.IPV6_PING, (net_test.IPV6_ADDR, 55))
     self.assertEqual(b"\xf9\x76", s.recv(32768)[4:6])
-    s.close()
 
     s = net_test.IPv6PingSocket()
     s.bind((self.globaladdr, 0xace))
     s.sendto(net_test.IPV6_PING, (net_test.IPV6_ADDR, 55))
     self.assertEqual(b"\x0a\xce", s.recv(32768)[4:6])
-    s.close()
 
   def testLinkLocalAddress(self):
     s = net_test.IPv6PingSocket()
@@ -663,7 +628,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     # doesn't understand the "fe80::1%lo" format, even though it returns it.
     s.sendto(net_test.IPV6_PING, ("fe80::1", 55, 0, self.ifindex))
     # No exceptions? Good.
-    s.close()
 
   def testLinkLocalOif(self):
     """Checks that ping to link-local addresses works correctly.
@@ -709,8 +673,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
           s2.connect((dst, 123, 0, scopeid))
           s2.send(net_test.IPV6_PING)
           self.assertValidPingResponse(s2, net_test.IPV6_PING)
-        s2.close()
-      s.close()
 
   def testMappedAddressFails(self):
     s = net_test.IPv6PingSocket()
@@ -720,7 +682,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     self.assertValidPingResponse(s, net_test.IPV6_PING)
     self.assertRaisesErrno(errno.EINVAL, s.sendto, net_test.IPV6_PING,
                            ("::ffff:192.0.2.1", 55))
-    s.close()
 
   @unittest.skipUnless(False, "skipping: does not work yet")
   def testFlowLabel(self):
@@ -748,7 +709,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     _, src = s.recvfrom(32768)
     _, _, flowlabel, _ = src
     self.assertEqual(0xdead, flowlabel & 0xfffff)
-    s.close()
 
   def testIPv4Error(self):
     s = net_test.IPv4PingSocket()
@@ -758,7 +718,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     # We can't check the actual error because Python 2.7 doesn't implement
     # recvmsg, but we can at least check that the socket returns an error.
     self.assertRaisesErrno(errno.EHOSTUNREACH, s.recv, 32768)  # No response.
-    s.close()
 
   def testIPv6Error(self):
     s = net_test.IPv6PingSocket()
@@ -768,7 +727,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     # We can't check the actual error because Python 2.7 doesn't implement
     # recvmsg, but we can at least check that the socket returns an error.
     self.assertRaisesErrno(errno.EHOSTUNREACH, s.recv, 32768)  # No response.
-    s.close()
 
   def testIPv6MulticastPing(self):
     s = net_test.IPv6PingSocket()
@@ -778,21 +736,18 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     s.sendto(net_test.IPV6_PING, ("ff02::1", 55, 0, self.ifindex))
     self.assertValidPingResponse(s, net_test.IPV6_PING)
     self.assertValidPingResponse(s, net_test.IPV6_PING)
-    s.close()
 
   def testIPv4LargePacket(self):
     s = net_test.IPv4PingSocket()
     data = net_test.IPV4_PING + 20000 * b"a"
     s.sendto(data, ("127.0.0.1", 987))
     self.assertValidPingResponse(s, data)
-    s.close()
 
   def testIPv6LargePacket(self):
     s = net_test.IPv6PingSocket()
     s.bind(("::", 0xace))
     data = net_test.IPV6_PING + b"\x01" + 19994 * b"\x00" + b"aaaaa"
     s.sendto(data, ("::1", 953))
-    s.close()
 
   def testIcmpSocketsNotInIcmp6(self):
     numrows = len(self.ReadProcNetSocket("icmp"))
@@ -802,7 +757,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     s.connect(("127.0.0.1", 0xbeef))
     self.assertEqual(numrows + 1, len(self.ReadProcNetSocket("icmp")))
     self.assertEqual(numrows6, len(self.ReadProcNetSocket("icmp6")))
-    s.close()
 
   def testIcmp6SocketsNotInIcmp(self):
     numrows = len(self.ReadProcNetSocket("icmp"))
@@ -812,14 +766,12 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     s.connect(("::1", 0xbeef))
     self.assertEqual(numrows, len(self.ReadProcNetSocket("icmp")))
     self.assertEqual(numrows6 + 1, len(self.ReadProcNetSocket("icmp6")))
-    s.close()
 
   def testProcNetIcmp(self):
     s = net_test.Socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
     s.bind(("127.0.0.1", 0xace))
     s.connect(("127.0.0.1", 0xbeef))
     self.CheckSockStatFile("icmp", "127.0.0.1", 0xace, "127.0.0.1", 0xbeef, 1)
-    s.close()
 
   def testProcNetIcmp6(self):
     numrows6 = len(self.ReadProcNetSocket("icmp6"))
@@ -837,7 +789,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     self.assertEqual(0, len(self.ReadProcNetSocket("icmp6")))
     s.sendto(net_test.IPV6_PING, (net_test.IPV6_ADDR, 12345))
     self.assertEqual(1, len(self.ReadProcNetSocket("icmp6")))
-    s.close()
 
     # Can't bind after sendto, apparently.
     s = net_test.IPv6PingSocket()
@@ -856,21 +807,18 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     self.assertValidPingResponse(s, net_test.IPV6_PING)
     self.CheckSockStatFile("icmp6", self.lladdr, 0xd00d, "ff02::1", 0xdead, 1,
                            txmem=0, rxmem=0)
-    s.close()
 
   def testProcNetUdp6(self):
     s = net_test.Socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP)
     s.bind(("::1", 0xace))
     s.connect(("::1", 0xbeef))
     self.CheckSockStatFile("udp6", "::1", 0xace, "::1", 0xbeef, 1)
-    s.close()
 
   def testProcNetRaw6(self):
     s = net_test.Socket(AF_INET6, SOCK_RAW, IPPROTO_RAW)
     s.bind(("::1", 0xace))
     s.connect(("::1", 0xbeef))
     self.CheckSockStatFile("raw6", "::1", 0xff, "::1", 0, 1)
-    s.close()
 
   def testIPv6MTU(self):
     """Tests IPV6_RECVERR and path MTU discovery on ping sockets.
@@ -911,7 +859,6 @@ class Ping6Test(multinetwork_base.MultiNetworkBaseTest):
     ]
 
     self.assertEqual(msglist, cmsg)
-    s.close()
 
 
 if __name__ == "__main__":
