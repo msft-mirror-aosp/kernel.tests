@@ -209,17 +209,17 @@ class BpfTest(net_test.NetworkTest):
 
   def setUp(self):
     super(BpfTest, self).setUp()
-    self.map_fd = -1
-    self.prog_fd = -1
+    self.map_fd = None
+    self.prog_fd = None
     self.sock = None
 
   def tearDown(self):
-    if self.prog_fd >= 0:
+    if self.prog_fd is not None:
       os.close(self.prog_fd)
-      self.prog_fd = -1
-    if self.map_fd >= 0:
+      self.prog_fd = None
+    if self.map_fd is not None:
       os.close(self.map_fd)
-      self.map_fd = -1
+      self.map_fd = None
     if self.sock:
       self.sock.close()
       self.sock = None
@@ -494,23 +494,28 @@ class BpfCgroupTest(net_test.NetworkTest):
   @classmethod
   def setUpClass(cls):
     super(BpfCgroupTest, cls).setUpClass()
+    # os.open() throws exception on failure
     cls._cg_fd = os.open("/sys/fs/cgroup", os.O_DIRECTORY | os.O_RDONLY)
 
   @classmethod
   def tearDownClass(cls):
-    os.close(cls._cg_fd)
+    if cls._cg_fd is not None:
+      os.close(cls._cg_fd)
+      cls._cg_fd = None
     super(BpfCgroupTest, cls).tearDownClass()
 
   def setUp(self):
     super(BpfCgroupTest, self).setUp()
-    self.prog_fd = -1
-    self.map_fd = -1
+    self.prog_fd = None
+    self.map_fd = None
 
   def tearDown(self):
-    if self.prog_fd >= 0:
+    if self.prog_fd is not None:
       os.close(self.prog_fd)
-    if self.map_fd >= 0:
+      self.prog_fd = None
+    if self.map_fd is not None:
       os.close(self.map_fd)
+      self.map_fd = None
     try:
       BpfProgDetach(self._cg_fd, BPF_CGROUP_INET_EGRESS)
     except socket.error:
