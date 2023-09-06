@@ -17,6 +17,7 @@
 """kernel net test library for bpf testing."""
 
 import ctypes
+import errno
 import os
 import resource
 import socket
@@ -301,7 +302,11 @@ def BpfProgAttach(prog_fd, target_fd, prog_type):
 # Detach a eBPF filter from a cgroup
 def BpfProgDetach(target_fd, prog_type):
   attr = BpfAttrProgAttach((target_fd, 0, prog_type))
-  return BpfSyscall(BPF_PROG_DETACH, attr)
+  try:
+    return BpfSyscall(BPF_PROG_DETACH, attr)
+  except socket.error as e:
+    if e.errno != errno.ENOENT:
+      raise
 
 
 # Convert a BPF program ID into an open file descriptor
