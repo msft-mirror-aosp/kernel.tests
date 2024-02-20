@@ -15,15 +15,16 @@
 # limitations under the License.
 
 import errno
-from socket import *  # pylint: disable=wildcard-import
+import gzip
+from socket import *  # pylint: disable=wildcard-import,g-importing-member
 import unittest
 
-import gzip
 import net_test
 
 
 class RemovedFeatureTest(net_test.NetworkTest):
   KCONFIG = None
+  AID_NET_RAW = 3004
 
   @classmethod
   def loadKernelConfig(cls):
@@ -39,13 +40,14 @@ class RemovedFeatureTest(net_test.NetworkTest):
 
   @classmethod
   def setUpClass(cls):
+    super(net_test.NetworkTest, cls).setUpClass()
     cls.loadKernelConfig()
 
-  def assertFeatureEnabled(self, featureName):
-    return self.assertEqual("y", self.KCONFIG[featureName])
+  def assertFeatureEnabled(self, feature_name):
+    return self.assertEqual("y", self.KCONFIG[feature_name])
 
-  def assertFeatureAbsent(self, featureName):
-    return self.assertTrue(featureName not in self.KCONFIG)
+  def assertFeatureAbsent(self, feature_name):
+    return self.assertNotIn(feature_name, self.KCONFIG)
 
   def testNetfilterRejectEnabled(self):
     """Verify that CONFIG_IP{,6}_NF_{FILTER,TARGET_REJECT} is enabled."""
@@ -68,8 +70,7 @@ class RemovedFeatureTest(net_test.NetworkTest):
        -       default y
        +       default n
     """
-    AID_NET_RAW = 3004
-    with net_test.RunAsUidGid(12345, AID_NET_RAW):
+    with net_test.RunAsUidGid(12345, self.AID_NET_RAW):
       self.assertRaisesErrno(errno.EPERM, socket, AF_PACKET, SOCK_RAW, 0)
 
 
