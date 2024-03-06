@@ -51,19 +51,25 @@ class KernelFeatureTest(net_test.NetworkTest):
     super(net_test.NetworkTest, cls).setUpClass()
     cls.loadKernelConfig()
 
-  def assertFeatureEnabled(self, feature_name):
-    return self.assertEqual("y", self.KCONFIG[feature_name])
-
   def assertFeatureAbsent(self, feature_name):
     return self.assertNotIn(feature_name, self.KCONFIG)
 
+  def assertFeatureBuiltIn(self, feature_name):
+    return self.assertEqual("y", self.KCONFIG[feature_name])
+
+  def assertFeatureModular(self, feature_name):
+    return self.assertEqual("m", self.KCONFIG[feature_name])
+
+  def assertFeatureEnabled(self, feature_name):
+    return self.assertIn(self.KCONFIG[feature_name], ["m", "y"])
+
   def testNetfilterRejectEnabled(self):
     """Verify that CONFIG_IP{,6}_NF_{FILTER,TARGET_REJECT} is enabled."""
-    self.assertFeatureEnabled("CONFIG_IP_NF_FILTER")
-    self.assertFeatureEnabled("CONFIG_IP_NF_TARGET_REJECT")
+    self.assertFeatureBuiltIn("CONFIG_IP_NF_FILTER")
+    self.assertFeatureBuiltIn("CONFIG_IP_NF_TARGET_REJECT")
 
-    self.assertFeatureEnabled("CONFIG_IP6_NF_FILTER")
-    self.assertFeatureEnabled("CONFIG_IP6_NF_TARGET_REJECT")
+    self.assertFeatureBuiltIn("CONFIG_IP6_NF_FILTER")
+    self.assertFeatureBuiltIn("CONFIG_IP6_NF_TARGET_REJECT")
 
   def testRemovedAndroidParanoidNetwork(self):
     """Verify that ANDROID_PARANOID_NETWORK is gone.
