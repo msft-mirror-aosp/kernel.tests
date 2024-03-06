@@ -86,7 +86,8 @@ class KernelFeatureTest(net_test.NetworkTest):
                                             (5, 4, 186),
                                             (5, 10, 199),
                                             (5, 15, 136),
-                                            (6, 1, 57)]))
+                                            (6, 1, 57)]),
+                    "%s [%s] is too old." % (os.uname()[2], os.uname()[4]))
 
 
 if __name__ == "__main__":
