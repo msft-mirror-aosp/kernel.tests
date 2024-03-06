@@ -16,6 +16,7 @@
 
 import errno
 import gzip
+import os
 from socket import *  # pylint: disable=wildcard-import,g-importing-member
 import unittest
 
@@ -27,9 +28,16 @@ class KernelFeatureTest(net_test.NetworkTest):
   AID_NET_RAW = 3004
 
   @classmethod
+  def getKernelConfigFile(cls):
+    try:
+      return gzip.open("/proc/config.gz", mode="rt")
+    except FileNotFoundError:
+      return open("/boot/config-" + os.uname()[2], mode="rt")
+
+  @classmethod
   def loadKernelConfig(cls):
     cls.KCONFIG = {}
-    with gzip.open("/proc/config.gz", mode="rt") as f:
+    with cls.getKernelConfigFile() as f:
       for line in f:
         line = line.strip()
         parts = line.split("=")
