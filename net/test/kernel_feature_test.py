@@ -87,6 +87,7 @@ class KernelFeatureTest(net_test.NetworkTest):
     with net_test.RunAsUidGid(12345, self.AID_NET_RAW):
       self.assertRaisesErrno(errno.EPERM, socket, AF_PACKET, SOCK_RAW, 0)
 
+  @unittest.skipUnless(not net_test.IS_GSI, "GSI")
   def testMinRequiredKernelVersion(self):
     self.assertTrue(net_test.KernelAtLeast([(4, 19, 236),
                                             (5, 4, 186),
