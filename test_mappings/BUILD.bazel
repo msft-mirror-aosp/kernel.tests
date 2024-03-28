@@ -57,7 +57,12 @@ pkg_zip(
         "//common:test_mappings",
         "//external/zlib:test_mappings",
         "//kernel/tests/net/test:test_mappings",
-        "//prebuilts/rust:test_mappings",
+        # Drop prebuilts/rust/TEST_MAPPING because:
+        #   - It doesn't contain useful content; the files it imports do not
+        #     exist in the kernel tree as of 2024-03-28.
+        #   - prebuilts/rust does not exist on android15-6.1 manifest.
+        # TODO(b/330775243): Add it back after main-kernel-build-2024 cut over.
+        # "//prebuilts/rust:test_mappings",
     ],
     out = "test_mappings.zip",
     visibility = ["//visibility:public"],
