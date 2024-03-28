@@ -17,7 +17,7 @@ load("@rules_pkg//pkg:pkg.bzl", "pkg_zip")
 # Collect into a .zip file the TEST_MAPPING files for packages whose tests
 # should be run in kernel presubmit and postsubmit testing.
 # This rule is in this directory
-# because these TEST_MAPPIING files are used when testing kernel code and
+# because these TEST_MAPPING files are used when testing kernel code and
 # kernel/tests is the good place for that.
 #
 # Conventions:
