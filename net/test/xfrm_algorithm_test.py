@@ -330,7 +330,7 @@ class XfrmAlgorithmTest(xfrm_base.XfrmLazyTest):
                                 spi_left, req_ids[3], None)
 
     server_ready = threading.Event()
-    server_error = None  # Save exceptions thrown by the server.
+    self.server_error = None  # Save exceptions thrown by the server.
 
     def TcpServer(sock, client_port):
       try:
@@ -345,7 +345,7 @@ class XfrmAlgorithmTest(xfrm_base.XfrmLazyTest):
         accepted.shutdown(socket.SHUT_RDWR)
         accepted.close()
       except Exception as e:
-        server_error = e
+        self.server_error = e
       finally:
         sock.close()
 
@@ -358,7 +358,7 @@ class XfrmAlgorithmTest(xfrm_base.XfrmLazyTest):
         self.assertEqual(b"hello request", data)
         sock.sendto(b"hello response", peer)
       except Exception as e:
-        server_error = e
+        self.server_error = e
       finally:
         sock.close()
 
@@ -389,8 +389,8 @@ class XfrmAlgorithmTest(xfrm_base.XfrmLazyTest):
       sock_left.close()
       server.join(timeout=2.0)
       self.assertFalse(server.is_alive(), "Timed out waiting for server exit")
-    if server_error:
-      raise server_error
+    if self.server_error:
+      raise self.server_error
 
 
 if __name__ == "__main__":
