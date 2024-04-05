@@ -342,6 +342,7 @@ class XfrmAlgorithmTest(xfrm_base.XfrmLazyTest):
         data = accepted.recv(2048)
         self.assertEqual(b"hello request", data)
         accepted.send(b"hello response")
+        accepted.shutdown(socket.SHUT_RDWR)
         accepted.close()
       except Exception as e:
         server_error = e
