@@ -55,7 +55,8 @@ def RunTests(modules_to_test):
   print('Running on %s %s %s %s-%sbit%s%s'
         % (os.uname()[0], os.uname()[2], net_test.LINUX_VERSION, os.uname()[4],
            '64' if sys.maxsize > 0x7FFFFFFF else '32',
-           ' GKI' if gki.IS_GKI else '', ' GSI' if net_test.IS_GSI else ''))
+           ' GKI' if gki.IS_GKI else '', ' GSI' if net_test.IS_GSI else ''),
+        file=sys.stderr)
   namespace.EnterNewNetworkNamespace()
 
   # First, run InjectTests on all modules, to ensure that any parameterized
