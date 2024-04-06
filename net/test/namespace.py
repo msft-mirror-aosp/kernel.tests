@@ -135,8 +135,6 @@ def DumpMounts(hdr):
 def EnterNewNetworkNamespace():
   """Instantiate and transition into a fresh new network namespace."""
 
-  sys.stdout.write('Creating clean namespace... ')
-
   try:
     UnShare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWNET)
   except OSError as err:
