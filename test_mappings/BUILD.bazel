@@ -57,8 +57,13 @@ load("@rules_pkg//pkg:mappings.bzl", "pkg_filegroup")
 pkg_filegroup(
     name = "non_kernel_test_mappings",
     srcs = [
-        "//external/zlib:test_mappings",
         "//kernel/tests/net/test:test_mappings",
+
+        # Drop external/zlib/TEST_MAPPING because //external is not a valid
+        # package. If we need this in the future, it needs to be changed to
+        # @zlib instead.
+        # "//external/zlib:test_mappings",
+
         # Drop prebuilts/rust/TEST_MAPPING because:
         #   - It doesn't contain useful content; the files it imports do not
         #     exist in the kernel tree as of 2024-03-28.
