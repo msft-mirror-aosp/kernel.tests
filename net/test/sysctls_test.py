@@ -24,7 +24,7 @@ class SysctlsTest(net_test.NetworkTest):
   def check(self, f):
     with open(f) as algs_file:
       algs = algs_file.readline().strip().split(' ')
-    bad_algs = [a for a in algs if a not in ['cubic', 'reno']]
+    bad_algs = [a for a in algs if a not in ['bbr', 'cubic', 'reno']]
     msg = ("Obsolete TCP congestion control algorithm found. These "
            "algorithms will decrease real-world networking performance for "
            "users and must be disabled. Found: %s" % bad_algs)
@@ -38,7 +38,6 @@ class SysctlsTest(net_test.NetworkTest):
   def testAvailableCongestionControl(self):
     self.check('/proc/sys/net/ipv4/tcp_available_congestion_control')
 
-  @unittest.skipUnless(net_test.LINUX_VERSION >= (4, 15, 0), "not yet namespaced")
   def testCongestionControl(self):
     self.check('/proc/sys/net/ipv4/tcp_congestion_control')
 
