@@ -88,12 +88,15 @@ class TcpBaseTest(multinetwork_base.MultiNetworkBaseTest):
 
   def RstPacket(self):
     return packets.RST(self.version, self.myaddr, self.remoteaddr,
-                       self.last_packet)
+                       self.last_packet, self.sent_fin)
 
   def FinPacket(self):
     return packets.FIN(self.version, self.myaddr, self.remoteaddr,
                        self.last_packet)
 
+  def ExpectPacketOn(self, netid, msg, pkt):
+    self.sent_fin |= (pkt.getlayer("TCP").flags & packets.TCP_FIN) != 0
+    return super(TcpBaseTest, self).ExpectPacketOn(netid, msg, pkt)
 
   def IncomingConnection(self, version, end_state, netid):
     self.s = self.OpenListenSocket(version, netid)
