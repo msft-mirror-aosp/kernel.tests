@@ -23,7 +23,7 @@ LOCAL_REPO=
 
 function adb_checker() {
     if ! which adb &> /dev/null; then
-        echo -e "\n${RED}Adb not found!${END}"
+        print_error "adb not found!"
     fi
 }
 
@@ -36,15 +36,15 @@ function go_to_repo_root() {
 }
 
 function print_info() {
-    echo "[$MY_NAME] ${GREEN}$1${END}"
+    echo "[$MY_NAME]: ${GREEN}$1${END}"
 }
 
 function print_warn() {
-    echo "[$MY_NAME] ${YELLOW}$1${END}"
+    echo "[$MY_NAME]: ${YELLOW}$1${END}"
 }
 
 function print_error() {
-    echo -e "[$MY_NAME] ${RED}$1${END}"
+    echo -e "[$MY_NAME]: ${RED}$1${END}"
     cd $OLD_PWD
     exit 1
 }
@@ -179,7 +179,7 @@ fi
 REPO_ROOT_PATH="$PWD"
 
 if [[ "$REPO_LIST_OUT" == *common-modules/virtual-device* ]] && [[ "$REPO_LIST_OUT" == *kernel/common* ]]; then
-    if [ -z "$KERNEL_BUILD" ] && [ "$SKIP_BUILD" == false ]; then
+    if [ -z "$KERNEL_BUILD" ] && [ "$SKIP_BUILD" = false ]; then
         if [ ! -f "common-modules/virtual-device/BUILD.bazel" ]; then
             # TODO: Add build support to android12 and earlier kernels
             print_error "bazel build common-modules/virtual-device is not supported in this kernel tree"
@@ -187,17 +187,17 @@ if [[ "$REPO_LIST_OUT" == *common-modules/virtual-device* ]] && [[ "$REPO_LIST_O
         KERNEL_VERSION=$(cat .repo/manifests/default.xml | grep common-modules/virtual-device | grep -oP 'revision="\K[^"]*')
         # Build a new kernel
         build_cmd="tools/bazel run --config=fast"
-        if $GCOV; then
+        if [ "$GCOV" = true ]; then
             build_cmd+=" --gcov"
         fi
-        if $DEBUG; then
+        if [ "$DEBUG" = true ]; then
             build_cmd+=" --debug"
         fi
-        if $KASAN; then
+        if [ "$KASAN" = true ]; then
             build_cmd+=" --kasan"
         fi
         build_cmd+=" //common-modules/virtual-device:virtual_device_x86_64_dist"
-        print_warn "Flag --skip build is not set. Rebuild the kernel with: $build_cmd."
+        print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
         eval $build_cmd
         exit_code=$?
         if [ $exit_code -eq 0 ]; then
@@ -205,18 +205,18 @@ if [[ "$REPO_LIST_OUT" == *common-modules/virtual-device* ]] && [[ "$REPO_LIST_O
         else
             print_error "$build_cmd failed"
         fi
-        KERNEL_BUILD="$PWD/out/virtual_device_x86_64"
-    elif $SKIP_BUILD && [ -d "out/virtual_device_x86_64"]; then
-        KERNEL_BUILD="$PWD/out/virtual_device_x86_64"
+        KERNEL_BUILD="$PWD/out/virtual_device_x86_64/dist"
+    elif [ "$SKIP_BUILD" = true ] && [ -d "out/virtual_device_x86_64/dist" ]; then
+        KERNEL_BUILD="$PWD/out/virtual_device_x86_64/dist"
     fi
 elif [[ "$REPO_LIST_OUT" == *device/google/cuttlefish* ]]; then
-    if [ -z "$PLATFORM_BUILD" ] && [ "$SKIP_BUILD" == false ]; then
+    if [ -z "$PLATFORM_BUILD" ] && [ "$SKIP_BUILD" = false ]; then
         if [ -z "${TARGET_PRODUCT}"] || [[ "${TARGET_PRODUCT}" != *"cf_x86"* ]]; then
             print_info "TARGET_PRODUCT=${TARGET_PRODUCT}"
             print_error "please setup your build environment by: source build/envsetup.sh && lunch <cf_target>"
         fi
         build_cmd="m -j12"
-        print_warn "Flag --skip build is not set. Rebuilt platform images with: $build_cmd"
+        print_warn "Flag --skip-build is not set. Rebuilt platform images with: $build_cmd"
         eval $build_cmd
         exit_code=$?
         if [ $exit_code -eq 0 ]; then
@@ -225,7 +225,7 @@ elif [[ "$REPO_LIST_OUT" == *device/google/cuttlefish* ]]; then
             print_error "$build_cmd failed"
         fi
         PLATFORM_BUILD=${ANDROID_PRODUCT_OUT}
-    elif $SKIP_BUILD && [ -f "${ANDROID_PRODUCT_OUT}/system.img" ]; then
+    elif [ "$SKIP_BUILD" = true ] && [ -f "${ANDROID_PRODUCT_OUT}/system.img" ]; then
         PLATFORM_BUILD=${ANDROID_PRODUCT_OUT}
     fi
 fi
@@ -235,7 +235,7 @@ adb_checker
 if [ -z "$ACLOUD_BIN" ]; then
     output=$(which acloud 2>&1) # Capture both stdout and stderr
     if [ -z "$output" ]; then # Check if 'which acloud' found anything
-        print_info "Use acloud binary from prebuilt"
+        print_info "Use acloud binary from $ACLOUD_PREBUILT"
         ACLOUD_BIN="$ACLOUD_PREBUILT"
     else
         print_info "Use acloud binary from $output"
@@ -248,10 +248,6 @@ fi
 acloud_cli="$ACLOUD_BIN create"
 EXTRA_OPTIONS+=("$OPT_SKIP_PRERUNCHECK")
 # Add in branch if not specified
-
-echo "KERNEL_BUILD=$KERNEL_BUILD"
-echo "VENDOR_KERNEL_BUILD=$VENDOR_KERNEL_BUILD"
-echo "PLATFORM_BUILD=$PLATFORM_BUILD"
 
 if [ -z "$PLATFORM_BUILD" ]; then
     print_warn "Platform build is not specified, will use the latest aosp-main build."
