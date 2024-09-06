@@ -40,15 +40,15 @@ function go_to_repo_root() {
 }
 
 function print_info() {
-    echo "[$MY_NAME] ${GREEN}$1${END}"
+    echo "[$MY_NAME]: ${GREEN}$1${END}"
 }
 
 function print_warn() {
-    echo "[$MY_NAME] ${YELLOW}$1${END}"
+    echo "[$MY_NAME]: ${YELLOW}$1${END}"
 }
 
 function print_error() {
-    echo -e "[$MY_NAME] ${RED}$1${END}"
+    echo -e "[$MY_NAME]: ${RED}$1${END}"
     cd $OLD_PWD
     exit 1
 }
@@ -256,16 +256,16 @@ if [ -z "$TEST_DIR" ]; then
     elif [[ "$BOARD" == "cutf"* ]] && [[ "$REPO_LIST_OUT" == *"common-modules/virtual-device"* ]]; then
         # In the android kernel repo
         if [[ "$ABI" == "arm64"* ]]; then
-            TEST_DIR="$REPO_ROOT_PATH/out/virtual_device_aarch64/tests.zip"
+            TEST_DIR="$REPO_ROOT_PATH/out/virtual_device_aarch64/dist/tests.zip"
         elif [[ "$ABI" == "x86_64"* ]]; then
-            TEST_DIR="$REPO_ROOT_PATH/out/virtual_device_x86_64/tests.zip"
+            TEST_DIR="$REPO_ROOT_PATH/out/virtual_device_x86_64/dist/tests.zip"
         else
             print_error "No test builds for $ABI Cuttlefish in $REPO_ROOT_PATH"
         fi
     elif [[ "$BOARD" == "raven"* || "$BOARD" == "oriole"* ]] && [[ "$REPO_LIST_OUT" == *"private/google-modules/display"* ]]; then
         TEST_DIR="$REPO_ROOT_PATH/out/slider/dist/tests.zip"
     elif [[ "$ABI" == "arm64"* ]] && [[ "$REPO_LIST_OUT" == *"kernel/common"* ]]; then
-        TEST_DIR="$REPO_ROOT_PATH/out/kernel_aarch64/tests.zip"
+        TEST_DIR="$REPO_ROOT_PATH/out/kernel_aarch64/dist/tests.zip"
     else
         print_error "No test builds for $ABI $BOARD in $REPO_ROOT_PATH"
     fi
@@ -302,14 +302,13 @@ if [[ "$TEST_DIR" == ab://* ]]; then
 elif [ ! -z "$TEST_DIR" ]; then
     if [ -d $TEST_DIR ]; then
         test_file_path=$TEST_DIR
-    elif [ -f $TEST_DIR ]; then
+    elif [ -f "$TEST_DIR" ]; then
         test_file_path=$(dirname "$TEST_DIR")
     else
-        print_error "$TEST_DIR is neither an existing directory or file"
+        print_error "$TEST_DIR is neither a directory or file"
     fi
     cd "$test_file_path" || $(print_error "Failed to go to $test_file_path")
     TEST_REPO_LIST_OUT=$(repo list 2>&1)
-    echo "test_file_path=$test_file_path"
     if [[ "$TEST_REPO_LIST_OUT" == "error"* ]]; then
         print_info "Test path $test_file_path is not in an Android repo. Will use $TEST_DIR directly."
     elif [[ "$TEST_REPO_LIST_OUT" == *"vendor/google/tools"* ]]; then
