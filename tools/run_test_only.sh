@@ -12,7 +12,7 @@ PLATFORM_JDK_PATH=prebuilts/jdk/jdk21/linux-x86
 DEFAULT_LOG_DIR=$PWD/out/test_logs/$(date +%Y%m%d_%H%M%S)
 DOWNLOAD_PATH="/tmp/downloaded"
 GCOV=false
-FETCH_SCRIPT="fetch_artifact.sh"
+FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 TRADEFED=
 TEST_ARGS=()
 TEST_DIR=
@@ -223,7 +223,6 @@ if [ -z "$TEST_NAMES" ]; then
 fi
 
 FULL_COMMAND_PATH=$(dirname "$PWD/$0")
-FETCH_SCRIPT="$FULL_COMMAND_PATH/$FETCH_SCRIPT"
 REPO_LIST_OUT=$(repo list 2>&1)
 if [[ "$REPO_LIST_OUT" == "error"* ]]; then
     print_warn "Current path $PWD is not in an Android repo. Change path to repo root."
@@ -234,6 +233,7 @@ else
 fi
 
 REPO_ROOT_PATH="$PWD"
+FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT"
 
 adb_checker
 
