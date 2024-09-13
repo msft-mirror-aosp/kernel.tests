@@ -36,11 +36,11 @@ DEVICE_VARIANT="userdebug"
 function print_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "This script will build images and launch a Cuttlefish device."
+    echo "This script will build images and flash a physical device."
     echo ""
     echo "Available options:"
     echo "  -s <serial_number>, --serial=<serial_number>"
-    echo "                        The device serial number to run tests with."
+    echo "                        The serial number for device to be flashed with."
     echo "  --skip-build          Skip the image build step. Will build by default if in repo."
     echo "  --gcov                Build gcov enabled kernel"
     echo "  --debug               Build debug enabled kernel"
@@ -72,7 +72,7 @@ function print_help() {
     echo "$0 -s 1C141FDEE003FH"
     echo "$0 -s 1C141FDEE003FH -pb ab://git_main/raven-userdebug/latest"
     echo "$0 -s 1C141FDEE003FH -pb ~/aosp-main"
-    echo "$0 -s 1C141FDEE003FH -vkb ~/pixel-mainline -pb ab://git_main/raven-userdebug/latest"
+    echo "$0 -s 1C141FDEE003FH -vkb ~/pixel-mainline -pb ab://git_main/raven-trunk_staging-userdebug/latest"
     echo "$0 -s 1C141FDEE003FH -vkb ab://kernel-android-gs-pixel-mainline/kernel_raviole_kleaf/latest \
 -pb ab://git_trunk_pixel_kernel_61-release/raven-userdebug/latest \
 -kb ab://aosp_kernel-common-android-mainline/kernel_aarch64/latest"
@@ -557,7 +557,7 @@ function flash_platform_build() {
             export TARGET_PRODUCT="$PRODUCT"
         fi
         if [ -z "${TARGET_BUILD_VARIANT}" ]; then
-            export TARGET_BUILD_VARIANT="userdebug"
+            export TARGET_BUILD_VARIANT="$DEVICE_VARIANT"
         fi
         if [ -z "${ANDROID_PRODUCT_OUT}" ] || [[ "${ANDROID_PRODUCT_OUT}" != "$PLATFORM_BUILD" ]] ; then
             export ANDROID_PRODUCT_OUT="$PLATFORM_BUILD"
