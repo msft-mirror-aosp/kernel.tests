@@ -12,6 +12,7 @@ PLATFORM_JDK_PATH=prebuilts/jdk/jdk21/linux-x86
 DEFAULT_LOG_DIR=$PWD/out/test_logs/$(date +%Y%m%d_%H%M%S)
 DOWNLOAD_PATH="/tmp/downloaded_tests"
 GCOV=false
+CREATE_TRACEFILE_SCRIPT="kernel/tests/tools/create-tracefile.py"
 FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 TRADEFED=
 TEST_ARGS=()
@@ -388,5 +389,18 @@ fi
 print_info "Run test with: $tf_cli" "${EXTRA_ARGS[*]}"
 eval "$tf_cli" "${EXTRA_ARGS[*]}"
 exit_code=$?
+
+if $GCOV; then
+    create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $LOG_DIR -o $LOG_DIR/cov.info"
+    if [ -f $KERNEL_TF_PREBUILT ]; then
+        print_info "Create tracefile with $create_tracefile_cli"
+        $create_tracefile_cli && \
+        print_info "Created tracefile at $LOG_DIR/cov.info"
+    else
+        print_info "Skip creating tracefile. If you have full kernel source, run the following command:"
+        print_info "$create_tracefile_cli"
+    fi
+fi
+
 cd $OLD_PWD
 exit $exit_code
