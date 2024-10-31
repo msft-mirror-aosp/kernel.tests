@@ -10,8 +10,9 @@ PLATFORM_TF_PREBUILT=tools/tradefederation/prebuilts/filegroups/tradefed/tradefe
 JDK_PATH=prebuilts/jdk/jdk11/linux-x86
 PLATFORM_JDK_PATH=prebuilts/jdk/jdk21/linux-x86
 DEFAULT_LOG_DIR=$PWD/out/test_logs/$(date +%Y%m%d_%H%M%S)
-DOWNLOAD_PATH="/tmp/downloaded"
+DOWNLOAD_PATH="/tmp/downloaded_tests"
 GCOV=false
+CREATE_TRACEFILE_SCRIPT="kernel/tests/tools/create-tracefile.py"
 FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 TRADEFED=
 TEST_ARGS=()
@@ -118,7 +119,7 @@ function run_test_in_platform_repo () {
 }
 
 OLD_PWD=$PWD
-MY_NAME=${0##*/}
+MY_NAME=$0
 
 while test $# -gt 0; do
     case "$1" in
@@ -242,10 +243,10 @@ if [ -z "$LOG_DIR" ]; then
     LOG_DIR="$DEFAULT_LOG_DIR"
 fi
 
-BOARD=$(adb -s $SERIAL_NUMBER shell getprop ro.product.board)
-ABI=$(adb -s $SERIAL_NUMBER shell getprop ro.product.cpu.abi)
-PRODUCT=$(adb -s $SERIAL_NUMBER shell getprop ro.product.name)
-BUILD_TYPE=$(adb -s $SERIAL_NUMBER shell getprop ro.build.type)
+BOARD=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.board)
+ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
+PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.product)
+BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
 
 if [ -z "$TEST_DIR" ]; then
     print_warn "Flag -td <test_dir> is not provided. Will use the default test directory"
@@ -280,7 +281,7 @@ done
 if [[ "$TEST_DIR" == ab://* ]]; then
     # Download test_file if it's remote file ab://
     if [ -d "$DOWNLOAD_PATH" ]; then
-        rm -rf $DOWNLOAD_PATH
+        rm -rf "$DOWNLOAD_PATH"
     fi
     mkdir -p "$DOWNLOAD_PATH" || $(print_error "Fail to create directory $DOWNLOAD_PATH")
     cd $DOWNLOAD_PATH || $(print_error "Fail to go to $DOWNLOAD_PATH")
@@ -388,5 +389,18 @@ fi
 print_info "Run test with: $tf_cli" "${EXTRA_ARGS[*]}"
 eval "$tf_cli" "${EXTRA_ARGS[*]}"
 exit_code=$?
+
+if $GCOV; then
+    create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $LOG_DIR -o $LOG_DIR/cov.info"
+    if [ -f $KERNEL_TF_PREBUILT ]; then
+        print_info "Create tracefile with $create_tracefile_cli"
+        $create_tracefile_cli && \
+        print_info "Created tracefile at $LOG_DIR/cov.info"
+    else
+        print_info "Skip creating tracefile. If you have full kernel source, run the following command:"
+        print_info "$create_tracefile_cli"
+    fi
+fi
+
 cd $OLD_PWD
 exit $exit_code
