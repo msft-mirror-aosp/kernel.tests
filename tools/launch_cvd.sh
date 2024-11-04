@@ -8,12 +8,12 @@ ACLOUD_PREBUILT="prebuilts/asuite/acloud/linux-x86/acloud"
 OPT_SKIP_PRERUNCHECK='--skip-pre-run-check'
 PRODUCT='aosp_cf_x86_64_phone'
 # Color constants
-BOLD="$(tput bold)"
+#BOLD="$(tput bold)" # Unused
 END="$(tput sgr0)"
 GREEN="$(tput setaf 2)"
 RED="$(tput setaf 198)"
 YELLOW="$(tput setaf 3)"
-BLUE="$(tput setaf 34)"
+# BLUE="$(tput setaf 34)" # Unused
 
 SKIP_BUILD=false
 GCOV=false
@@ -84,7 +84,7 @@ function parse_arg() {
                 shift
                 ;;
             --platform-build=*)
-                PLATFORM_BUILD=$(echo $1 | sed -e "s/^[^=]*=//g")
+                PLATFORM_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
                 shift
                 ;;
             -sb)
@@ -97,7 +97,7 @@ function parse_arg() {
                 shift
                 ;;
             --system-build=*)
-                SYSTEM_BUILD=$(echo $1 | sed -e "s/^[^=]*=//g")
+                SYSTEM_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
                 shift
                 ;;
             -kb)
@@ -110,19 +110,19 @@ function parse_arg() {
                 shift
                 ;;
             --kernel-build=*)
-                KERNEL_BUILD=$(echo $1 | sed -e "s/^[^=]*=//g")
+                KERNEL_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
                 shift
                 ;;
             --acloud-arg=*)
-                EXTRA_OPTIONS+=($(echo $1 | sed -e "s/^[^=]*=//g")) # Use array append syntax
+                EXTRA_OPTIONS+=("$(echo "$1" | sed -e "s/^[^=]*=//g")") # Use array append syntax
                 shift
                 ;;
             --acloud-bin=*)
-                ACLOUD_BIN=$(echo $1 | sed -e "s/^[^=]*=//g")
+                ACLOUD_BIN=$(echo "$1" | sed -e "s/^[^=]*=//g")
                 shift
                 ;;
             --cf-product=*)
-                PRODUCT=$(echo $1 | sed -e "s/^[^=]*=//g")
+                PRODUCT=$(echo "$1" | sed -e "s/^[^=]*=//g")
                 shift
                 ;;
             --gcov)
@@ -139,7 +139,6 @@ function parse_arg() {
                 ;;
             *)
                 print_error "Unsupported flag: $1" >&2
-                shift
                 ;;
         esac
     done
@@ -155,7 +154,7 @@ function go_to_repo_root() {
     current_dir="$1"
     while [ ! -d ".repo" ] && [ "$current_dir" != "/" ]; do
         current_dir=$(dirname "$current_dir")  # Go up one directory
-        cd "$current_dir"
+        cd "$current_dir" || print_error "Failed to cd to $current_dir"
     done
 }
 
@@ -169,13 +168,13 @@ function print_warn() {
 
 function print_error() {
     echo -e "[$MY_NAME]: ${RED}$1${END}"
-    cd $OLD_PWD
+    cd "$OLD_PWD" || echo "Failed to cd to $OLD_PWD"
     exit 1
 }
 
 function set_platform_repo () {
-    print_warn "Build target product '${TARGET_PRODUCT}' does not match expected $1"
-    lunch_cli="source build/envsetup.sh && lunch $1"
+    print_warn "Build target product '${TARGET_PRODUCT}' does not match expected '$1'"
+    local lunch_cli="source build/envsetup.sh && lunch $1"
     if [ -f "build/release/release_configs/trunk_staging.textproto" ]; then
         lunch_cli+="-trunk_staging-userdebug"
     else
@@ -199,20 +198,14 @@ function find_repo () {
             fi
             ;;
         *kernel/superproject*)
-            if [[ "$manifest_output" == *private/google-modules/soc/gs* ]]; then
-                PIXEL_KERNEL_REPO_ROOT="$PWD"
-                PIXEL_KERNEL_VERSION=$(grep -e "default revision" .repo/manifests/default.xml | \
-                grep -oP 'revision="\K[^"]*')
-                print_info "PIXEL_KERNEL_REPO_ROOT=$PLATFORM_REPO_ROOT, \
-                PIXEL_KERNEL_VERSION=$PLATFORM_VERSION"
-            elif [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
+            if [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
                 CF_KERNEL_REPO_ROOT="$PWD"
                 CF_KERNEL_VERSION=$(grep -e "common-modules/virtual-device" \
                 .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
                 print_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, \
                 CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
                 if [ -z "$KERNEL_BUILD" ]; then
-                    KERNEL_BUILD="$CF_KERNEL_REPO_ROOT"
+                    KERNEL_BUILD="$CF_KERNEL_REPO_ROOT/out/virtual_device_x86_64/dist"
                 fi
             fi
             ;;
@@ -225,7 +218,7 @@ function find_repo () {
 function rebuild_platform () {
     build_cmd="m -j12"
     print_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
-    eval $build_cmd
+    eval "$build_cmd"
     exit_code=$?
     if [ $exit_code -eq 0 ]; then
         if [ -f "${ANDROID_PRODUCT_OUT}/system.img" ]; then
@@ -241,46 +234,46 @@ function rebuild_platform () {
 
 adb_checker
 
-LOCAL_REPO=
+# LOCAL_REPO= $ Unused
 
 OLD_PWD=$PWD
-MY_NAME=${0##*/}
+MY_NAME=$0
 
 parse_arg "$@"
 
 FULL_COMMAND_PATH=$(dirname "$PWD/$0")
 REPO_LIST_OUT=$(repo list 2>&1)
 if [[ "$REPO_LIST_OUT" == "error"* ]]; then
-    print_error "Current path $PWD is not in an Android repo. Change path to repo root."
+    echo -e "[$MY_NAME]: ${RED}Current path $PWD is not in an Android repo. Change path to repo root.${END}"
     go_to_repo_root "$FULL_COMMAND_PATH"
     print_info "Changed path to $PWD"
 else
     go_to_repo_root "$PWD"
 fi
 
-REPO_ROOT_PATH="$PWD"
+# REPO_ROOT_PATH="$PWD" # unused
 
 find_repo
 
-if [ "$SKIP_BUILD" = false ] && [ ! -z "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] \
+if [ "$SKIP_BUILD" = false ] && [ -n "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] \
 && [ -d "$PLATFORM_BUILD" ]; then
     # Check if PLATFORM_BUILD is an Android platform repo, if yes rebuild
-    cd "$PLATFORM_BUILD"
+    cd "$PLATFORM_BUILD" || print_error "Failed to cd to $PLATFORM_BUILD"
     PLATFORM_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$PLATFORM_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "$PRODUCT" ]]; then
-            set_platform_repo $PRODUCT
+            set_platform_repo "$PRODUCT"
             rebuild_platform
             PLATFORM_BUILD=${ANDROID_PRODUCT_OUT}
         fi
     fi
 fi
 
-if [ "$SKIP_BUILD" = false ] && [ ! -z "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" != ab://* ]] \
+if [ "$SKIP_BUILD" = false ] && [ -n "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" != ab://* ]] \
 && [ -d "$SYSTEM_BUILD" ]; then
     # Get GSI build
-    cd "$SYSTEM_BUILD"
+    cd "$SYSTEM_BUILD" || print_error "Failed to cd to $SYSTEM_BUILD"
     SYSTEM_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$SYSTEM_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
@@ -292,18 +285,20 @@ if [ "$SKIP_BUILD" = false ] && [ ! -z "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" !
     fi
 fi
 
-if [ "$SKIP_BUILD" = false ] && [ ! -z "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]] \
+if [ "$SKIP_BUILD" = false ] && [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]] \
 && [ -d "$KERNEL_BUILD" ]; then
     # Check if kernel repo is provided, if yes rebuild
-    cd "$KERNEL_BUILD"
+    cd "$KERNEL_BUILD" || print_error "Failed to cd to $KERNEL_BUILD"
     KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$KERNEL_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
         if [ ! -f "common-modules/virtual-device/BUILD.bazel" ]; then
-            # TODO: Add build support to android12 and earlier kernels
+            # TODO(b/365590299): Add build support to android12 and earlier kernels
             print_error "bazel build common-modules/virtual-device is not supported in this kernel tree"
         fi
-        KERNEL_VERSION=$(cat .repo/manifests/default.xml | grep common-modules/virtual-device | grep -oP 'revision="\K[^"]*')
+
+        # KERNEL_VERSION=$(grep -e "common-modules/virtual-device" .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*') # unused
+
         # Build a new kernel
         build_cmd="tools/bazel run --config=fast"
         if [ "$GCOV" = true ]; then
@@ -317,7 +312,7 @@ if [ "$SKIP_BUILD" = false ] && [ ! -z "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" !
         fi
         build_cmd+=" //common-modules/virtual-device:virtual_device_x86_64_dist"
         print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
-        eval $build_cmd
+        eval "$build_cmd"
         exit_code=$?
         if [ $exit_code -eq 0 ]; then
             print_info "$build_cmd succeeded"
@@ -358,11 +353,11 @@ elif [[ "$PLATFORM_BUILD" == ab://* ]]; then
     acloud_cli+=" --branch ${array[2]}"
 
     # Check if array[3] exists before using it
-    if [ ${#array[@]} -ge 3 ] && [ ! -z "${array[3]}" ]; then
+    if [ ${#array[@]} -ge 3 ] && [ -n "${array[3]}" ]; then
         acloud_cli+=" --build-target ${array[3]}"
 
         # Check if array[4] exists and is not 'latest' before using it
-        if [ ${#array[@]} -ge 4 ] && [ ! -z "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
+        if [ ${#array[@]} -ge 4 ] && [ -n "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
             acloud_cli+=" --build-id ${array[4]}"
         fi
     fi
@@ -377,11 +372,11 @@ elif [[ "$KERNEL_BUILD" == ab://* ]]; then
     acloud_cli+=" --kernel-branch ${array[2]}"
 
     # Check if array[3] exists before using it
-    if [ ${#array[@]} -ge 3 ] && [ ! -z "${array[3]}" ]; then
+    if [ ${#array[@]} -ge 3 ] && [ -n "${array[3]}" ]; then
         acloud_cli+=" --kernel-build-target ${array[3]}"
 
         # Check if array[4] exists and is not 'latest' before using it
-        if [ ${#array[@]} -ge 4 ] && [ ! -z "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
+        if [ ${#array[@]} -ge 4 ] && [ -n "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
             acloud_cli+=" --kernel-build-id ${array[4]}"
         fi
     fi
@@ -396,11 +391,11 @@ elif [[ "$SYSTEM_BUILD" == ab://* ]]; then
     acloud_cli+=" --system-branch ${array[2]}"
 
      # Check if array[3] exists before using it
-    if [ ${#array[@]} -ge 3 ] && [ ! -z "${array[3]}" ]; then
+    if [ ${#array[@]} -ge 3 ] && [ -n "${array[3]}" ]; then
         acloud_cli+=" --system-build-target ${array[3]}"
 
         # Check if array[4] exists and is not 'latest' before using it
-        if [ ${#array[@]} -ge 4 ] && [ ! -z "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
+        if [ ${#array[@]} -ge 4 ] && [ -n "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
             acloud_cli+=" --system-build-id ${array[4]}"
         fi
     fi
@@ -408,6 +403,6 @@ else
     acloud_cli+=" --local-system-image $SYSTEM_BUILD"
 fi
 
-acloud_cli+=" ${EXTRA_OPTIONS[@]}"
+acloud_cli+=" ${EXTRA_OPTIONS[*]}"
 print_info "Launch CVD with command: $acloud_cli"
 eval "$acloud_cli"
