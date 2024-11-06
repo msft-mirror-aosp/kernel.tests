@@ -15,6 +15,7 @@ GCOV=false
 CREATE_TRACEFILE_SCRIPT="kernel/tests/tools/create-tracefile.py"
 FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 TRADEFED=
+TRADEFED_GCOV_OPTIONS=" --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE"
 TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
@@ -112,8 +113,19 @@ function run_test_in_platform_repo () {
        [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]]; then
        set_platform_repo
     fi
-    eval atest " ${TEST_NAMES[@]}" -s "$SERIAL_NUMBER"
+    atest_cli="atest ${TEST_NAMES[@]} -s $SERIAL_NUMBER"
+    if $GCOV; then
+        atest_cli+=" -- $TRADEFED_GCOV_OPTIONS"
+    fi
+    eval "$atest_cli"
     exit_code=$?
+
+    if $GCOV; then
+        atest_log_dir="/tmp/atest_result_$USER/LATEST"
+        create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $atest_log_dir/log -o $atest_log_dir/cov.info"
+        print_info "Skip creating tracefile. If you have full kernel source, run the following command:"
+        print_info "$create_tracefile_cli"
+    fi
     cd $OLD_PWD
     exit $exit_code
 }
@@ -382,7 +394,7 @@ fi
 
 # Add GCOV options if enabled
 if $GCOV; then
-    tf_cli+=" --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE"
+    tf_cli+=$TRADEFED_GCOV_OPTIONS
 fi
 
 # Evaluate the TradeFed command with extra arguments
