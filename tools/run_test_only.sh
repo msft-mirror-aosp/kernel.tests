@@ -15,6 +15,7 @@ GCOV=false
 CREATE_TRACEFILE_SCRIPT="kernel/tests/tools/create-tracefile.py"
 FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 TRADEFED=
+TRADEFED_GCOV_OPTIONS=" --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE"
 TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
@@ -68,15 +69,14 @@ function print_help() {
     echo "                        as ab://<branch>/<build_target>/<build_id>/<file_name>."
     echo "                        If not specified, it will use the tests in the local"
     echo "                        repo."
-    echo "  -tl <test_log_dir>, --test_log=<test_log_dir>"
+    echo "  -tl <test_log_dir>, --test-log=<test_log_dir>"
     echo "                        The test log dir. Use default out/test_logs if not specified."
-    echo "  -ta <extra_arg>, --extra-arg=<extra_arg>"
+    echo "  -ta <test_arg>, --test-arg=<test_arg>"
     echo "                        Additional tradefed command arg. Can be repeated."
     echo "  -t <test_name>, --test=<test_name>  The test name. Can be repeated."
     echo "                        If test is not specified, no tests will be run."
     echo "  -tf <tradefed_binary_path>, --tradefed-bin=<tradefed_binary_path>"
     echo "                        The alternative tradefed binary to run test with."
-    echo "  --skip-build          Skip the platform build step. Will build by default if in repo."
     echo "  --gcov                Collect coverage data from the test result"
     echo "  -h, --help            Display this help message and exit"
     echo ""
@@ -112,8 +112,19 @@ function run_test_in_platform_repo () {
        [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]]; then
        set_platform_repo
     fi
-    eval atest " ${TEST_NAMES[@]}" -s "$SERIAL_NUMBER"
+    atest_cli="atest ${TEST_NAMES[*]} -s $SERIAL_NUMBER --"
+    if $GCOV; then
+        atest_cli+="$TRADEFED_GCOV_OPTIONS"
+    fi
+    eval "$atest_cli" "${TEST_ARGS[*]}"
     exit_code=$?
+
+    if $GCOV; then
+        atest_log_dir="/tmp/atest_result_$USER/LATEST"
+        create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $atest_log_dir/log -o $atest_log_dir/cov.info"
+        print_info "Skip creating tracefile. If you have full kernel source, run the following command:"
+        print_info "$create_tracefile_cli"
+    fi
     cd $OLD_PWD
     exit $exit_code
 }
@@ -188,7 +199,7 @@ while test $# -gt 0; do
             shift
             ;;
         --test*)
-            TEST_NAMES+=$1
+            TEST_NAMES+=$(echo $1 | sed -e "s/^[^=]*=//g")
             shift
             ;;
         -tf)
@@ -250,7 +261,7 @@ BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
 
 if [ -z "$TEST_DIR" ]; then
     print_warn "Flag -td <test_dir> is not provided. Will use the default test directory"
-    if [[ "$REPO_LIST_OUT" == *"vendor/google/tools"* ]]; then
+    if [[ "$REPO_LIST_OUT" == *"build/make"* ]]; then
         # In the platform repo
         print_info "Run test with atest"
         run_test_in_platform_repo
@@ -312,7 +323,7 @@ elif [ ! -z "$TEST_DIR" ]; then
     TEST_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$TEST_REPO_LIST_OUT" == "error"* ]]; then
         print_info "Test path $test_file_path is not in an Android repo. Will use $TEST_DIR directly."
-    elif [[ "$TEST_REPO_LIST_OUT" == *"vendor/google/tools"* ]]; then
+    elif [[ "$TEST_REPO_LIST_OUT" == *"build/make"* ]]; then
         # Test_dir is from the platform repo
         print_info "Test_dir $TEST_DIR is from Android platform repo. Run test with atest"
         go_to_repo_root "$PWD"
@@ -382,12 +393,12 @@ fi
 
 # Add GCOV options if enabled
 if $GCOV; then
-    tf_cli+=" --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE"
+    tf_cli+=$TRADEFED_GCOV_OPTIONS
 fi
 
 # Evaluate the TradeFed command with extra arguments
-print_info "Run test with: $tf_cli" "${EXTRA_ARGS[*]}"
-eval "$tf_cli" "${EXTRA_ARGS[*]}"
+print_info "Run test with: $tf_cli" "${TEST_ARGS[*]}"
+eval "$tf_cli" "${TEST_ARGS[*]}"
 exit_code=$?
 
 if $GCOV; then

@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shutil
 import sys
 import tarfile
@@ -31,12 +32,19 @@ import tarfile
 
 LCOV = "lcov"
 
-# Relative to the root of the source tree..
+# Relative to the root of the source tree.
 OUTPUT_COV_DIR = os.path.join("out", "coverage")
 
-PREBUILT_LLVM_COV_PATH = os.path.join(
-    "prebuilts", "clang", "host", "linux-x86", "llvm-binutils-stable",
-    "llvm-cov"
+BUILD_CONFIG_CONSTANTS_PATH = os.path.join("common", "build.config.constants")
+
+PREBUILT_CLANG_DIR = os.path.join("prebuilts", "clang", "host", "linux-x86")
+
+PREBUILT_LLVM_COV_PATH_FORMAT = os.path.join(
+    PREBUILT_CLANG_DIR, "clang-%s", "bin", "llvm-cov"
+)
+
+PREBUILT_STABLE_LLVM_COV_PATH = os.path.join(
+    PREBUILT_CLANG_DIR, "llvm-binutils-stable", "llvm-cov"
 )
 
 EXCLUDED_FILES = [
@@ -344,6 +352,20 @@ def get_kernel_repo_dir() -> str:
   return get_parent_path(os.path.abspath(__file__), 4)
 
 
+def load_kernel_clang_version(repo_dir: str) -> str:
+  """Load CLANG_VERSION from build.config.constants."""
+  config_path = os.path.join(repo_dir, BUILD_CONFIG_CONSTANTS_PATH)
+  if not os.path.isfile(config_path):
+    return ""
+  clang_version = ""
+  with open(config_path, "r") as config_file:
+    for line in config_file:
+      match = re.fullmatch(r"\s*CLANG_VERSION=(\S*)\s*", line)
+      if match:
+        clang_version = match.group(1)
+  return clang_version
+
+
 class Config:
   """The input and output paths of this script."""
 
@@ -377,7 +399,13 @@ class Config:
   @property
   def llvm_cov_path(self) -> str:
     if not self._llvm_cov_path:
-      self._llvm_cov_path = self._get_repo_path(PREBUILT_LLVM_COV_PATH)
+      # Load the clang version in kernel repo,
+      # or use the stable version in platform repo.
+      clang_version = load_kernel_clang_version(self.repo_dir)
+      self._llvm_cov_path = self._get_repo_path(
+          PREBUILT_LLVM_COV_PATH_FORMAT % clang_version if clang_version else
+          PREBUILT_STABLE_LLVM_COV_PATH
+      )
     return self._llvm_cov_path
 
   @property
@@ -459,8 +487,9 @@ def main() -> None:
       "--llvm-cov",
       required=False,
       help=(
-          "Path to llvm-cov. Default: " +
-          os.path.join("<repo dir>", PREBUILT_LLVM_COV_PATH)
+          "Path to llvm-cov. Default: "
+          + os.path.join("<repo_dir>", PREBUILT_LLVM_COV_PATH_FORMAT % "*")
+          + " or " + os.path.join("<repo_dir>", PREBUILT_STABLE_LLVM_COV_PATH)
       )
   )
   arg_parser.add_argument(
@@ -468,7 +497,7 @@ def main() -> None:
       required=False,
       help=(
           "Path to the directory where the temporary files are created."
-          " Default: " + os.path.join("<repo dir>", OUTPUT_COV_DIR)
+          " Default: " + os.path.join("<repo_dir>", OUTPUT_COV_DIR)
       )
   )
   arg_parser.add_argument(
