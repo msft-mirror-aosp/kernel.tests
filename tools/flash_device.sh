@@ -33,6 +33,14 @@ EXTRA_OPTIONS=()
 LOCAL_REPO=
 DEVICE_VARIANT="userdebug"
 
+BOARD=
+ABI=
+PRODUCT=
+BUILD_TYPE=
+DEVICE_KERNEL_STRING=
+DEVICE_KERNEL_VERSION=
+SYSTEM_DLKM_VERSION=
+
 function print_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -509,6 +517,28 @@ function flash_vendor_kernel_build() {
     eval $tf_cli
 }
 
+# Function to check and wait for an ADB device
+function wait_for_adb_device() {
+  local serial_number="$1"  # Optional serial number
+  local timeout_seconds="${2:-300}"  # Timeout in seconds (default 5 minutes)
+
+  local start_time=$(date +%s)
+  local end_time=$((start_time + timeout_seconds))
+
+  while (( $(date +%s) < end_time )); do
+    devices=$(adb devices | grep "$SERIAL_NUMBER" | wc -l)
+
+    if (( devices > 0 )); then
+      print_info "Device $SERIAL_NUMBER is connected with adb" "$LINENO"
+      return 0  # Success
+    fi
+    print_info "Waiting for device $SERIAL_NUMBER in adb devies" "$LINENO"
+    sleep 1
+  done
+
+  print_error "Timeout waiting for $SERIAL_NUMBER in adb devices" "$LINENO"
+}
+
 function flash_platform_build() {
     if [[ "$PLATFORM_BUILD" == ab://* ]] && [ -x "$FLASH_CLI" ]; then
         local flash_cmd="$FLASH_CLI --nointeractive --force_flash_partitions --disable_verity -w -s $SERIAL_NUMBER "
@@ -532,6 +562,7 @@ function flash_platform_build() {
         exit_code=$?
         if [ $exit_code -eq 0 ]; then
             echo "Flash platform succeeded"
+            wait_for_adb_device
             return
         else
             echo "Flash platform build failed with exit code $exit_code"
@@ -585,6 +616,7 @@ function flash_platform_build() {
         exit_code=$?
         if [ $exit_code -eq 0 ]; then
             echo "Flash platform succeeded"
+            wait_for_adb_device
             return
         else
             echo "Flash platform build failed with exit code $exit_code"
@@ -742,13 +774,13 @@ function gki_build_only_operation {
         android-mainline | android15-6.6* | android14-6.1* | android14-5.15* )
             if [[ "$KERNEL_VERSION" == "$DEVICE_KERNEL_VERSION"* ]] && [ ! -z "$SYSTEM_DLKM_VERSION" ]; then
                 print_info "Device $SERIAL_NUMBER is with $KERNEL_VERSION kernel. Flash GKI directly" "$LINENO"
-                flash_gki
+                flash_gki_build
             elif [ -z "$SYSTEM_DLKM_VERSION" ]; then
                 print_warn "Device $SERIAL_NUMBER is $PRODUCT that doesn't have system_dlkm partition. Can't flash GKI directly. \
 Please add vendor kernel build for example by flag -vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
                 print_error "Can not flash GKI to SERIAL_NUMBER without -vkb <vendor_kernel_build> been specified." "$LINENO"
             elif [[ "$KERNEL_VERSION" != "$DEVICE_KERNEL_VERSION"* ]]; then
-                print_warn "Device $SERIAL_NUMBER is $PRODUCT comes with $DEVICE_KERNEL_STRING kernel. Can't flash GKI directly. \
+                print_warn "Device $PRODUCT $SERIAL_NUMBER comes with $DEVICE_KERNEL_STRING kernel. Can't flash GKI directly. \
 Please add a platform build with $KERNEL_VERSION kernel or add vendor kernel build for example by flag \
 -vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
                 print_error "Cannot flash $KERNEL_VERSION GKI to device directly $SERIAL_NUMBER." "$LINENO"
@@ -757,7 +789,7 @@ Please add a platform build with $KERNEL_VERSION kernel or add vendor kernel bui
         android13-5.15* | android13-5.10* | android12-5.10* | android12-5.4* )
             if [[ "$KERNEL_VERSION" == "$EVICE_KERNEL_VERSION"* ]]; then
                 print_info "Device $SERIAL_NUMBER is with android13-5.15 kernel. Flash GKI directly." "$LINENO"
-                flash_gki
+                flash_gki_build
             else
                 print_warn "Device $SERIAL_NUMBER is $PRODUCT comes with $DEVICE_KERNEL_STRING kernel. Can't flash GKI directly. \
 Please add a platform build with $KERNEL_VERSION kernel or add vendor kernel build for example by flag \
@@ -771,34 +803,40 @@ Please add a platform build with $KERNEL_VERSION kernel or add vendor kernel bui
     esac
 }
 
-function extract_kernel_version() {
+function extract_device_kernel_version() {
     local kernel_string="$1"
     # Check if the string contains '-android'
     if [[ "$kernel_string" == *"-mainline"* ]]; then
-        kernel_version="android-mainline"
+        DEVICE_KERNEL_VERSION="android-mainline"
     elif [[ "$kernel_string" == *"-android"* ]]; then
         # Extract the substring between the first hyphen and the second hyphen
-        local kernel_version=$(echo "$kernel_string" | cut -d '-' -f 2-)
-        kernel_version=$(echo "$kernel_version" | cut -d '-' -f 1)
+        DEVICE_KERNEL_VERSION=$(echo "$kernel_string" | awk -F '-' '{print $2"-"$1}' | cut -d '.' -f -2)
     else
        print_warn "Can not parse $kernel_string into kernel version" "$LINENO"
     fi
-    print_info "Device kernel version is $kernel_version" "$LINENO"
+    print_info "Device kernel version is $DEVICE_KERNEL_VERSION" "$LINENO"
 }
 
 function get_device_info {
-    BOARD=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.board)
-    ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
-    PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.product)
-    BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
-    DEVICE_KERNEL_STRING=$(adb -s "$SERIAL_NUMBER" shell uname -r)
-    DEVICE_KERNEL_VERSION=$(extract_kernel_version "$DEVICE_KERNEL_STRING")
-    SYSTEM_DLKM_VERSION=$(adb -s "$SERIAL_NUMBER" shell getprop ro.system_dlkm.build.version.release)
-    if [ -z "$PRODUCT" ]; then
+    adb_count=$(adb devices | grep "$SERIAL_NUMBER" | wc -l)
+    if (( adb_count > 0 )); then
+        BOARD=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.board)
+        ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
+        PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.product)
+        BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
+        DEVICE_KERNEL_STRING=$(adb -s "$SERIAL_NUMBER" shell uname -r)
+        extract_device_kernel_version "$DEVICE_KERNEL_STRING"
+        SYSTEM_DLKM_VERSION=$(adb -s "$SERIAL_NUMBER" shell getprop ro.system_dlkm.build.version.release)
+        return 0
+    fi
+    fastboot_count=$(fastboot devices | grep "$SERIAL_NUMBER" | wc -l)
+    if (( fastboot_count > 0 )); then
         # try get product by fastboot command
         local output=$(fastboot -s "$SERIAL_NUMBER" getvar product 2>&1)
         PRODUCT=$(echo "$output" | grep -oP '^product:\s*\K.*' | cut -d' ' -f1)
+        return 0
     fi
+    print_error "$SERIAL_NUMBER is not connected with adb or fastboot"
 }
 
 function find_tradefed_bin {
@@ -916,10 +954,10 @@ if [[ "$KERNEL_BUILD" == ab://* ]]; then
     KERNEL_VERSION="${array[0]}-${array[1]}"
     print_info "$KERNEL_BUILD is KERNEL_VERSION $KERNEL_VERSION"
     if [[ "$KERNEL_VERSION" != "$DEVICE_KERNEL_VERSION"* ]] && [ -z "$PLATFORM_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then
-        print_warn "Device $SERIAL_NUMBER is $PRODUCT comes with $DEVICE_KERNEL_STRING kernel. Can't flash GKI directly. \
-Please add a platform build with $KERNEL_VERSION kernel or add vendor kernel build for example by flag \
--vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
-        print_error "Cannot flash $KERNEL_VERSION GKI to device directly $SERIAL_NUMBER." "$LINENO"
+        print_warn "Device $PRODUCT $SERIAL_NUMBER comes with $DEVICE_KERNEL_STRING $DEVICE_KERNEL_VERSION kernel. \
+Can't flash $KERNEL_VERSION GKI directly. Please use a platform build with the $KERNEL_VERSION kernel \
+or use a vendor kernel build by flag -vkb, for example -vkb -vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
+        print_error "Cannot flash $KERNEL_VERSION GKI to device $SERIAL_NUMBER directly." "$LINENO"
     fi
     print_info "Download kernel build $KERNEL_BUILD"
     if [ -d "$DOWNLOAD_PATH/gki_dir" ]; then
