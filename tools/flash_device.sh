@@ -511,7 +511,7 @@ function flash_vendor_kernel_build() {
 
 function flash_platform_build() {
     if [[ "$PLATFORM_BUILD" == ab://* ]] && [ -x "$FLASH_CLI" ]; then
-        local flash_cmd="$FLASH_CLI --nointeractive --force_flash_partitions --disable_verity --skip_build_compatibility_check -w -s $SERIAL_NUMBER "
+        local flash_cmd="$FLASH_CLI --nointeractive --force_flash_partitions --disable_verity -w -s $SERIAL_NUMBER "
         IFS='/' read -ra array <<< "$PLATFORM_BUILD"
         if [ ! -z "${array[3]}" ]; then
             if [[ "${array[3]}" == *userdebug ]]; then
@@ -579,7 +579,7 @@ function flash_platform_build() {
             flash_cmd="${ANDROID_HOST_OUT}/bin/local_flashstation"
         fi
 
-        flash_cmd+=" --nointeractive --force_flash_partitions --skip_build_compatibility_check --disable_verity --disable_verification  -w -s $SERIAL_NUMBER"
+        flash_cmd+=" --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $SERIAL_NUMBER"
         print_info "Flash device with: $flash_cmd" "$LINENO"
         eval "$flash_cmd"
         exit_code=$?
