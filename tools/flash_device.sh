@@ -590,7 +590,7 @@ function flash_platform_build() {
             if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                 set_platform_repo "aosp_$PRODUCT"
             else
-                set_platform_repo "PRODUCT"
+                set_platform_repo "$PRODUCT"
             fi
         fi
         eval "vendor/google/tools/flashall  --nointeractive -w -s $SERIAL_NUMBER"
@@ -916,7 +916,7 @@ if [ ! -z "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] && [ -d "$PLA
                 if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                     set_platform_repo "aosp_$PRODUCT"
                 else
-                    set_platform_repo "PRODUCT"
+                    set_platform_repo "$PRODUCT"
                 fi
             elif [[ "${TARGET_PRODUCT}" == *"$PRODUCT" ]]; then
                 echo "TARGET_PRODUCT=${TARGET_PRODUCT}, ANDROID_PRODUCT_OUT=${ANDROID_PRODUCT_OUT}"
