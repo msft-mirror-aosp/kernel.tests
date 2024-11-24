@@ -365,8 +365,14 @@ function build_ack () {
 function download_platform_build() {
     print_info "Downloading $1 to $PWD" "$LINENO"
     local build_info="$1"
-    local file_patterns=("*$PRODUCT-img-*.zip" "bootloader.img" "radio.img" "vendor_ramdisk.img" "misc_info.txt" "otatools.zip")
+    local file_patterns=("*$PRODUCT-img-*.zip" "bootloader.img" "radio.img" "misc_info.txt" "otatools.zip")
+    if [[ "$1" == *"user/"* ]]; then
+        file_patterns+=("vendor_ramdisk-debug.img")
+    else
+        file_patterns+=("vendor_ramdisk.img")
+    fi
 
+    echo "Downloading ${file_patterns[@]} from $build_info"
     for pattern in "${file_patterns[@]}"; do
         download_file_name="$build_info/$pattern"
         eval "$FETCH_SCRIPT $download_file_name"
@@ -375,6 +381,9 @@ function download_platform_build() {
             print_info "Download $download_file_name succeeded" "$LINENO"
         else
             print_error "Download $download_file_name failed" "$LINENO"
+        fi
+        if [[ "$pattern" == "vendor_ramdisk-debug.img" ]]; then
+            cp vendor_ramdisk-debug.img vendor_ramdisk.img
         fi
     done
     echo ""
@@ -385,6 +394,7 @@ function download_gki_build() {
     local build_info="$1"
     local file_patterns=("Image.lz4" "boot-lz4.img" "system_dlkm_staging_archive.tar.gz" "system_dlkm.flatten.ext4.img" "system_dlkm.flatten.erofs.img")
 
+    echo "Downloading ${file_patterns[@]} from $build_info"
     for pattern in "${file_patterns[@]}"; do
         download_file_name="$build_info/$pattern"
         eval "$FETCH_SCRIPT $download_file_name"
@@ -405,16 +415,18 @@ function download_vendor_kernel_build() {
     "initramfs.img" "vendor_dlkm.img" "boot.img" "vendor_dlkm.modules.blocklist" "vendor_dlkm.modules.load" )
 
     if [[ "$VENDOR_KERNEL_VERSION" == *"6.6" ]]; then
-        file_patterns+="*vendor_dev_nodes_fragment.img"
+        file_patterns+=("*vendor_dev_nodes_fragment.img")
     fi
 
     case "$PRODUCT" in
         oriole | raven | bluejay)
-            file_patterns+=("gs101-a0.dtb" "gs101-b0.dtb")
+            file_patterns+=( "gs101-a0.dtb" "gs101-b0.dtb")
             ;;
         *)
             ;;
     esac
+
+    echo "Downloading ${file_patterns[@]} from $build_info"
     for pattern in "${file_patterns[@]}"; do
         download_file_name="$build_info/$pattern"
         eval "$FETCH_SCRIPT $download_file_name"
@@ -547,7 +559,7 @@ function flash_platform_build() {
             if [[ "${array[3]}" == *userdebug ]]; then
                 flash_cmd+=" -t userdebug"
             elif [[ "${array[3]}" == *user ]]; then
-                flash_cmd+=" -t user"
+                flash_cmd+=" -t user --force_debuggable"
             fi
         fi
         if [ ! -z "${array[4]}" ] && [[ "${array[4]}" != latest* ]]; then
@@ -578,7 +590,7 @@ function flash_platform_build() {
             if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                 set_platform_repo "aosp_$PRODUCT"
             else
-                set_platform_repo "PRODUCT"
+                set_platform_repo "$PRODUCT"
             fi
         fi
         eval "vendor/google/tools/flashall  --nointeractive -w -s $SERIAL_NUMBER"
@@ -904,7 +916,7 @@ if [ ! -z "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] && [ -d "$PLA
                 if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                     set_platform_repo "aosp_$PRODUCT"
                 else
-                    set_platform_repo "PRODUCT"
+                    set_platform_repo "$PRODUCT"
                 fi
             elif [[ "${TARGET_PRODUCT}" == *"$PRODUCT" ]]; then
                 echo "TARGET_PRODUCT=${TARGET_PRODUCT}, ANDROID_PRODUCT_OUT=${ANDROID_PRODUCT_OUT}"
@@ -952,14 +964,14 @@ if [[ "$KERNEL_BUILD" == ab://* ]]; then
     KERNEL_VERSION=$(echo "${array[2]}" | sed "s/aosp_kernel-common-//g")
     IFS='-' read -ra array <<< "$KERNEL_VERSION"
     KERNEL_VERSION="${array[0]}-${array[1]}"
-    print_info "$KERNEL_BUILD is KERNEL_VERSION $KERNEL_VERSION"
+    print_info "$KERNEL_BUILD is KERNEL_VERSION $KERNEL_VERSION" "$LINENO"
     if [[ "$KERNEL_VERSION" != "$DEVICE_KERNEL_VERSION"* ]] && [ -z "$PLATFORM_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then
         print_warn "Device $PRODUCT $SERIAL_NUMBER comes with $DEVICE_KERNEL_STRING $DEVICE_KERNEL_VERSION kernel. \
 Can't flash $KERNEL_VERSION GKI directly. Please use a platform build with the $KERNEL_VERSION kernel \
 or use a vendor kernel build by flag -vkb, for example -vkb -vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
         print_error "Cannot flash $KERNEL_VERSION GKI to device $SERIAL_NUMBER directly." "$LINENO"
     fi
-    print_info "Download kernel build $KERNEL_BUILD"
+    print_info "Download kernel build $KERNEL_BUILD" "$LINENO"
     if [ -d "$DOWNLOAD_PATH/gki_dir" ]; then
         rm -rf "$DOWNLOAD_PATH/gki_dir"
     fi
