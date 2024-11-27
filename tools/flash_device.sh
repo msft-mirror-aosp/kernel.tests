@@ -40,7 +40,7 @@ PRODUCT=
 BUILD_TYPE=
 DEVICE_KERNEL_STRING=
 DEVICE_KERNEL_VERSION=
-SYSTEM_DLKM_VERSION=
+SYSTEM_DLKM_INFO=
 
 function print_help() {
     echo "Usage: $0 [OPTIONS]"
@@ -59,6 +59,7 @@ function print_help() {
     echo "                        as ab://<branch>/<build_target>/<build_id>."
     echo "                        If not specified and the script is running from a platform repo,"
     echo "                        it will use the platform build in the local repo."
+    echo "                        If string 'None' is set, no platform build will be flashed,"
     echo "  -sb <system_build>, --system-build=<system_build>"
     echo "                        [Optional] The system build path for GSI testing. Can be a local path or"
     echo "                        remote build as ab://<branch>/<build_target>/<build_id>."
@@ -278,6 +279,8 @@ function find_repo () {
             print_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION" "$LINENO"
             if [ -z "$PLATFORM_BUILD" ]; then
                 PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
+            elif [[ "$PLATFORM_BUILD" == "None" ]]; then
+                PLATFORM_BUILD=
             fi
             ;;
         *kernel/private/devices/google/common*|*private/google-modules/soc/gs*)
@@ -547,10 +550,11 @@ function flash_platform_build() {
         local flash_cmd="$FLASH_CLI --nointeractive --force_flash_partitions --disable_verity -w -s $SERIAL_NUMBER "
         IFS='/' read -ra array <<< "$PLATFORM_BUILD"
         if [ ! -z "${array[3]}" ]; then
-            if [[ "${array[3]}" == *userdebug ]]; then
-                flash_cmd+=" -t userdebug"
-            elif [[ "${array[3]}" == *user ]]; then
-                flash_cmd+=" -t user --force_debuggable"
+            local _build_type="${array[3]#*-}"
+            if [[ "$_build_type" == *userdebug ]]; then
+                flash_cmd+=" -t $_build_type"
+            elif [[ "$_build_type" == *user ]]; then
+                flash_cmd+=" -t $_build_type --force_debuggable"
             fi
         fi
         if [ ! -z "${array[4]}" ] && [[ "${array[4]}" != latest* ]]; then
@@ -775,10 +779,10 @@ function gki_build_only_operation {
     IFS='-' read -ra array <<< "$KERNEL_VERSION"
     case "$KERNEL_VERSION" in
         android-mainline | android15-6.6* | android14-6.1* | android14-5.15* )
-            if [[ "$KERNEL_VERSION" == "$DEVICE_KERNEL_VERSION"* ]] && [ ! -z "$SYSTEM_DLKM_VERSION" ]; then
+            if [[ "$KERNEL_VERSION" == "$DEVICE_KERNEL_VERSION"* ]] && [ ! -z "$SYSTEM_DLKM_INFO" ]; then
                 print_info "Device $SERIAL_NUMBER is with $KERNEL_VERSION kernel. Flash GKI directly" "$LINENO"
                 flash_gki_build
-            elif [ -z "$SYSTEM_DLKM_VERSION" ]; then
+            elif [ -z "$SYSTEM_DLKM_INFO" ]; then
                 print_warn "Device $SERIAL_NUMBER is $PRODUCT that doesn't have system_dlkm partition. Can't flash GKI directly. \
 Please add vendor kernel build for example by flag -vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
                 print_error "Can not flash GKI to SERIAL_NUMBER without -vkb <vendor_kernel_build> been specified." "$LINENO"
@@ -829,7 +833,9 @@ function get_device_info {
         BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
         DEVICE_KERNEL_STRING=$(adb -s "$SERIAL_NUMBER" shell uname -r)
         extract_device_kernel_version "$DEVICE_KERNEL_STRING"
-        SYSTEM_DLKM_VERSION=$(adb -s "$SERIAL_NUMBER" shell getprop ro.system_dlkm.build.version.release)
+        SYSTEM_DLKM_INFO=$(adb -s "$SERIAL_NUMBER" shell getprop dev.mnt.blk.system_dlkm)
+        print_info "device info: BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE" "$LINENO"
+        print_info "device info: SYSTEM_DLKM_INFO=$SYSTEM_DLKM_INFO, DEVICE_KERNEL_STRING=$DEVICE_KERNEL_STRING" "$LINENO"
         return 0
     fi
     fastboot_count=$(fastboot devices | grep "$SERIAL_NUMBER" | wc -l)
@@ -837,6 +843,7 @@ function get_device_info {
         # try get product by fastboot command
         local output=$(fastboot -s "$SERIAL_NUMBER" getvar product 2>&1)
         PRODUCT=$(echo "$output" | grep -oP '^product:\s*\K.*' | cut -d' ' -f1)
+        print_info "$SERIAL_NUMBER is in fastboot with device info: PRODUCT=$PRODUCT" "$LINENO"
         return 0
     fi
     print_error "$SERIAL_NUMBER is not connected with adb or fastboot"
@@ -929,7 +936,7 @@ if [ ! -z "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] && [ -d "$PLA
         if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
             find_repo
         fi
-        if [ "$SKIP_BUILD" = false ]; then
+        if [ "$SKIP_BUILD" = false ] && [[ "$PLATFORM_BUILD" != "ab://"* ]] && [[ ! -z "$PLATFORM_BUILD" ]]; then
             if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != *"$PRODUCT" ]]; then
                 if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                     set_platform_repo "aosp_$PRODUCT"
