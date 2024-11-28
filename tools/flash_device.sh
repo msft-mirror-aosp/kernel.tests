@@ -13,8 +13,9 @@ FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 DOWNLOAD_PATH="/tmp/downloaded_images"
 KERNEL_TF_PREBUILT=prebuilts/tradefed/filegroups/tradefed/tradefed.sh
 PLATFORM_TF_PREBUILT=tools/tradefederation/prebuilts/filegroups/tradefed/tradefed.sh
-JDK_PATH=prebuilts/jdk/jdk11/linux-x86
+KERNEL_JDK_PATH=prebuilts/jdk/jdk11/linux-x86
 PLATFORM_JDK_PATH=prebuilts/jdk/jdk21/linux-x86
+LOCAL_JDK_PATH=/usr/local/buildtools/java/jdk11
 LOG_DIR=$PWD/out/test_logs/$(date +%Y%m%d_%H%M%S)
 # Color constants
 BOLD="$(tput bold)"
@@ -48,30 +49,36 @@ function print_help() {
     echo ""
     echo "Available options:"
     echo "  -s <serial_number>, --serial=<serial_number>"
-    echo "                        The serial number for device to be flashed with."
-    echo "  --skip-build          Skip the image build step. Will build by default if in repo."
-    echo "  --gcov                Build gcov enabled kernel"
-    echo "  --debug               Build debug enabled kernel"
-    echo "  --kasan               Build kasan enabled kernel"
+    echo "                        [Mandatory] The serial number for device to be flashed with."
+    echo "  --skip-build          [Optional] Skip the image build step. Will build by default if in repo."
+    echo "  --gcov                [Optional] Build gcov enabled kernel"
+    echo "  --debug               [Optional] Build debug enabled kernel"
+    echo "  --kasan               [Optional] Build kasan enabled kernel"
     echo "  -pb <platform_build>, --platform-build=<platform_build>"
-    echo "                        The platform build path. Can be a local path or a remote build"
+    echo "                        [Optional] The platform build path. Can be a local path or a remote build"
     echo "                        as ab://<branch>/<build_target>/<build_id>."
-    echo "                        If not specified, it could use the platform build in the local"
-    echo "                        repo."
+    echo "                        If not specified and the script is running from a platform repo,"
+    echo "                        it will use the platform build in the local repo."
     echo "  -sb <system_build>, --system-build=<system_build>"
-    echo "                        The system build path for GSI testing. Can be a local path or"
+    echo "                        [Optional] The system build path for GSI testing. Can be a local path or"
     echo "                        remote build as ab://<branch>/<build_target>/<build_id>."
     echo "                        If not specified, no system build will be used."
     echo "  -kb <kernel_build>, --kernel-build=<kernel_build>"
-    echo "                        The kernel build path. Can be a local path or a remote build"
+    echo "                        [Optional] The kernel build path. Can be a local path or a remote build"
     echo "                        as ab://<branch>/<build_target>/<build_id>."
-    echo "                        If not specified, it could use the kernel in the local repo."
-    echo "  -vkb <vendor-kernel_build>, --vendor-kernel-build=<kernel_build>"
-    echo "                        The vendor kernel build path. Can be a local path or a remote build"
+    echo "                        If not specified and the script is running from an Android common kernel repo,"
+    echo "                        it will use the kernel in the local repo."
+    echo "  -vkb <vendor_kernel_build>, --vendor-kernel-build=<vendor_kernel_build>"
+    echo "                        [Optional] The vendor kernel build path. Can be a local path or a remote build"
     echo "                        as ab://<branch>/<build_target>/<build_id>."
-    echo "                        If not specified, it could use the kernel in the local repo."
+    echo "                        If not specified, and the script is running from a vendor kernel repo, "
+    echo "                        it will use the kernel in the local repo."
+    echo "  -vkbt <vendor_kernel_build_target>, --vendor-kernel-build-target=<vendor_kernel_build_target>"
+    echo "                        [Optional] The vendor kernel build target to be used to build vendor kernel."
+    echo "                        If not specified, and the script is running from a vendor kernel repo, "
+    echo "                        it will try to find a local build target in the local repo."
     echo "  --device-variant=<device_variant>"
-    echo "                        Device variant such as userdebug, user, or eng."
+    echo "                        [Optional] Device variant such as userdebug, user, or eng."
     echo "                        If not specified, will be userdebug by default."
     echo "  -h, --help            Display this help message and exit"
     echo ""
@@ -163,6 +170,19 @@ function parse_arg() {
                 VENDOR_KERNEL_BUILD=$(echo $1 | sed -e "s/^[^=]*=//g")
                 shift
                 ;;
+            -vkbt)
+                shift
+                if test $# -gt 0; then
+                    VENDOR_KERNEL_BUILD_TARGET=$1
+                else
+                    print_error "vendor kernel build target is not specified"
+                fi
+                shift
+                ;;
+            --vendor-kernel-build-target=*)
+                VENDOR_KERNEL_BUILD_TARGET=$(echo $1 | sed -e "s/^[^=]*=//g")
+                shift
+                ;;
             --device-variant=*)
                 DEVICE_VARIANT=$(echo $1 | sed -e "s/^[^=]*=//g")
                 shift
@@ -247,8 +267,9 @@ function set_platform_repo () {
 }
 
 function find_repo () {
-    manifest_output=$(grep -e "superproject" -e "gs-pixel" -e "private/google-modules/soc/gs" \
-    -e "kernel/common" -e "common-modules/virtual-device" .repo/manifests/default.xml)
+    manifest_output=$(grep -e "superproject" -e "gs-pixel" -e "kernel/private/devices/google/common" \
+     -e "private/google-modules/soc/gs" -e "kernel/common" -e "common-modules/virtual-device" \
+     .repo/manifests/default.xml)
     case "$manifest_output" in
         *platform/superproject*)
             PLATFORM_REPO_ROOT="$PWD"
@@ -259,28 +280,27 @@ function find_repo () {
                 PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
             fi
             ;;
-        *kernel/superproject*)
-            if [[ "$manifest_output" == *private/google-modules/soc/gs* ]]; then
-                VENDOR_KERNEL_REPO_ROOT="$PWD"
-                VENDOR_KERNEL_VERSION=$(grep -e "default revision" .repo/manifests/default.xml | \
-                grep -oP 'revision="\K[^"]*')
-                print_info "VENDOR_KERNEL_REPO_ROOT=$VENDOR_KERNEL_REPO_ROOT" "$LINENO"
-                print_info "VENDOR_KERNEL_VERSION=$VENDOR_KERNEL_VERSION" "$LINENO"
-                if [ -z "$VENDOR_KERNEL_BUILD" ]; then
-                    VENDOR_KERNEL_BUILD="$VENDOR_KERNEL_REPO_ROOT"
-                fi
-            elif [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
-                KERNEL_REPO_ROOT="$PWD"
-                KERNEL_VERSION=$(grep -e "kernel/superproject" \
-                .repo/manifests/default.xml | grep -oP 'revision="common-\K[^"]*')
-                print_info "KERNEL_REPO_ROOT=$KERNEL_REPO_ROOT, KERNEL_VERSION=$KERNEL_VERSION" "$LINENO"
-                if [ -z "$KERNEL_BUILD" ]; then
-                    KERNEL_BUILD="$KERNEL_REPO_ROOT"
-                fi
+        *kernel/private/devices/google/common*|*private/google-modules/soc/gs*)
+            VENDOR_KERNEL_REPO_ROOT="$PWD"
+            VENDOR_KERNEL_VERSION=$(grep -e "default revision" .repo/manifests/default.xml | \
+            grep -oP 'revision="\K[^"]*')
+            print_info "VENDOR_KERNEL_REPO_ROOT=$VENDOR_KERNEL_REPO_ROOT" "$LINENO"
+            print_info "VENDOR_KERNEL_VERSION=$VENDOR_KERNEL_VERSION" "$LINENO"
+            if [ -z "$VENDOR_KERNEL_BUILD" ]; then
+                VENDOR_KERNEL_BUILD="$VENDOR_KERNEL_REPO_ROOT"
+            fi
+            ;;
+        *common-modules/virtual-device*)
+            KERNEL_REPO_ROOT="$PWD"
+            KERNEL_VERSION=$(grep -e "kernel/superproject" \
+            .repo/manifests/default.xml | grep -oP 'revision="common-\K[^"]*')
+            print_info "KERNEL_REPO_ROOT=$KERNEL_REPO_ROOT, KERNEL_VERSION=$KERNEL_VERSION" "$LINENO"
+            if [ -z "$KERNEL_BUILD" ]; then
+                KERNEL_BUILD="$KERNEL_REPO_ROOT"
             fi
             ;;
         *)
-            print_warn "Unexpected manifest output. Could not determine repository type." "$LINENO"
+            print_warn "Unknown manifest output. Could not determine repository type." "$LINENO"
             ;;
     esac
 }
@@ -303,36 +323,6 @@ function build_platform () {
         else
             print_error "${ANDROID_PRODUCT_OUT}/system.img doesn't exist" "$LINENO"
         fi
-    fi
-}
-
-function build_slider () {
-    if [[ "$SKIP_BUILD" = true ]]; then
-        print_warn "--skip-build is set. Do not rebuild slider" "$LINENO"
-        return
-    fi
-    local build_cmd=
-    if [ -f "build_slider.sh" ]; then
-        build_cmd="./build_slider.sh"
-    else
-        build_cmd="tools/bazel run --config=fast"
-        build_cmd+=" //private/google-modules/soc/gs:slider_dist"
-    fi
-    if [ "$GCOV" = true ]; then
-        build_cmd+=" --gcov"
-    fi
-    if [ "$DEBUG" = true ]; then
-        build_cmd+=" --debug"
-    fi
-    if [ "$KASAN" = true ]; then
-        build_cmd+=" --kasan"
-    fi
-    eval "$build_cmd"
-    exit_code=$?
-    if [ $exit_code -eq 0 ]; then
-        print_info "Build kernel succeeded" "$LINENO"
-    else
-        print_error "Build kernel failed with exit code $exit_code" "$LINENO"
     fi
 }
 
@@ -487,6 +477,7 @@ function flash_gki_build() {
     tf_cli="$TRADEFED \
     run commandAndExit template/local_min --log-level-display VERBOSE \
     --log-file-path=$LOG_DIR -s $SERIAL_NUMBER --disable-verity \
+    --template:map test=example/reboot --num-of-reboots 1 \
     --template:map preparers=template/preparers/gki-device-flash-preparer \
     --extra-file gki_boot.img=$kernel_dir/$boot_image_name"
 
@@ -503,9 +494,9 @@ function flash_vendor_kernel_build() {
     if [ -z "$TRADEFED" ]; then
         find_tradefed_bin
     fi
-    local tf_cli="$TRADEFED \
-    run commandAndExit template/local_min --log-level-display VERBOSE \
+    local tf_cli="$TRADEFED run commandAndExit template/local_min --log-level-display VERBOSE \
     --log-file-path=$LOG_DIR -s $SERIAL_NUMBER --disable-verity \
+    --template:map test=example/reboot --num-of-reboots 1 \
     --template:map preparers=template/preparers/gki-device-flash-preparer"
 
     if [ -d "$DOWNLOAD_PATH/tf_vendor_kernel_dir" ]; then
@@ -856,15 +847,42 @@ function find_tradefed_bin {
     if [ -f "${ANDROID_HOST_OUT}/bin/tradefed.sh" ] ; then
         TRADEFED="${ANDROID_HOST_OUT}/bin/tradefed.sh"
         print_info "Use the tradefed from the local built path $TRADEFED" "$LINENO"
+        return
     elif [ -f "$PLATFORM_TF_PREBUILT" ]; then
-        TRADEFED="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $PLATFORM_TF_PREBUILT"
+        TF_BIN="$PLATFORM_TF_PREBUILT"
         print_info "Local Tradefed is not built yet. Use the prebuilt from $PLATFORM_TF_PREBUILT" "$LINENO"
     elif [ -f "$KERNEL_TF_PREBUILT" ]; then
-        TRADEFED="JAVA_HOME=$JDK_PATH PATH=$JDK_PATH/bin:$PATH $KERNEL_TF_PREBUILT"
+        TF_BIN="$KERNEL_TF_PREBUILT"
+    elif [ -f "/tmp/tradefed/tradefed.sh" ]; then
+        TF_BIN=/tmp/tradefed/tradefed.sh
     # No Tradefed found
     else
-        print_error "Can not find Tradefed binary. Please use flag -tf to specify the binary path." "$LINENO" "$LINENO"
+        mkdir -p "/tmp/tradefed"
+        cd /tmp/tradefed
+        eval "$FETCH_SCRIPT ab://tradefed/tradefed/latest/google-tradefed.zip"
+        exit_code=$?
+        if [ $exit_code -eq 0 ]; then
+            print_info "Download tradefed succeeded" "$LINENO"
+        else
+            print_error "Download tradefed failed" "$LINENO"
+        fi
+        echo ""
+        eval "unzip -oq google-tradefed.zip"
+        TF_BIN=/tmp/tradefed/tradefed.sh
+        cd "$REPO_ROOT_PATH"
     fi
+    if [ -d "${ANDROID_JAVA_HOME}" ] ; then
+        JDK_PATH="${ANDROID_JAVA_HOME}"
+    elif [ -d "$PLATFORM_JDK_PATH" ] ; then
+        JDK_PATH="$PLATFORM_JDK_PATH"
+    elif [ -d "$KERNEL_JDK_PATH" ] ; then
+        JDK_PATH="$KERNEL_JDK_PATH"
+    elif [ -d "$LOCAL_JDK_PATH" ] ; then
+        JDK_PATH="$LOCAL_JDK_PATH"
+    else
+        print_error "Can't find JAVA JDK path" "$LINENO"
+    fi
+    TRADEFED="JAVA_HOME=$JDK_PATH PATH=$JDK_PATH/bin:$PATH $TF_BIN"
 }
 
 adb_checker
@@ -1022,15 +1040,40 @@ elif [ ! -z "$VENDOR_KERNEL_BUILD" ] && [ -d "$VENDOR_KERNEL_BUILD" ]; then
         if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
             find_repo
         fi
-        if [ "$SKIP_BUILD" = false ] ; then
-            if [ ! -f "private/google-modules/soc/gs/BUILD.bazel" ]; then
-                # TODO: Add build support to android12 and earlier kernels
-                print_error "bazel build is not supported in $PWD" "$LINENO"
+        if [ -z "$VENDOR_KERNEL_BUILD_TARGET" ]; then
+            kernel_build_target_count=$(ls build_*.sh | wc -w)
+            if (( kernel_build_target_count == 1 )); then
+                VENDOR_KERNEL_BUILD_TARGET=$(echo $(ls build_*.sh) | sed 's/build_\(.*\)\.sh/\1/')
+            elif (( kernel_build_target_count > 1 )); then
+                print_warn "There are multiple build_*.sh scripts in $PWD, Can't decide vendor kernel build target" "$LINENO"
+                print_error "Please use -vkbt <value> or --vendor-kernel-build-target=<value> to specify a kernel build target" "$LINENO"
             else
-                build_slider
+                # TODO: Add build support to android12 and earlier kernels
+                print_error "There is no build_*.sh script in $PWD" "$LINENO"
             fi
         fi
-        VENDOR_KERNEL_BUILD="$PWD/out/slider/dist"
+        if [ "$SKIP_BUILD" = false ] ; then
+            build_cmd="./build_$VENDOR_KERNEL_BUILD_TARGET.sh"
+            if [ "$GCOV" = true ]; then
+                build_cmd+=" --gcov"
+            fi
+            if [ "$DEBUG" = true ]; then
+                build_cmd+=" --debug"
+            fi
+            if [ "$KASAN" = true ]; then
+                build_cmd+=" --kasan"
+            fi
+            print_info "Build vendor kernel with $build_cmd"
+            eval "$build_cmd"
+            exit_code=$?
+            if [ $exit_code -eq 0 ]; then
+                print_info "Build vendor kernel succeeded"
+            else
+                print_error "Build vendor kernel failed with exit code $exit_code"
+                exit 1
+            fi
+        fi
+        VENDOR_KERNEL_BUILD="$PWD/out/$VENDOR_KERNEL_BUILD_TARGET/dist"
     fi
 fi
 
