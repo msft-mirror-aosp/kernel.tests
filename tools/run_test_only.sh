@@ -15,6 +15,7 @@ GCOV=false
 CREATE_TRACEFILE_SCRIPT="kernel/tests/tools/create-tracefile.py"
 FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 TRADEFED=
+TRADEFED_GCOV_OPTIONS=" --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE"
 TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
@@ -41,15 +42,27 @@ function go_to_repo_root() {
 }
 
 function print_info() {
-    echo "[$MY_NAME]: ${GREEN}$1${END}"
+    local log_prompt=$MY_NAME
+    if [ ! -z "$2" ]; then
+        log_prompt+=" line $2"
+    fi
+    echo "[$log_prompt]: ${GREEN}$1${END}"
 }
 
 function print_warn() {
-    echo "[$MY_NAME]: ${YELLOW}$1${END}"
+    local log_prompt=$MY_NAME
+    if [ ! -z "$2" ]; then
+        log_prompt+=" line $2"
+    fi
+    echo "[$log_prompt]: ${ORANGE}$1${END}"
 }
 
 function print_error() {
-    echo -e "[$MY_NAME]: ${RED}$1${END}"
+    local log_prompt=$MY_NAME
+    if [ ! -z "$2" ]; then
+        log_prompt+=" line $2"
+    fi
+    echo -e "[$log_prompt]: ${RED}$1${END}"
     cd $OLD_PWD
     exit 1
 }
@@ -68,15 +81,14 @@ function print_help() {
     echo "                        as ab://<branch>/<build_target>/<build_id>/<file_name>."
     echo "                        If not specified, it will use the tests in the local"
     echo "                        repo."
-    echo "  -tl <test_log_dir>, --test_log=<test_log_dir>"
+    echo "  -tl <test_log_dir>, --test-log=<test_log_dir>"
     echo "                        The test log dir. Use default out/test_logs if not specified."
-    echo "  -ta <extra_arg>, --extra-arg=<extra_arg>"
+    echo "  -ta <test_arg>, --test-arg=<test_arg>"
     echo "                        Additional tradefed command arg. Can be repeated."
     echo "  -t <test_name>, --test=<test_name>  The test name. Can be repeated."
     echo "                        If test is not specified, no tests will be run."
     echo "  -tf <tradefed_binary_path>, --tradefed-bin=<tradefed_binary_path>"
     echo "                        The alternative tradefed binary to run test with."
-    echo "  --skip-build          Skip the platform build step. Will build by default if in repo."
     echo "  --gcov                Collect coverage data from the test result"
     echo "  -h, --help            Display this help message and exit"
     echo ""
@@ -112,8 +124,19 @@ function run_test_in_platform_repo () {
        [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]]; then
        set_platform_repo
     fi
-    eval atest " ${TEST_NAMES[@]}" -s "$SERIAL_NUMBER"
+    atest_cli="atest ${TEST_NAMES[*]} -s $SERIAL_NUMBER --"
+    if $GCOV; then
+        atest_cli+="$TRADEFED_GCOV_OPTIONS"
+    fi
+    eval "$atest_cli" "${TEST_ARGS[*]}"
     exit_code=$?
+
+    if $GCOV; then
+        atest_log_dir="/tmp/atest_result_$USER/LATEST"
+        create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $atest_log_dir/log -o $atest_log_dir/cov.info"
+        print_info "Skip creating tracefile. If you have full kernel source, run the following command:"
+        print_info "$create_tracefile_cli"
+    fi
     cd $OLD_PWD
     exit $exit_code
 }
@@ -188,7 +211,7 @@ while test $# -gt 0; do
             shift
             ;;
         --test*)
-            TEST_NAMES+=$1
+            TEST_NAMES+=$(echo $1 | sed -e "s/^[^=]*=//g")
             shift
             ;;
         -tf)
@@ -215,20 +238,20 @@ done
 
 # Ensure SERIAL_NUMBER is provided
 if [ -z "$SERIAL_NUMBER" ]; then
-    print_error "Device serial is not provided with flag -s <serial_number>."
+    print_error "Device serial is not provided with flag -s <serial_number>." "$LINENO"
 fi
 
 # Ensure TEST_NAMES is provided
 if [ -z "$TEST_NAMES" ]; then
-    print_error "No test is specified with flag -t <test_name>."
+    print_error "No test is specified with flag -t <test_name>." "$LINENO"
 fi
 
 FULL_COMMAND_PATH=$(dirname "$PWD/$0")
 REPO_LIST_OUT=$(repo list 2>&1)
 if [[ "$REPO_LIST_OUT" == "error"* ]]; then
-    print_warn "Current path $PWD is not in an Android repo. Change path to repo root."
+    print_warn "Current path $PWD is not in an Android repo. Change path to repo root." "$LINENO"
     go_to_repo_root "$FULL_COMMAND_PATH"
-    print_info "Changed path to $PWD"
+    print_info "Changed path to $PWD" "$LINENO"
 else
     go_to_repo_root "$PWD"
 fi
@@ -249,10 +272,10 @@ PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.product)
 BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
 
 if [ -z "$TEST_DIR" ]; then
-    print_warn "Flag -td <test_dir> is not provided. Will use the default test directory"
-    if [[ "$REPO_LIST_OUT" == *"vendor/google/tools"* ]]; then
+    print_warn "Flag -td <test_dir> is not provided. Will use the default test directory" "$LINENO"
+    if [[ "$REPO_LIST_OUT" == *"build/make"* ]]; then
         # In the platform repo
-        print_info "Run test with atest"
+        print_info "Run test with atest" "$LINENO"
         run_test_in_platform_repo
     elif [[ "$BOARD" == "cutf"* ]] && [[ "$REPO_LIST_OUT" == *"common-modules/virtual-device"* ]]; then
         # In the android kernel repo
@@ -261,14 +284,14 @@ if [ -z "$TEST_DIR" ]; then
         elif [[ "$ABI" == "x86_64"* ]]; then
             TEST_DIR="$REPO_ROOT_PATH/out/virtual_device_x86_64/dist/tests.zip"
         else
-            print_error "No test builds for $ABI Cuttlefish in $REPO_ROOT_PATH"
+            print_error "No test builds for $ABI Cuttlefish in $REPO_ROOT_PATH" "$LINENO"
         fi
     elif [[ "$BOARD" == "raven"* || "$BOARD" == "oriole"* ]] && [[ "$REPO_LIST_OUT" == *"private/google-modules/display"* ]]; then
         TEST_DIR="$REPO_ROOT_PATH/out/slider/dist/tests.zip"
     elif [[ "$ABI" == "arm64"* ]] && [[ "$REPO_LIST_OUT" == *"kernel/common"* ]]; then
         TEST_DIR="$REPO_ROOT_PATH/out/kernel_aarch64/dist/tests.zip"
     else
-        print_error "No test builds for $ABI $BOARD in $REPO_ROOT_PATH"
+        print_error "No test builds for $ABI $BOARD in $REPO_ROOT_PATH" "$LINENO"
     fi
 fi
 
@@ -283,21 +306,21 @@ if [[ "$TEST_DIR" == ab://* ]]; then
     if [ -d "$DOWNLOAD_PATH" ]; then
         rm -rf "$DOWNLOAD_PATH"
     fi
-    mkdir -p "$DOWNLOAD_PATH" || $(print_error "Fail to create directory $DOWNLOAD_PATH")
-    cd $DOWNLOAD_PATH || $(print_error "Fail to go to $DOWNLOAD_PATH")
+    mkdir -p "$DOWNLOAD_PATH" || $(print_error "Fail to create directory $DOWNLOAD_PATH" "$LINENO")
+    cd $DOWNLOAD_PATH || $(print_error "Fail to go to $DOWNLOAD_PATH" "$LINENO")
     file_name=${TEST_DIR##*/}
     eval "$FETCH_SCRIPT $TEST_DIR"
     exit_code=$?
     if [ $exit_code -eq 0 ]; then
-        print_info "$TEST_DIR is downloaded succeeded"
+        print_info "$TEST_DIR is downloaded succeeded" "$LINENO"
     else
-        print_error "Failed to download $TEST_DIR"
+        print_error "Failed to download $TEST_DIR" "$LINENO"
     fi
 
     file_name=$(ls $file_name)
     # Check if the download was successful
     if [ ! -f "${file_name}" ]; then
-        print_error "Failed to download ${file_name}"
+        print_error "Failed to download ${file_name}" "$LINENO"
     fi
     TEST_DIR="$DOWNLOAD_PATH/$file_name"
 elif [ ! -z "$TEST_DIR" ]; then
@@ -306,15 +329,15 @@ elif [ ! -z "$TEST_DIR" ]; then
     elif [ -f "$TEST_DIR" ]; then
         test_file_path=$(dirname "$TEST_DIR")
     else
-        print_error "$TEST_DIR is neither a directory or file"
+        print_error "$TEST_DIR is neither a directory or file"  "$LINENO"
     fi
-    cd "$test_file_path" || $(print_error "Failed to go to $test_file_path")
+    cd "$test_file_path" || $(print_error "Failed to go to $test_file_path" "$LINENO")
     TEST_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$TEST_REPO_LIST_OUT" == "error"* ]]; then
-        print_info "Test path $test_file_path is not in an Android repo. Will use $TEST_DIR directly."
-    elif [[ "$TEST_REPO_LIST_OUT" == *"vendor/google/tools"* ]]; then
+        print_info "Test path $test_file_path is not in an Android repo. Will use $TEST_DIR directly." "$LINENO"
+    elif [[ "$TEST_REPO_LIST_OUT" == *"build/make"* ]]; then
         # Test_dir is from the platform repo
-        print_info "Test_dir $TEST_DIR is from Android platform repo. Run test with atest"
+        print_info "Test_dir $TEST_DIR is from Android platform repo. Run test with atest" "$LINENO"
         go_to_repo_root "$PWD"
         run_test_in_platform_repo
     fi
@@ -325,9 +348,12 @@ if [[ "$TEST_DIR" == *".zip"* ]]; then
     filename=${TEST_DIR##*/}
     new_test_dir="$REPO_ROOT_PATH/out/tests"
     if [ ! -d "$new_test_dir" ]; then
-        mkdir -p "$new_test_dir" || $(print_error "Failed to make directory $new_test_dir")
+        mkdir -p "$new_test_dir" || $(print_error "Failed to make directory $new_test_dir" "$LINENO")
+    else
+        folder_name="${filenamef%.*}"
+        rm -r "$new_test_dir/$folder_name"
     fi
-    unzip -oq "$TEST_DIR" -d "$new_test_dir" || $(print_error "Failed to unzip $TEST_DIR to $new_test_dir")
+    unzip -oq "$TEST_DIR" -d "$new_test_dir" || $(print_error "Failed to unzip $TEST_DIR to $new_test_dir" "$LINENO")
     case $filename in
         "android-vts.zip" | "android-cts.zip")
         new_test_dir+="/$(echo $filename | sed "s/.zip//g")"
@@ -338,67 +364,69 @@ if [[ "$TEST_DIR" == *".zip"* ]]; then
     TEST_DIR="$new_test_dir" # Update TEST_DIR to the unzipped directory
 fi
 
-print_info "Will run tests with test artifacts in $TEST_DIR"
+print_info "Will run tests with test artifacts in $TEST_DIR" "$LINENO"
 
 if [ -f "${TEST_DIR}/tools/vts-tradefed" ]; then
     TRADEFED="${TEST_DIR}/tools/vts-tradefed"
-    print_info "Will run tests with vts-tradefed from $TRADEFED"
+    print_info "Will run tests with vts-tradefed from $TRADEFED" "$LINENO"
+    print_info "Many VTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
     tf_cli="$TRADEFED run commandAndExit \
     vts --skip-device-info --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "${TEST_DIR}/tools/cts-tradefed" ]; then
     TRADEFED="${TEST_DIR}/tools/cts-tradefed"
-    print_info "Will run tests with cts-tradefed from $TRADEFED"
+    print_info "Will run tests with cts-tradefed from $TRADEFED" "$LINENO"
+    print_info "Many CTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
     tf_cli="$TRADEFED run commandAndExit cts --skip-device-info \
     --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "${ANDROID_HOST_OUT}/bin/tradefed.sh" ] ; then
     TRADEFED="${ANDROID_HOST_OUT}/bin/tradefed.sh"
-    print_info "Use the tradefed from the local built path $TRADEFED"
+    print_info "Use the tradefed from the local built path $TRADEFED" "$LINENO"
     tf_cli="$TRADEFED run commandAndExit template/local_min \
     --log-level-display info --log-file-path=$LOG_DIR \
     --template:map test=suite/test_mapping_suite  --tests-dir=$TEST_DIR\
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "$PLATFORM_TF_PREBUILT" ]; then
     TRADEFED="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $PLATFORM_TF_PREBUILT"
-    print_info "Local Tradefed is not built yet. Use the prebuilt from $PLATFORM_TF_PREBUILT"
+    print_info "Local Tradefed is not built yet. Use the prebuilt from $PLATFORM_TF_PREBUILT" "$LINENO"
     tf_cli="$TRADEFED run commandAndExit template/local_min \
     --log-level-display info --log-file-path=$LOG_DIR \
     --template:map test=suite/test_mapping_suite  --tests-dir=$TEST_DIR\
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "$KERNEL_TF_PREBUILT" ]; then
     TRADEFED="JAVA_HOME=$JDK_PATH PATH=$JDK_PATH/bin:$PATH $KERNEL_TF_PREBUILT"
-    print_info "Use the tradefed prebuilt from $KERNEL_TF_PREBUILT"
+    print_info "Use the tradefed prebuilt from $KERNEL_TF_PREBUILT" "$LINENO"
     tf_cli="$TRADEFED run commandAndExit template/local_min \
     --log-level-display info --log-file-path=$LOG_DIR \
     --template:map test=suite/test_mapping_suite  --tests-dir=$TEST_DIR\
     $TEST_FILTERS -s $SERIAL_NUMBER"
 # No Tradefed found
 else
-    print_error "Can not find Tradefed binary. Please use flag -tf to specify the binary path."
+    print_error "Can not find Tradefed binary. Please use flag -tf to specify the binary path." "$LINENO"
 fi
 
 # Construct the TradeFed command
 
 # Add GCOV options if enabled
 if $GCOV; then
-    tf_cli+=" --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE"
+    tf_cli+=$TRADEFED_GCOV_OPTIONS
 fi
 
 # Evaluate the TradeFed command with extra arguments
-print_info "Run test with: $tf_cli" "${EXTRA_ARGS[*]}"
-eval "$tf_cli" "${EXTRA_ARGS[*]}"
+print_info "Run test with: $tf_cli" "${TEST_ARGS[*]}" "$LINENO"
+eval "$tf_cli" "${TEST_ARGS[*]}"
 exit_code=$?
 
 if $GCOV; then
     create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $LOG_DIR -o $LOG_DIR/cov.info"
     if [ -f $KERNEL_TF_PREBUILT ]; then
-        print_info "Create tracefile with $create_tracefile_cli"
+        print_info "Create tracefile with $create_tracefile_cli" "$LINENO"
         $create_tracefile_cli && \
-        print_info "Created tracefile at $LOG_DIR/cov.info"
+        print_info "Created tracefile at $LOG_DIR/cov.info" "$LINENO"
     else
-        print_info "Skip creating tracefile. If you have full kernel source, run the following command:"
-        print_info "$create_tracefile_cli"
+        print_info "Skip creating tracefile. If you have full kernel source, run the following command:" "$LINENO"
+        print_info "$create_tracefile_cli" "$LINENO"
     fi
 fi
 
