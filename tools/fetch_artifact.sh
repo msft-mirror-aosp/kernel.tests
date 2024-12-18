@@ -21,15 +21,15 @@ YELLOW="$(tput setaf 3)"
 BLUE="$(tput setaf 34)"
 
 function print_info() {
-    echo "[$MY_NAME] ${GREEN}$1${END}"
+    echo "[$MY_NAME]: ${GREEN}$1${END}"
 }
 
 function print_warn() {
-    echo "[$MY_NAME] ${YELLOW}$1${END}"
+    echo "[$MY_NAME]: ${YELLOW}$1${END}"
 }
 
 function print_error() {
-    echo -e "[$MY_NAME] ${RED}$1${END}"
+    echo -e "[$MY_NAME]: ${RED}$1${END}"
     exit 1
 }
 
@@ -57,7 +57,7 @@ BUILD_INFO=
 BUILD_FORMAT="ab://<branch>/<build_target>/<build_id>/<file_name>"
 EXTRA_OPTIONS=
 
-MY_NAME=${0##*/}
+MY_NAME="${0##*/}"
 
 for i in "$@"; do
     case $i in
