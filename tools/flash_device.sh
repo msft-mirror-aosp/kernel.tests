@@ -617,7 +617,7 @@ function flash_platform_build() {
             flash_cmd="${ANDROID_HOST_OUT}/bin/local_flashstation"
         fi
 
-        flash_cmd+=" --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $SERIAL_NUMBER"
+        flash_cmd+=" --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $FLASHSTATION_SERIAL_NUMBER"
         print_info "Flash device with: $flash_cmd" "$LINENO"
         eval "$flash_cmd"
         exit_code=$?
@@ -826,6 +826,7 @@ function extract_device_kernel_version() {
 
 function get_device_info {
     adb_count=$(adb devices | grep "$SERIAL_NUMBER" | wc -l)
+    FLASHSTATION_SERIAL_NUMBER=${SERIAL_NUMBER}
     if (( adb_count > 0 )); then
         BOARD=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.board)
         ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
@@ -834,6 +835,9 @@ function get_device_info {
         DEVICE_KERNEL_STRING=$(adb -s "$SERIAL_NUMBER" shell uname -r)
         extract_device_kernel_version "$DEVICE_KERNEL_STRING"
         SYSTEM_DLKM_INFO=$(adb -s "$SERIAL_NUMBER" shell getprop dev.mnt.blk.system_dlkm)
+        if [[ "$SERIAL_NUMBER" == localhost:* ]]; then
+            FLASHSTATION_SERIAL_NUMBER=$(adb shell getprop ro.serialno)
+        fi
         print_info "device info: BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE" "$LINENO"
         print_info "device info: SYSTEM_DLKM_INFO=$SYSTEM_DLKM_INFO, DEVICE_KERNEL_STRING=$DEVICE_KERNEL_STRING" "$LINENO"
         return 0
@@ -844,6 +848,10 @@ function get_device_info {
         local output=$(fastboot -s "$SERIAL_NUMBER" getvar product 2>&1)
         PRODUCT=$(echo "$output" | grep -oP '^product:\s*\K.*' | cut -d' ' -f1)
         print_info "$SERIAL_NUMBER is in fastboot with device info: PRODUCT=$PRODUCT" "$LINENO"
+        if [[ "$SERIAL_NUMBER" == tcp:* ]]; then
+            local text=$(fastboot getvar serialno 2>&1)
+            FLASHSTATION_SERIAL_NUMBER=$(echo "${text}" | grep -Po "serialno: [A-Z0-9]+" | cut -c 11-)
+        fi
         return 0
     fi
     print_error "$SERIAL_NUMBER is not connected with adb or fastboot"
