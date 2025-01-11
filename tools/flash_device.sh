@@ -8,7 +8,7 @@ FETCH_SCRIPT="fetch_artifact.sh"
 # Please see go/cl_flashstation
 FLASH_CLI=/google/bin/releases/android/flashstation/cl_flashstation
 LOCAL_FLASH_CLI=/google/bin/releases/android/flashstation/local_flashstation
-REMOTE_MIX_SCRIPT_PATH="DATA/local/tmp/build_mixed_kernels_ramdisk"
+MIX_SCRIPT_NAME="build_mixed_kernels_ramdisk"
 FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 DOWNLOAD_PATH="/tmp/downloaded_images"
 KERNEL_TF_PREBUILT=prebuilts/tradefed/filegroups/tradefed/tradefed.sh
@@ -588,7 +588,7 @@ function flash_platform_build() {
                 set_platform_repo "$PRODUCT"
             fi
         fi
-        eval "vendor/google/tools/flashall  --nointeractive -w -s $SERIAL_NUMBER"
+        eval "vendor/google/tools/flashall  --nointeractive -w -s $FLASHSTATION_SERIAL_NUMBER"
         return
     elif [ -x "${ANDROID_HOST_OUT}/bin/local_flashstation" ] || [ -x "$LOCAL_FLASH_CLI" ]; then
         if [ -z "${TARGET_PRODUCT}" ]; then
@@ -634,7 +634,7 @@ function flash_platform_build() {
 }
 
 function get_mix_ramdisk_script() {
-    download_file_name="ab://git_main/aosp_cf_x86_64_only_phone-trunk_staging-userdebug/latest/*-tests-*.zip"
+    download_file_name="ab://git_main/aosp_cf_x86_64_only_phone-trunk_staging-userdebug/latest/otatools.zip"
     eval "$FETCH_SCRIPT $download_file_name"
     exit_code=$?
     if [ $exit_code -eq 0 ]; then
@@ -642,19 +642,19 @@ function get_mix_ramdisk_script() {
     else
         print_error "Download $download_file_name failed" "$LINENO" "$LINENO"
     fi
-    eval "unzip -j *-tests-* DATA/local/tmp/build_mixed_kernels_ramdisk"
+    eval "unzip -j otatools.zip bin/$MIX_SCRIPT_NAME"
     echo ""
 }
 
 function mixing_build() {
-    if [ ! -z ${PLATFORM_REPO_ROOT_PATH} ] && [ -f "$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/build_mixed_kernels_ramdisk"]; then
-        mix_kernel_cmd="$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/build_mixed_kernels_ramdisk"
-    elif [ -f "$DOWNLOAD_PATH/build_mixed_kernels_ramdisk" ]; then
-        mix_kernel_cmd="$DOWNLOAD_PATH/build_mixed_kernels_ramdisk"
+    if [ ! -z ${PLATFORM_REPO_ROOT_PATH} ] && [ -f "$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME"]; then
+        mix_kernel_cmd="$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME"
+    elif [ -f "$DOWNLOAD_PATH/$MIX_SCRIPT_NAME" ]; then
+        mix_kernel_cmd="$DOWNLOAD_PATH/$MIX_SCRIPT_NAME"
     else
         cd "$DOWNLOAD_PATH"
         get_mix_ramdisk_script
-        mix_kernel_cmd="$PWD/build_mixed_kernels_ramdisk"
+        mix_kernel_cmd="$PWD/$MIX_SCRIPT_NAME"
     fi
     if [ ! -f "$mix_kernel_cmd" ]; then
         print_error "$mix_kernel_cmd doesn't exist or is not executable" "$LINENO"
@@ -828,6 +828,7 @@ function get_device_info {
     adb_count=$(adb devices | grep "$SERIAL_NUMBER" | wc -l)
     FLASHSTATION_SERIAL_NUMBER=${SERIAL_NUMBER}
     if (( adb_count > 0 )); then
+        print_info "$SERIAL_NUMBER is connected through adb" "$LINENO"
         BOARD=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.board)
         ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
         PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.product)
@@ -835,26 +836,33 @@ function get_device_info {
         DEVICE_KERNEL_STRING=$(adb -s "$SERIAL_NUMBER" shell uname -r)
         extract_device_kernel_version "$DEVICE_KERNEL_STRING"
         SYSTEM_DLKM_INFO=$(adb -s "$SERIAL_NUMBER" shell getprop dev.mnt.blk.system_dlkm)
-        if [[ "$SERIAL_NUMBER" == localhost:* ]]; then
-            FLASHSTATION_SERIAL_NUMBER=$(adb shell getprop ro.serialno)
-        fi
         print_info "device info: BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE" "$LINENO"
         print_info "device info: SYSTEM_DLKM_INFO=$SYSTEM_DLKM_INFO, DEVICE_KERNEL_STRING=$DEVICE_KERNEL_STRING" "$LINENO"
+        if [ -z "$PRODUCT" ]; then
+            print_error "$SERIAL_NUMBER does not have a valid product value" "$LINENO"
+        fi
+        if [[ "$SERIAL_NUMBER" == localhost:* ]]; then
+            FLASHSTATION_SERIAL_NUMBER=$(adb -s "$SERIAL_NUMBER" shell getprop ro.serialno)
+        fi
         return 0
     fi
     fastboot_count=$(fastboot devices | grep "$SERIAL_NUMBER" | wc -l)
     if (( fastboot_count > 0 )); then
+        print_info "$SERIAL_NUMBER is connected through fastboot" "$LINENO"
         # try get product by fastboot command
         local output=$(fastboot -s "$SERIAL_NUMBER" getvar product 2>&1)
         PRODUCT=$(echo "$output" | grep -oP '^product:\s*\K.*' | cut -d' ' -f1)
         print_info "$SERIAL_NUMBER is in fastboot with device info: PRODUCT=$PRODUCT" "$LINENO"
+        if [ -z "$PRODUCT" ]; then
+            print_error "$SERIAL_NUMBER does not have a valid product value" "$LINENO"
+        fi
         if [[ "$SERIAL_NUMBER" == tcp:* ]]; then
-            local text=$(fastboot getvar serialno 2>&1)
+            local text=$(fastboot -s "$SERIAL_NUMBER" getvar serialno 2>&1)
             FLASHSTATION_SERIAL_NUMBER=$(echo "${text}" | grep -Po "serialno: [A-Z0-9]+" | cut -c 11-)
         fi
         return 0
     fi
-    print_error "$SERIAL_NUMBER is not connected with adb or fastboot"
+    print_error "$SERIAL_NUMBER is not connected with adb or fastboot" "$LINENO"
 }
 
 function find_tradefed_bin {
