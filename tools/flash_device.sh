@@ -531,7 +531,7 @@ function wait_for_device_in_adb() {
     local end_time=$((start_time + timeout_seconds))
 
     while (( $(date +%s) < end_time )); do
-        if [ -z "$ADB_SERIAL_NUMBER"]; then
+        if [ -z "$ADB_SERIAL_NUMBER" ]; then
             local _pontis_device=$(pontis devices | grep "$DEVICE_SERIAL_NUMBER")
             if [[ "$_pontis_device" == *ADB* ]]; then
                 print_info "Device $DEVICE_SERIAL_NUMBER is connected through pontis in adb" "$LINENO"
@@ -562,10 +562,14 @@ function flash_platform_build() {
         IFS='/' read -ra array <<< "$PLATFORM_BUILD"
         if [ ! -z "${array[3]}" ]; then
             local _build_type="${array[3]#*-}"
-            if [[ "$_build_type" == *userdebug ]]; then
-                flash_cmd+=" -t $_build_type"
-            elif [[ "$_build_type" == *user ]]; then
-                flash_cmd+=" -t $_build_type --force_debuggable"
+            if [[ "${array[2]}" == git_main* ]] && [[ "$_build_type" == user* ]]; then
+                print_info "Build variant is not provided, using trunk_staging build" "$LINENO"
+                _build_type="trunk_staging-$_build_type"
+            fi
+            flash_cmd+=" -t $_build_type"
+            if [[ "$_build_type" == *user ]] && [ ! -z "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then
+                print_info "Need to flash GKI after flashing platform build, hence enabling --force_debuggable in user build flashing" "$LINENO"
+                flash_cmd+=" --force_debuggable"
             fi
         fi
         if [ ! -z "${array[4]}" ] && [[ "${array[4]}" != latest* ]]; then
@@ -876,7 +880,7 @@ function find_fastboot_serial_number() {
 function get_device_info_from_adb {
     if [ -z "$DEVICE_SERIAL_NUMBER" ]; then
         DEVICE_SERIAL_NUMBER=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.serialno)
-        if [ -z "$DEVICE_SERIAL_NUMBERT" ]; then
+        if [ -z "$DEVICE_SERIAL_NUMBER" ]; then
             print_error "Can not get device serial adb -s $ADB_SERIAL_NUMBER" "$LINENO"
         fi
     fi
