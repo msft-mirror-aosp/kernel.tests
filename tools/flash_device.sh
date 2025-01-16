@@ -6,7 +6,7 @@
 # Constants
 FETCH_SCRIPT="fetch_artifact.sh"
 # Please see go/cl_flashstation
-FLASH_CLI=/google/bin/releases/android/flashstation/cl_flashstation
+CL_FLASH_CLI=/google/bin/releases/android/flashstation/cl_flashstation
 LOCAL_FLASH_CLI=/google/bin/releases/android/flashstation/local_flashstation
 MIX_SCRIPT_NAME="build_mixed_kernels_ramdisk"
 FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
@@ -385,10 +385,10 @@ function download_platform_build() {
 function download_gki_build() {
     print_info "Downloading $1 to $PWD" "$LINENO"
     local build_info="$1"
-    local file_patterns=("Image.lz4" "boot-lz4.img" "system_dlkm_staging_archive.tar.gz" "system_dlkm.flatten.ext4.img" "system_dlkm.flatten.erofs.img")
+    local _file_patterns=("Image.lz4" "boot-lz4.img" "system_dlkm_staging_archive.tar.gz" "system_dlkm.flatten.ext4.img" "system_dlkm.flatten.erofs.img")
 
-    echo "Downloading ${file_patterns[@]} from $build_info"
-    for pattern in "${file_patterns[@]}"; do
+    echo "Downloading ${_file_patterns[@]} from $build_info"
+    for pattern in "${_file_patterns[@]}"; do
         download_file_name="$build_info/$pattern"
         eval "$FETCH_SCRIPT $download_file_name"
         exit_code=$?
@@ -434,63 +434,37 @@ function download_vendor_kernel_build() {
 }
 
 function flash_gki_build() {
-    local boot_image_name
-    local system_dlkm_image_name
-
-    case "$PRODUCT" in
-        oriole | raven | bluejay)
-            boot_image_name="boot-lz4.img"
-            # no system_dlkm partition
-            ;;
-        eos | aurora | full_erd8835 | betty | kirkwood)
-            boot_image_name="boot.img"
-            if [[ "$PRODUCT" == "kirkwood" ]] && [[ ! "$KERNEL_VERSION" =~ ^android13 ]]; then  # Check if NOT android13
-                system_dlkm_image_name="system_dlkm.flatten.erofs.img"
-            # no system_dlkm for android12 & android13
-            elif [[ ! "$KERNEL_VERSION" =~ ^android12 ]] && [[ ! "$KERNEL_VERSION" =~ ^android13 ]]; then  # Check if NOT android12 AND NOT android13
-                system_dlkm_image_name="system_dlkm.flatten.erofs.img"
-            fi
-            ;;
-        k6985v1 | k6989v1)
-            boot_image_name="boot-gz.img"
-            # no system_dlkm for android12 & android13
-            if [[ ! "$KERNEL_VERSION" =~ ^android12 ]] && [[ ! "$KERNEL_VERSION" =~ ^android13 ]]; then  # Check if NOT android12 AND NOT android13
-                system_dlkm_image_name="system_dlkm.flatten.ext4.img"
-            fi
-            ;;
-        *)
-            boot_image_name="boot-lz4.img"
-            # no system_dlkm for android12 & android13
-            if [[ ! "$KERNEL_VERSION" =~ ^android12 ]] && [[ ! "$KERNEL_VERSION" =~ ^android13 ]]; then # Check if NOT android12 AND NOT android13
-                system_dlkm_image_name="system_dlkm.flatten.ext4.img"
-            fi
-            ;;
-    esac
-
-    if [ -z "$TRADEFED" ]; then
-        find_tradefed_bin
+    local _flash_cmd
+    if [[ "$KERNEL_BUILD" == ab://* ]]; then
+        _flash_cmd="$CL_FLASH_CLI --nointeractive -w -s $DEVICE_SERIAL_NUMBER "
+        IFS='/' read -ra array <<< "$KERNEL_BUILD"
+        if [ ! -z "${array[3]}" ]; then
+            _flash_cmd+=" -t ${array[3]}"
+        else
+            _flash_cmd+=" -t kernel_aarch64"
+        fi
+        if [ ! -z "${array[4]}" ] && [[ "${array[4]}" != latest* ]]; then
+            _flash_cmd+=" --bid ${array[4]}"
+        else
+            _flash_cmd+=" -l ${array[2]}"
+        fi
+    elif [ -d "$KERNEL_BUILD" ]; then
+        _flash_cmd="$LOCAL_FLASH_CLI --nointeractive -w --kernel_dist_dir=$KERNEL_BUILD -s $DEVICE_SERIAL_NUMBER"
+    else
+        print_error "Can not flash GKI kernel from $KERNEL_BUILD" "$LINENO"
     fi
-    if [ -d "$DOWNLOAD_PATH/tf_gki_kernel_dir" ]; then
-        rm -rf "$DOWNLOAD_PATH/tf_gki_kernel_dir"
-    fi
-    local kernel_dir="$DOWNLOAD_PATH/tf_gki_kernel_dir"
-    mkdir -p "$kernel_dir"
-    cd "$vendor_kernel_dir" || $(print_error "Fail to go to $gki_kernel_dir" "$LINENO")
-    cp "$KERNEL_BUILD/$boot_image_name" "$kernel_dir" || $(print_error "Fail to copy $KERNEL_BUILD/$boot_image_name" "$LINENO")
-    tf_cli="$TRADEFED \
-    run commandAndExit template/local_min --log-level-display VERBOSE \
-    --log-file-path=$LOG_DIR -s $SERIAL_NUMBER --disable-verity \
-    --template:map test=example/reboot --num-of-reboots 1 \
-    --template:map preparers=template/preparers/gki-device-flash-preparer \
-    --extra-file gki_boot.img=$kernel_dir/$boot_image_name"
 
-    # Check if system_dlkm_image_name is set before adding it to the command
-    if [ ! -z "$system_dlkm_image_name" ]; then
-        cp "$KERNEL_BUILD/$system_dlkm_image_name" "$kernel_dir" || $(print_error "Fail to copy $KERNEL_BUILD/$system_dlkm_image_name" "$LINENO")
-        tf_cli+=" --extra-file system_dlkm.img=$kernel_dir/$system_dlkm_image_name"
+    print_info "Flashing GKI kernel with: $_flash_cmd" "$LINENO"
+    eval "$_flash_cmd"
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo "Flash GKI kernel succeeded"
+        wait_for_device_in_adb
+        return
+    else
+        echo "Flash GKI kernel failed with exit code $exit_code"
+        exit 1
     fi
-    print_info "Run $tf_cli" "$LINENO"
-    eval "$tf_cli" # Quote the variable expansion
 }
 
 function flash_vendor_kernel_build() {
@@ -556,9 +530,33 @@ function wait_for_device_in_adb() {
     print_error "Timeout waiting for $ADB_SERIAL_NUMBER in adb devices" "$LINENO"
 }
 
+function find_flashstation_binary() {
+    if [ -x "${ANDROID_HOST_OUT}/bin/local_flashstation" ]; then
+        $LOCAL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/local_flashstation"
+    elif [ ! -x "$LOCAL_FLASH_CLI" ]; then
+        if ! which local_flashstation &> /dev/null; then
+            print_error "Can not find local_flashstation binary. \
+            Please see go/web-flashstation-command-line to download it" "$LINENO"
+        else
+            LOCAL_FLASH_CLI="local_flashstation"
+        fi
+    fi
+    if [ -x "${ANDROID_HOST_OUT}/bin/cl_flashstation" ]; then
+        $CL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/cl_flashstation"
+    elif [ ! -x "$CL_FLASH_CLI" ]; then
+        if ! which cl_flashstation &> /dev/null; then
+            print_error "Can not find cl_flashstation binary. \
+            Please see go/web-flashstation-command-line to download it" "$LINENO"
+        else
+            CL_FLASH_CLI="cl_flashstation"
+        fi
+    fi
+}
+
 function flash_platform_build() {
-    if [[ "$PLATFORM_BUILD" == ab://* ]] && [ -x "$FLASH_CLI" ]; then
-        local flash_cmd="$FLASH_CLI --nointeractive --force_flash_partitions --disable_verity -w -s $DEVICE_SERIAL_NUMBER "
+    local _flash_cmd
+    if [[ "$PLATFORM_BUILD" == ab://* ]]; then
+        _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions --disable_verity -w -s $DEVICE_SERIAL_NUMBER "
         IFS='/' read -ra array <<< "$PLATFORM_BUILD"
         if [ ! -z "${array[3]}" ]; then
             local _build_type="${array[3]#*-}"
@@ -566,36 +564,23 @@ function flash_platform_build() {
                 print_info "Build variant is not provided, using trunk_staging build" "$LINENO"
                 _build_type="trunk_staging-$_build_type"
             fi
-            flash_cmd+=" -t $_build_type"
+            _flash_cmd+=" -t $_build_type"
             if [[ "$_build_type" == *user ]] && [ ! -z "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then
                 print_info "Need to flash GKI after flashing platform build, hence enabling --force_debuggable in user build flashing" "$LINENO"
-                flash_cmd+=" --force_debuggable"
+                _flash_cmd+=" --force_debuggable"
             fi
         fi
         if [ ! -z "${array[4]}" ] && [[ "${array[4]}" != latest* ]]; then
             echo "Flash $SERIAL_NUMBER with platform build from branch $PLATFORM_BUILD..."
-            flash_cmd+=" --bid ${array[4]}"
+            _flash_cmd+=" --bid ${array[4]}"
         else
             echo "Flash $SERIAL_NUMBER with platform build $PLATFORM_BUILD..."
-            flash_cmd+=" -l ${array[2]}"
+            _flash_cmd+=" -l ${array[2]}"
         fi
-        print_info "Flash $SERIAL_NUMBER with flash station cli by: $flash_cmd" "$LINENO"
-        eval "$flash_cmd"
-        exit_code=$?
-        if [ $exit_code -eq 0 ]; then
-            echo "Flash platform succeeded"
-            wait_for_device_in_adb
-            return
-        else
-            echo "Flash platform build failed with exit code $exit_code"
-            exit 1
-        fi
-    fi
-
-    if [ ! -z "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
+    elif [ ! -z "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
     [ -x "$PLATFORM_REPO_ROOT/vendor/google/tools/flashall" ]; then
         cd "$PLATFORM_REPO_ROOT"
-        print_info "Flash with vendor/google/tools/flashall" "$LINENO"
+        print_info "Flashing device with vendor/google/tools/flashall" "$LINENO"
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != *"$PRODUCT" ]]; then
             if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                 set_platform_repo "aosp_$PRODUCT"
@@ -603,9 +588,8 @@ function flash_platform_build() {
                 set_platform_repo "$PRODUCT"
             fi
         fi
-        eval "vendor/google/tools/flashall  --nointeractive -w -s $DEVICE_SERIAL_NUMBER"
-        return
-    elif [ -x "${ANDROID_HOST_OUT}/bin/local_flashstation" ] || [ -x "$LOCAL_FLASH_CLI" ]; then
+        _flash_cmd="vendor/google/tools/flashall  --nointeractive -w -s $DEVICE_SERIAL_NUMBER"
+    else
         if [ -z "${TARGET_PRODUCT}" ]; then
             export TARGET_PRODUCT="$PRODUCT"
         fi
@@ -626,24 +610,18 @@ function flash_platform_build() {
         awk '! /baseband/' "$PLATFORM_BUILD"/android-info.txt > temp && mv temp "$PLATFORM_BUILD"/android-info.txt
         awk '! /bootloader/' "$PLATFORM_BUILD"/android-info.txt > temp && mv temp "$PLATFORM_BUILD"/android-info.txt
 
-        flash_cmd="$LOCAL_FLASH_CLI"
-
-        if [ ! -x "$LOCAL_FLASH_CLI" ]; then
-            flash_cmd="${ANDROID_HOST_OUT}/bin/local_flashstation"
-        fi
-
-        flash_cmd+=" --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $DEVICE_SERIAL_NUMBER"
-        print_info "Flash device with: $flash_cmd" "$LINENO"
-        eval "$flash_cmd"
-        exit_code=$?
-        if [ $exit_code -eq 0 ]; then
-            echo "Flash platform succeeded"
-            wait_for_device_in_adb
-            return
-        else
-            echo "Flash platform build failed with exit code $exit_code"
-            exit 1
-        fi
+        _flash_cmd="$LOCAL_FLASH_CLI --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $DEVICE_SERIAL_NUMBER"
+    fi
+    print_info "Flashing device with: $_flash_cmd" "$LINENO"
+    eval "$_flash_cmd"
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo "Flash platform succeeded"
+        wait_for_device_in_adb
+        return
+    else
+        echo "Flash platform build failed with exit code $exit_code"
+        exit 1
     fi
 
 }
@@ -713,6 +691,18 @@ function mixing_build() {
             fi
         done
         PLATFORM_BUILD="$PLATFORM_DIR"
+    fi
+
+    if [[ "$KERNEL_BUILD" == ab://* ]]; then
+        print_info "Download kernel build $KERNEL_BUILD" "$LINENO"
+        if [ -d "$DOWNLOAD_PATH/gki_dir" ]; then
+            rm -rf "$DOWNLOAD_PATH/gki_dir"
+        fi
+        GKI_DIR="$DOWNLOAD_PATH/gki_dir"
+        mkdir -p "$GKI_DIR"
+        cd "$GKI_DIR" || $(print_error "Fail to go to $GKI_DIR" "$LINENO")
+        download_gki_build $KERNEL_BUILD
+        KERNEL_BUILD="$GKI_DIR"
     fi
 
     local new_device_dir="$DOWNLOAD_PATH/new_device_dir"
@@ -1106,6 +1096,8 @@ elif [ ! -z "$SYSTEM_BUILD" ] && [ -d "$SYSTEM_BUILD" ]; then
     fi
 fi
 
+find_flashstation_binary
+
 if [[ "$KERNEL_BUILD" == ab://* ]]; then
     IFS='/' read -ra array <<< "$KERNEL_BUILD"
     KERNEL_VERSION=$(echo "${array[2]}" | sed "s/aosp_kernel-common-//g")
@@ -1118,15 +1110,6 @@ Can't flash $KERNEL_VERSION GKI directly. Please use a platform build with the $
 or use a vendor kernel build by flag -vkb, for example -vkb -vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
         print_error "Cannot flash $KERNEL_VERSION GKI to device $SERIAL_NUMBER directly." "$LINENO"
     fi
-    print_info "Download kernel build $KERNEL_BUILD" "$LINENO"
-    if [ -d "$DOWNLOAD_PATH/gki_dir" ]; then
-        rm -rf "$DOWNLOAD_PATH/gki_dir"
-    fi
-    GKI_DIR="$DOWNLOAD_PATH/gki_dir"
-    mkdir -p "$GKI_DIR"
-    cd "$GKI_DIR" || $(print_error "Fail to go to $GKI_DIR" "$LINENO")
-    download_gki_build $KERNEL_BUILD
-    KERNEL_BUILD="$GKI_DIR"
 elif [ ! -z "$KERNEL_BUILD" ] && [ -d "$KERNEL_BUILD" ]; then
     # Check if kernel repo is provided
     cd "$KERNEL_BUILD"
