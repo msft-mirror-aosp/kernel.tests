@@ -469,18 +469,51 @@ function format_ab_vendor_kernel_build_string() {
                 _branch="kernel-pixel-android15-gs-pixel-6.6"
             fi
             ;;
-        android13-5.15 )
-            if [[ "$PRODUCT" == "raven" ]] || [[ "$PRODUCT" == "oriole" ]]; then
-                _branch="kernel-android13-gs-pixel-5.15-gs101"
+        android14-6.1 )
+            _branch="kernel-android14-gs-pixel-6.1"
+            ;;
+        android14-5.15 )
+            if [[ "$PRODUCT" == "husky" ]] || [[ "$PRODUCT" == "shiba" ]]; then
+                _branch="kernel-android14-gs-pixel-5.15"
                 if [ -z "$_build_target" ]; then
-                    _build_target="kkernel_raviole_kleaf"
+                    _build_target="shusky"
+                fi
+            elif [[ "$PRODUCT" == "akita" ]]; then
+                _branch="kernel-android14-gs-pixel-5.15"
+                if [ -z "$_build_target" ]; then
+                    _build_target="akita"
                 fi
             else
                 print_error "There is no vendor kernel branch $_branch for $PRODUCT device" "$LINENO"
             fi
             ;;
-        android14-6.1 | android14-5.15 | android13-5.10 | android12-5.10 )
-            _branch="kernel-${_branch/-/-gs-pixel-}"
+        android13-5.15 )
+            if [[ "$PRODUCT" == "raven" ]] || [[ "$PRODUCT" == "oriole" ]]; then
+                _branch="kernel-android13-gs-pixel-5.15-gs101"
+                if [ -z "$_build_target" ]; then
+                    _build_target="kernel_raviole_kleaf"
+                fi
+            else
+                print_error "There is no vendor kernel branch $_branch for $PRODUCT device" "$LINENO"
+            fi
+            ;;
+        android13-5.10 )
+            if [[ "$PRODUCT" == "raven" ]] || [[ "$PRODUCT" == "oriole" ]]; then
+                _branch="kernel-android13-gs-pixel-5.10"
+                if [ -z "$_build_target" ]; then
+                    _build_target="slider_gki"
+                fi
+            elif [[ "$PRODUCT" == "felix" ]] || [[ "$PRODUCT" == "lynx" ]] || [[ "$PRODUCT" == "tangorpro" ]]; then
+                _branch="kernel-android13-gs-pixel-5.10"
+                if [ -z "$_build_target" ]; then
+                    _build_target="$PRODUCT"
+                fi
+            else
+                print_error "There is no vendor kernel branch $_branch for $PRODUCT device" "$LINENO"
+            fi
+            ;;
+        android12-5.10 )
+            print_error "There is no vendor kernel branch $_branch for $PRODUCT device" "$LINENO"
             ;;
     esac
     if [ -z "$_build_target" ]; then
@@ -497,14 +530,8 @@ function format_ab_vendor_kernel_build_string() {
             raven | oriole )
                 _build_target="raviole"
                 ;;
-            tangorpro )
-                _build_target="tangorpro"
-                ;;
-            lynx )
-                _build_target="lynx"
-                ;;
-            comet )
-                _build_target="comet"
+            * )
+                _build_target="$PRODUCT"
                 ;;
         esac
     fi
@@ -519,7 +546,9 @@ function download_platform_build() {
     print_info "Downloading $PLATFORM_BUILD to $PWD" "$LINENO"
     local _build_info="$PLATFORM_BUILD"
     local _file_patterns=("*$PRODUCT-img-*.zip" "bootloader.img" "radio.img" "misc_info.txt" "otatools.zip")
-    if [[ "$1" == *user/* ]]; then
+    if [[ "$1" == *git_sc* ]]; then
+        _file_patterns+=("ramdisk.img")
+    elif [[ "$1" == *user/* ]]; then
         _file_patterns+=("vendor_ramdisk-debug.img")
     else
         _file_patterns+=("vendor_ramdisk.img")
@@ -544,8 +573,15 @@ function download_platform_build() {
 function download_gki_build() {
     print_info "Downloading $1 to $PWD" "$LINENO"
     local _build_info="$1"
-    local _file_patterns=("Image.lz4" "boot-lz4.img" "system_dlkm_staging_archive.tar.gz" "system_dlkm.flatten.ext4.img" "system_dlkm.flatten.erofs.img")
+    local _file_patterns=("Image.lz4" "boot-lz4.img"  )
 
+    if [[ "$PRODUCT" == "oriole" ]] || [[ "$PRODUCT" == "raven" ]]; then
+        if [[ "$_build_info" != *android13* ]]; then
+            _file_patterns+=("system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers")
+        fi
+    else
+        _file_patterns+=("system_dlkm.img")
+    fi
     for _pattern in "${_file_patterns[@]}"; do
         print_info "Downloading $_build_info/$_pattern" "$LINENO"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
@@ -562,19 +598,40 @@ function download_gki_build() {
 function download_vendor_kernel_build() {
     print_info "Downloading $1 to $PWD" "$LINENO"
     local _build_info="$1"
-    local _file_patterns=("vendor_dlkm_staging_archive.tar.gz" "Image.lz4" "dtbo.img" \
-    "initramfs.img" "vendor_dlkm.img" "boot.img" "vendor_dlkm.props" "vendor_dlkm_file_contexts"\
-    "vendor_dlkm.modules.blocklist" "vendor_dlkm.modules.load" )
+    local _file_patterns=("Image.lz4" "dtbo.img" "initramfs.img")
 
-    if [[ "$VENDOR_KERNEL_VERSION" == *"6.6" ]]; then
+    if [[ "$VENDOR_KERNEL_VERSION" == *6.6 ]]; then
         _file_patterns+=("*vendor_dev_nodes_fragment.img")
     fi
 
     case "$PRODUCT" in
         oriole | raven | bluejay)
-            _file_patterns+=( "gs101-a0.dtb" "gs101-b0.dtb")
+            _file_patterns+=( "gs101-a0.dtb" "gs101-b0.dtb" )
+            if [[ "$_build_info" == *android13* ]] || [ -z "$KERNEL_BUILD" ]; then
+                _file_patterns+=("vendor_dlkm.img")
+            else
+                _file_patterns+=("vendor_dlkm_staging_archive.tar.gz" "vendor_dlkm.props" "vendor_dlkm_file_contexts" \
+                "kernel_aarch64_Module.symvers" "abi_gki_aarch64_pixel")
+                if [[ "$_build_info" == *android15* ]] && [[ "$_build_info" == *6.6* ]]; then
+                    _file_patterns+=("vendor_dev_nodes_fragment.img" 'vendor-bootconfig.img')
+                elif [[ "$_build_info" == *pixel-mainline* ]]; then
+                    _file_patterns+=("vendor-bootconfig.img")
+                fi
+            fi
+            ;;
+        felix | lynx | cheetah | tangorpro)
+            _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "gs201-a0.dtb" "gs201-a0.dtb" )
+            ;;
+        shiba | husky | akita)
+            _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "zuma-a0-foplp.dtb" "zuma-a0-ipop.dtb" "zuma-b0-foplp.dtb" "zuma-b0-ipop.dtb" )
+            ;;
+        caiman | komodo | tokay | comet)
+            _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "zuma-a0-foplp.dtb" "zuma-a0-ipop.dtb" "zuma-b0-foplp.dtb" "zuma-b0-ipop.dtb" \
+            "zumapro-a0-foplp.dtb" "zumapro-a0-ipop.dtb" "zumapro-a1-foplp.dtb" "zumapro-a1-ipop.dtb" )
             ;;
         *)
+            _file_pattern+=("vendor_dlkm.img" "system_dlkm.img" "*-a0-foplp.dtb" "*-a0-ipop.dtb" "*-a1-foplp.dtb" \
+            "*-a1-ipop.dtb" "*-a0.dtb" "*-b0.dtb")
             ;;
     esac
 
@@ -584,8 +641,14 @@ function download_vendor_kernel_build() {
         exit_code=$?
         if [ $exit_code -eq 0 ]; then
             print_info "Downloading $_build_info/$_pattern succeeded" "$LINENO"
+            if [[ "$_pattern" == "vendor_dev_nodes_fragment.img" ]]; then
+                cp vendor_dev_nodes_fragment.img vendor_ramdisk_fragment_extra.img
+            fi
+            if [[ "$_pattern" == "abi_gki_aarch64_pixel" ]]; then
+                cp abi_gki_aarch64_pixel extracted_symbols
+            fi
         else
-            print_error "Downloading $_build_info/$_pattern failed" "$LINENO"
+            print_warn "Downloading $_build_info/$_pattern failed" "$LINENO"
         fi
     done
     echo ""
@@ -731,7 +794,7 @@ function wait_for_device_in_adb() {
     local end_time=$((start_time + timeout_seconds))
 
     while (( $(date +%s) < end_time )); do
-        if [ -z "$ADB_SERIAL_NUMBER" ]; then
+        if [ -z "$ADB_SERIAL_NUMBER" ] && [ -x pontis ]; then
             local _pontis_device=$(pontis devices | grep "$DEVICE_SERIAL_NUMBER")
             if [[ "$_pontis_device" == *ADB* ]]; then
                 print_info "Device $DEVICE_SERIAL_NUMBER is connected through pontis in adb" "$LINENO"
@@ -1119,7 +1182,7 @@ function get_device_info() {
         print_info "$SERIAL_NUMBER is connected through adb" "$LINENO"
         ADB_SERIAL_NUMBER="$SERIAL_NUMBER"
         get_device_info_from_adb
-        if [[ "$SERIAL_NUMBER" == "$DEVICE_SERIAL_NUMBER" ]]; then
+        if [[ "$ADB_SERIAL_NUMBER" == "$DEVICE_SERIAL_NUMBER" ]]; then
             FASTBOOT_SERIAL_NUMBER="$SERIAL_NUMBER"
         fi
         return 0
@@ -1130,22 +1193,27 @@ function get_device_info() {
         print_info "$SERIAL_NUMBER is connected through fastboot" "$LINENO"
         FASTBOOT_SERIAL_NUMBER="$SERIAL_NUMBER"
         get_device_info_from_fastboot
+        if [[ "$FASTBOOT_SERIAL_NUMBER" == "$DEVICE_SERIAL_NUMBER" ]]; then
+            ADB_SERIAL_NUMBER="$SERIAL_NUMBER"
+        fi
         return 0
     fi
 
-    local _pontis_device=$(pontis devices | grep "$SERIAL_NUMBER")
-    if [[ "$_pontis_device" == *Fastboot* ]]; then
-        DEVICE_SERIAL_NUMBER="$SERIAL_NUMBER"
-        print_info "Device $SERIAL_NUMBER is connected through pontis in fastboot" "$LINENO"
-        find_fastboot_serial_number
-        get_device_info_from_fastboot
-        return 0
-    elif [[ "$_pontis_device" == *ADB* ]]; then
-        DEVICE_SERIAL_NUMBER="$SERIAL_NUMBER"
-        print_info "Device $SERIAL_NUMBER is connected through pontis in adb" "$LINENO"
-        find_adb_serial_number
-        get_device_info_from_adb
-        return 0
+    if [ -x pontis ]; then
+        local _pontis_device=$(pontis devices | grep "$SERIAL_NUMBER")
+        if [[ "$_pontis_device" == *Fastboot* ]]; then
+            DEVICE_SERIAL_NUMBER="$SERIAL_NUMBER"
+            print_info "Device $SERIAL_NUMBER is connected through pontis in fastboot" "$LINENO"
+            find_fastboot_serial_number
+            get_device_info_from_fastboot
+            return 0
+        elif [[ "$_pontis_device" == *ADB* ]]; then
+            DEVICE_SERIAL_NUMBER="$SERIAL_NUMBER"
+            print_info "Device $SERIAL_NUMBER is connected through pontis in adb" "$LINENO"
+            find_adb_serial_number
+            get_device_info_from_adb
+            return 0
+        fi
     fi
 
     print_error "$SERIAL_NUMBER is not connected with adb or fastboot" "$LINENO"
