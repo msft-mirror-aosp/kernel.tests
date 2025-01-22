@@ -38,36 +38,38 @@ $ kernel/tests/tools/run_test_only.sh --gcov \
 To view available options, run the script with `--help`.
 
 ### `tradefed.sh`
-'tradefed.sh' can be used to run a number of different types of tests. Adding the appropriate coverage flags
-to the tradefed call will trigger tradefed to take care of mounting debugfs, reseting the gcov counts prior
-to test run, and the collection of gcov data files from debugfs after test completion.
-
-These coverage arguments are:
+Adding the appropriate coverage flags to the tradefed call will trigger it to
+take care of mounting debugfs, reseting the gcov counts prior to test run, and
+collecting gcov data files from debugfs after test completion. These coverage
+arguments are:
 ```
 --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE
 ```
 
-The following is a full example call running just the `kselftest_net_socket` test in the
-selftests test suite that exists under the 'bazel-bin/common/testcases' directory. The artifact
-output has been redirected to 'tf-logs' for easier reference needed in the next step.
+The following is a full example call running just the `kselftest_net_socket`
+test in the selftests test suite that exists under the `out/tests/testcases`
+directory. The artifact output has been redirected to `tf-logs` for easier
+reference needed in the next step.
 ```
 $ prebuilts/tradefed/filegroups/tradefed/tradefed.sh run commandAndExit \
     template/local_min --template:map test=suite/test_mapping_suite     \
-    --include-filter 'selftests kselftest_net_socket' --tests-dir=bazel-bin/common/testcases/  \
+    --include-filter 'selftests kselftest_net_socket'                   \
+    --tests-dir=out/tests/testcases                                     \
     --primary-abi-only --log-file-path tf-logs                          \
     --coverage --coverage-toolchain GCOV_KERNEL                         \
     --auto-collect GCOV_KERNEL_COVERAGE
 ```
 
 ## 3. Create an lcov tracefile out of the gcov tar artifact from test run
-The previously mentioned tradefed run will produce a tar file artifact in the
-tradefed log folder with a name similar to <test>_kernel_coverage_*.tar.gz.
-This tar file is an archive of all the gcov data files collected into debugfs/
-from the profiled device. In order to make it easier to work with this data,
-it needs to be converted to a single lcov tracefile.
+The previously mentioned `run_test_only.sh` or `tradefed.sh` run will produce
+a tar file artifact in the log folder with a name like
+`<test>_kernel_coverage_*.tar.gz`. This tar file is an archive of all the gcov
+data files collected into debugfs from the profiled device. In order to make
+it easier to work with this data, it needs to be converted to a single lcov
+tracefile.
 
-The script 'create-tracefile.py' facilitates this generation by handling the
-required unpacking, file path corrections and ultimate 'lcov' call.
+The script `create-tracefile.py` facilitates this generation by handling the
+required unpacking, file path corrections and ultimate `lcov` call.
 `run_test_only.sh` calls `create-tracefile.py` automatically if it can locate
 the kernel source. Otherwise, it shows the arguments for you to run
 `create-tracefile.py` in the kernel source tree.
@@ -80,9 +82,9 @@ as included, then all source file data is used.)
 $ kernel/tests/tools/create-tracefile.py -t tf-logs --include net/socket.c
 ```
 
-## 4. Visualizing Results
-With the created tracefile there a number of different ways to view coverage data from it.
-Check out 'man lcov' for more options.
+## 4. Visualizing results
+With the created tracefile, there are a number of different ways to view
+coverage data from it. Check out `man lcov` for more options.
 ### Summary
 ```
 $ lcov --summary --rc lcov_branch_coverage=1 cov.info
@@ -109,17 +111,16 @@ virt/lib/irqbypass.c                           | 0.0%   137| 0.0%   6| 0.0%   88
                                          Total:| 6.0% 1369k| 9.6%  0M| 3.7% 764k
 ```
 ### HTML
-The `lcov` tool `genhtml` is used to generate html. To create html with the default settings:
+The `lcov` tool `genhtml` is used to generate html. To create html with the
+default settings:
 
 ```
 $ genhtml --branch-coverage -o html cov.info
 ```
 
-The page can be viewed at `html\index.html`.
+The page can be viewed at `html/index.html`.
 
 Options of interest:
  * `--frame`: Creates a left hand macro view in a source file view.
- * `--missed`: Helpful if you want to sort by what source is missing the most as opposed to the default coverage percentages.
-
-
-
+ * `--missed`: Helpful if you want to sort by what source is missing the most
+   as opposed to the default coverage percentages.
