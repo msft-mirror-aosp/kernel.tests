@@ -75,7 +75,7 @@ function print_help() {
     echo "Available options:"
     echo "  -s <serial_number>, --serial=<serial_number>"
     echo "                        The device serial number to run tests with."
-    echo "  -td <test_dir>, --test-dir=<test_dir>"
+    echo "  -td <test_dir>, --test-dir=<test_dir> or -tb <test_build>, --test-build=<test_build>"
     echo "                        The test artifact file name or directory path."
     echo "                        Can be a local file or directory or a remote file"
     echo "                        as ab://<branch>/<build_target>/<build_id>/<file_name>."
@@ -175,7 +175,7 @@ while test $# -gt 0; do
             LOG_DIR=$(echo $1 | sed -e "s/^[^=]*=//g")
             shift
             ;;
-        -td)
+        -td | -tb )
             shift
             if test $# -gt 0; then
                 TEST_DIR=$1
@@ -184,7 +184,7 @@ while test $# -gt 0; do
             fi
             shift
             ;;
-        --test-dir*)
+        --test-dir* | --test-build*)
             TEST_DIR=$(echo $1 | sed -e "s/^[^=]*=//g")
             shift
             ;;
@@ -277,6 +277,7 @@ if [ -z "$TEST_DIR" ]; then
         # In the platform repo
         print_info "Run test with atest" "$LINENO"
         run_test_in_platform_repo
+        return
     elif [[ "$BOARD" == "cutf"* ]] && [[ "$REPO_LIST_OUT" == *"common-modules/virtual-device"* ]]; then
         # In the android kernel repo
         if [[ "$ABI" == "arm64"* ]]; then
@@ -302,17 +303,15 @@ for i in "$TEST_NAMES"; do
 done
 
 if [[ "$TEST_DIR" == ab://* ]]; then
-    # Download test_file if it's remote file ab://
-    if [ -d "$DOWNLOAD_PATH" ]; then
-        rm -rf "$DOWNLOAD_PATH"
+    if [ ! -d "$DOWNLOAD_PATH" ]; then
+        mkdir -p "$DOWNLOAD_PATH" || $(print_error "Fail to create directory $DOWNLOAD_PATH" "$LINENO")
     fi
-    mkdir -p "$DOWNLOAD_PATH" || $(print_error "Fail to create directory $DOWNLOAD_PATH" "$LINENO")
     cd $DOWNLOAD_PATH || $(print_error "Fail to go to $DOWNLOAD_PATH" "$LINENO")
     file_name=${TEST_DIR##*/}
     eval "$FETCH_SCRIPT $TEST_DIR"
     exit_code=$?
     if [ $exit_code -eq 0 ]; then
-        print_info "$TEST_DIR is downloaded succeeded" "$LINENO"
+        print_info "$TEST_DIR is downloaded to $DOWNLOAD_PATH successfully" "$LINENO"
     else
         print_error "Failed to download $TEST_DIR" "$LINENO"
     fi
@@ -340,18 +339,16 @@ elif [ ! -z "$TEST_DIR" ]; then
         print_info "Test_dir $TEST_DIR is from Android platform repo. Run test with atest" "$LINENO"
         go_to_repo_root "$PWD"
         run_test_in_platform_repo
+        return
     fi
 fi
 
 cd "$REPO_ROOT_PATH"
-if [[ "$TEST_DIR" == *".zip"* ]]; then
+if [[ "$TEST_DIR" == *.zip ]]; then
     filename=${TEST_DIR##*/}
-    new_test_dir="$REPO_ROOT_PATH/out/tests"
-    if [ ! -d "$new_test_dir" ]; then
-        mkdir -p "$new_test_dir" || $(print_error "Failed to make directory $new_test_dir" "$LINENO")
-    else
-        folder_name="${filenamef%.*}"
-        rm -r "$new_test_dir/$folder_name"
+    new_test_dir="${TEST_DIR%.*}"
+    if [ -d "$new_test_dir" ]; then
+        rm -r "$new_test_dir"
     fi
     unzip -oq "$TEST_DIR" -d "$new_test_dir" || $(print_error "Failed to unzip $TEST_DIR to $new_test_dir" "$LINENO")
     case $filename in
@@ -367,14 +364,14 @@ fi
 print_info "Will run tests with test artifacts in $TEST_DIR" "$LINENO"
 
 if [ -f "${TEST_DIR}/tools/vts-tradefed" ]; then
-    TRADEFED="${TEST_DIR}/tools/vts-tradefed"
+    TRADEFED="JAVA_HOME=${TEST_DIR}/jdk PATH=${TEST_DIR}/jdk/bin:$PATH ${TEST_DIR}/tools/vts-tradefed"
     print_info "Will run tests with vts-tradefed from $TRADEFED" "$LINENO"
     print_info "Many VTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
     tf_cli="$TRADEFED run commandAndExit \
     vts --skip-device-info --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "${TEST_DIR}/tools/cts-tradefed" ]; then
-    TRADEFED="${TEST_DIR}/tools/cts-tradefed"
+    TRADEFED="JAVA_HOME=${TEST_DIR}/jdk PATH=${TEST_DIR}/jdk/bin:$PATH ${TEST_DIR}/tools/vts-tradefed"
     print_info "Will run tests with cts-tradefed from $TRADEFED" "$LINENO"
     print_info "Many CTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
     tf_cli="$TRADEFED run commandAndExit cts --skip-device-info \
@@ -414,7 +411,7 @@ if $GCOV; then
 fi
 
 # Evaluate the TradeFed command with extra arguments
-print_info "Run test with: $tf_cli" "${TEST_ARGS[*]}" "$LINENO"
+print_info "Run test with: $tf_cli ${TEST_ARGS[*]}" "$LINENO"
 eval "$tf_cli" "${TEST_ARGS[*]}"
 exit_code=$?
 
