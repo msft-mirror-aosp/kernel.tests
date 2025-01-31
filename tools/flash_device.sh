@@ -573,7 +573,7 @@ function download_platform_build() {
 function download_gki_build() {
     print_info "Downloading $1 to $PWD" "$LINENO"
     local _build_info="$1"
-    local _file_patterns=("Image.lz4" "boot-lz4.img"  )
+    local _file_patterns=( "boot-lz4.img"  )
 
     if [[ "$PRODUCT" == "oriole" ]] || [[ "$PRODUCT" == "raven" ]]; then
         if [[ "$_build_info" != *android13* ]]; then
@@ -590,6 +590,9 @@ function download_gki_build() {
             print_info "Downloading $_build_info/$_pattern succeeded" "$LINENO"
         else
             print_error "Downloading $_build_info/$_pattern failed" "$LINENO"
+        fi
+        if [[ "$_pattern" == "boot-lz4.img" ]]; then
+            cp boot-lz4.img boot.img
         fi
     done
     echo ""
