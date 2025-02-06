@@ -1,62 +1,91 @@
-HOW TO COLLECT KERNEL CODE COVERAGE FROM A TRADEFED TEST RUN
-============================================================
+HOW TO COLLECT KERNEL CODE COVERAGE FROM A TEST RUN
+===================================================
 
 
-## Build and use a kernel with GCOV profile enabled
-Build your kernel with the [`--gcov`](https://android.googlesource.com/kernel/build/+/refs/heads/main/kleaf/docs/gcov.md) option to enable
-GCOV profiling from the kernel. This will also trigger the build to save the required *.gcno files needed to viewing the collected count data.
-
-For example to build a Cuttlefish (CF) kernel with GCOV profiling enabled run:
+## 1. Build and use a kernel with GCOV profile enabled
+### Build and install with scripts
+Build and install a GCOV kernel on a Cuttlefish or physical device with one of
+the following commands:
 ```
-$ bazel run --gcov //common-modules/virtual-device:virtual_device_x86_64_dist
+$ kernel/tests/tools/launch_cvd.sh --gcov
+```
+```
+$ kernel/tests/tools/flash_device.sh --gcov
+```
+To view available options, run the scripts with `--help`.
+
+### Build on your own
+Build a kernel with
+[`--gcov`](https://android.googlesource.com/kernel/build/+/refs/heads/main/kleaf/docs/gcov.md)
+option. This will also trigger the build to save the required *.gcno files
+needed to viewing the collected count data.
+
+For example, build a Cuttlefish kernel with GCOV:
+```
+$ tools/bazel run --gcov //common-modules/virtual-device:virtual_device_x86_64_dist
 ```
 
-## Run your test(s) using tradefed.sh with kernel coverage collection enabled
-'tradefed.sh' can be used to run a number of different types of tests. Adding the appropriate coverage flags
-to the tradefed call will trigger tradefed to take care of mounting debugfs, reseting the gcov counts prior
-to test run, and the collection of gcov data files from debugfs after test completion.
+## 2. Run tests with kernel coverage collection enabled
+### `run_test_only.sh`
+Collect test coverage data with `run_test_only.sh --gcov` and the required
+options. For example,
 
-These coverage arguments are:
+```
+$ kernel/tests/tools/run_test_only.sh --gcov \
+    --serial 0.0.0.0:6520 --test='selftests kselftest_net_socket'
+```
+
+To view available options, run the script with `--help`.
+
+### `tradefed.sh`
+Adding the appropriate coverage flags to the tradefed call will trigger it to
+take care of mounting debugfs, reseting the gcov counts prior to test run, and
+collecting gcov data files from debugfs after test completion. These coverage
+arguments are:
 ```
 --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE
 ```
 
-The following is a full example call running just the `kselftest_net_socket` test in the
-selftests test suite that exists under the 'bazel-bin/common/testcases' directory. The artifact
-output has been redirected to 'tf-logs' for easier reference needed in the next step.
+The following is a full example call running just the `kselftest_net_socket`
+test in the selftests test suite that exists under the `out/tests/testcases`
+directory. The artifact output has been redirected to `tf-logs` for easier
+reference needed in the next step.
 ```
 $ prebuilts/tradefed/filegroups/tradefed/tradefed.sh run commandAndExit \
     template/local_min --template:map test=suite/test_mapping_suite     \
-    --include-filter 'selftests kselftest_net_socket' --tests-dir=bazel-bin/common/testcases/  \
+    --include-filter 'selftests kselftest_net_socket'                   \
+    --tests-dir=out/tests/testcases                                     \
     --primary-abi-only --log-file-path tf-logs                          \
     --coverage --coverage-toolchain GCOV_KERNEL                         \
     --auto-collect GCOV_KERNEL_COVERAGE
 ```
 
-## Create an lcov tracefile out of the gcov tar artifact from test run
-The previously mentioned tradefed run will produce a tar file artifact in the
-tradefed log folder with a name similar to <test>_kernel_coverage_*.tar.gz.
-This tar file is an archive of all the gcov data files collected into debugfs/
-from the profiled device. In order to make it easier to work with this data,
-it needs to be converted to a single lcov tracefile.
+## 3. Create an lcov tracefile out of the gcov tar artifact from test run
+The previously mentioned `run_test_only.sh` or `tradefed.sh` run will produce
+a tar file artifact in the log folder with a name like
+`<test>_kernel_coverage_*.tar.gz`. This tar file is an archive of all the gcov
+data files collected into debugfs from the profiled device. In order to make
+it easier to work with this data, it needs to be converted to a single lcov
+tracefile.
 
-The script 'create-tracefile.py' facilitates this generation by handling the
-required unpacking, file path corrections and ultimate 'lcov' call.
+The script `create-tracefile.py` facilitates this generation by handling the
+required unpacking, file path corrections and ultimate `lcov` call.
+`run_test_only.sh` calls `create-tracefile.py` automatically if it can locate
+the kernel source. Otherwise, it shows the arguments for you to run
+`create-tracefile.py` in the kernel source tree.
 
-An example where we generate a tracefile only including results from net/socket.c.
-(If no source files are specified as included, then all source file data is used):
+If you use `tradefed.sh`, you need to issue the `create-tracefile.py` command.
+The following is an example where we generate a tracefile named `cov.info`
+only including results from `net/socket.c`. (If no source files are specified
+as included, then all source file data is used.)
 ```
-$ ./kernel/tests/tools/create-tracefile.py -t tf-logs/ --include net/socket.c
+$ kernel/tests/tools/create-tracefile.py -t tf-logs --include net/socket.c
 ```
 
-This will create a local tracefile named 'cov.info'.
-
-
-## Visualizing Results
-With the created tracefile there a number of different ways to view coverage data from it.
-Check out 'man lcov' for more options.
-### 1. Text Options
-#### 1.1 Summary
+## 4. Visualizing results
+With the created tracefile, there are a number of different ways to view
+coverage data from it. Check out `man lcov` for more options.
+### Summary
 ```
 $ lcov --summary --rc lcov_branch_coverage=1 cov.info
 Reading tracefile cov.info_fix
@@ -65,7 +94,7 @@ Summary coverage rate:
   functions..: 9.6% (10285 of 107304 functions)
   branches...: 3.7% (28639 of 765538 branches)
 ```
-#### 1.2 List
+### List
 ```
 $ lcov --list --rc lcov_branch_coverage=1 cov.info
 Reading tracefile cov.info_fix
@@ -81,18 +110,17 @@ virt/lib/irqbypass.c                           | 0.0%   137| 0.0%   6| 0.0%   88
 ================================================================================
                                          Total:| 6.0% 1369k| 9.6%  0M| 3.7% 764k
 ```
-### 2. HTML
-The `lcov` tool `genhtml` is used to generate html. To create html with the default settings:
+### HTML
+The `lcov` tool `genhtml` is used to generate html. To create html with the
+default settings:
 
 ```
 $ genhtml --branch-coverage -o html cov.info
 ```
 
-The page can be viewed at `html\index.html`.
+The page can be viewed at `html/index.html`.
 
 Options of interest:
  * `--frame`: Creates a left hand macro view in a source file view.
- * `--missed`: Helpful if you want to sort by what source is missing the most as opposed to the default coverage percentages.
-
-
-
+ * `--missed`: Helpful if you want to sort by what source is missing the most
+   as opposed to the default coverage percentages.
