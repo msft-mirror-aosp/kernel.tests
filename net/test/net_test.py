@@ -24,6 +24,7 @@ import struct
 import sys
 import unittest
 
+from scapy.arch import linux
 from scapy import all as scapy
 
 import binascii
@@ -270,7 +271,7 @@ def CreateSocketPair(family, socktype, addr):
 def GetInterfaceIndex(ifname):
   with UDPSocket(AF_INET) as s:
     ifr = struct.pack("%dsi" % IFNAMSIZ, ifname.encode(), 0)
-    ifr = fcntl.ioctl(s, scapy.SIOCGIFINDEX, ifr)
+    ifr = fcntl.ioctl(s, linux.SIOCGIFINDEX, ifr)
     return struct.unpack("%dsi" % IFNAMSIZ, ifr)[1]
 
 
@@ -289,14 +290,14 @@ def SetInterfaceState(ifname, up):
   ifname_bytes = ifname.encode()
   with UDPSocket(AF_INET) as s:
     ifr = struct.pack("%dsH" % IFNAMSIZ, ifname_bytes, 0)
-    ifr = fcntl.ioctl(s, scapy.SIOCGIFFLAGS, ifr)
+    ifr = fcntl.ioctl(s, linux.SIOCGIFFLAGS, ifr)
     _, flags = struct.unpack("%dsH" % IFNAMSIZ, ifr)
     if up:
-      flags |= scapy.IFF_UP
+      flags |= linux.IFF_UP
     else:
-      flags &= ~scapy.IFF_UP
+      flags &= ~linux.IFF_UP
     ifr = struct.pack("%dsH" % IFNAMSIZ, ifname_bytes, flags)
-    ifr = fcntl.ioctl(s, scapy.SIOCSIFFLAGS, ifr)
+    ifr = fcntl.ioctl(s, linux.SIOCSIFFLAGS, ifr)
 
 
 def SetInterfaceUp(ifname):
