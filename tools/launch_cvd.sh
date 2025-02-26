@@ -172,6 +172,27 @@ function print_error() {
     exit 1
 }
 
+function set_kernel_build_path () {
+    local cf_kernel_repo_root=$1
+    local cf_kernel_version=$2
+
+    if [ "$cf_kernel_version" == "android-mainline" ]; then
+        echo "$cf_kernel_repo_root/out/virtual_device_x86_64/dist"
+        return
+    fi
+
+    local android_version
+    android_version=$(grep -oP "^android\K\d+" <(echo "$cf_kernel_version"))
+    if [ -z "$android_version" ]; then
+        print_error "Unable to parse the android version when setting up the kernel build environment"
+    elif [ "$android_version" -ge "14" ]; then
+        echo "$cf_kernel_repo_root/out/virtual_device_x86_64/dist"
+    else
+        # support android13, android12
+        echo "$cf_kernel_repo_root/out/$cf_kernel_version/dist"
+    fi
+}
+
 function set_platform_repo () {
     print_warn "Build target product '${TARGET_PRODUCT}' does not match expected '$1'"
     local lunch_cli="source build/envsetup.sh && lunch $1"
@@ -205,7 +226,8 @@ function find_repo () {
                 print_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, \
                 CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
                 if [ -z "$KERNEL_BUILD" ]; then
-                    KERNEL_BUILD="$CF_KERNEL_REPO_ROOT/out/virtual_device_x86_64/dist"
+                    KERNEL_BUILD=$(set_kernel_build_path "$CF_KERNEL_REPO_ROOT" "$CF_KERNEL_VERSION")
+                    print_info "KERNEL_BUILD=$KERNEL_BUILD"
                 fi
             fi
             ;;
@@ -290,17 +312,17 @@ if [ "$SKIP_BUILD" = false ] && [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != 
     # Check if kernel repo is provided, if yes rebuild
     cd "$KERNEL_BUILD" || print_error "Failed to cd to $KERNEL_BUILD"
     KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
-    if [[ "$KERNEL_REPO_LIST_OUT" != "error"* ]]; then
-        go_to_repo_root "$PWD"
-        if [ ! -f "common-modules/virtual-device/BUILD.bazel" ]; then
-            # TODO(b/365590299): Add build support to android12 and earlier kernels
-            print_error "bazel build common-modules/virtual-device is not supported in this kernel tree"
-        fi
+    if [[ "$KERNEL_REPO_LIST_OUT" == "error"* ]]; then
+        print_error "Current path $PWD is not in an Android repo."
+    fi
 
+    go_to_repo_root "$PWD"
+
+    # Build a new kernel
+    build_cmd=""
+    if [ -f "common-modules/virtual-device/BUILD.bazel" ]; then
         # KERNEL_VERSION=$(grep -e "common-modules/virtual-device" .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*') # unused
-
-        # Build a new kernel
-        build_cmd="tools/bazel run --config=fast"
+        build_cmd+="tools/bazel run --config=fast"
         if [ "$GCOV" = true ]; then
             build_cmd+=" --gcov"
         fi
@@ -311,16 +333,24 @@ if [ "$SKIP_BUILD" = false ] && [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != 
             build_cmd+=" --kasan"
         fi
         build_cmd+=" //common-modules/virtual-device:virtual_device_x86_64_dist"
-        print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
-        eval "$build_cmd"
-        exit_code=$?
-        if [ $exit_code -eq 0 ]; then
-            print_info "$build_cmd succeeded"
-        else
-            print_error "$build_cmd failed"
-        fi
-        KERNEL_BUILD="$PWD/out/virtual_device_x86_64/dist"
+    elif [ -f "build/build.sh" ]; then
+        # TODO(b/365590299): Add build support to android12 and earlier kernels
+        build_cmd+="BUILD_CONFIG=common/build.config.gki.x86_64 build/build.sh"
+        build_cmd+=" && "
+        build_cmd+="BUILD_CONFIG=common-modules/virtual-device/build.config.virtual_device.x86_64 build/build.sh"
+    else
+        print_error "Kernel build for this branch is not yet supported in this kernel tree"
     fi
+
+    print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
+    eval "$build_cmd"
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        print_info "$build_cmd succeeded"
+    else
+        print_error "$build_cmd failed"
+    fi
+    #KERNEL_BUILD="$PWD/out/virtual_device_x86_64/dist" # unused
 fi
 
 
