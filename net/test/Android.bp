@@ -15,11 +15,6 @@ python_test {
         "scapy",
     ],
     main: "all_tests.py",
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     test_config: "vts_kernel_net_tests.xml",
     test_suites: [
         "vts",
@@ -39,10 +34,5 @@ python_test {
         "scapy",
     ],
     main: "all_tests_gki.py",
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     test_config: "vts_kernel_net_tests.xml",
 }
