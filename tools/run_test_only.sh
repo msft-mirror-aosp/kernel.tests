@@ -105,7 +105,7 @@ function print_help() {
     exit 0
 }
 
-function set_platform_repo () {
+function set_platform_repo() {
     print_warn "Build target product '${TARGET_PRODUCT}' does not match device product '$PRODUCT'"
     lunch_cli="source build/envsetup.sh && "
     if [ -f "build/release/release_configs/trunk_staging.textproto" ]; then
@@ -117,12 +117,12 @@ function set_platform_repo () {
     eval "$lunch_cli"
 }
 
-function run_test_in_platform_repo () {
+function run_test_in_platform_repo() {
     if [ -z "${TARGET_PRODUCT}" ]; then
         set_platform_repo
     elif [[ "${TARGET_PRODUCT}" != *"x86"* && "${PRODUCT}" == *"x86"* ]] || \
-       [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]]; then
-       set_platform_repo
+        [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]]; then
+        set_platform_repo
     fi
     atest_cli="atest ${TEST_NAMES[*]} -s $SERIAL_NUMBER --"
     if $GCOV; then
@@ -268,7 +268,7 @@ fi
 
 BOARD=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.board)
 ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
-PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.product)
+PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.product.name)
 BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
 
 if [ -z "$TEST_DIR" ]; then
@@ -371,7 +371,7 @@ if [ -f "${TEST_DIR}/tools/vts-tradefed" ]; then
     vts --skip-device-info --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "${TEST_DIR}/tools/cts-tradefed" ]; then
-    TRADEFED="JAVA_HOME=${TEST_DIR}/jdk PATH=${TEST_DIR}/jdk/bin:$PATH ${TEST_DIR}/tools/vts-tradefed"
+    TRADEFED="JAVA_HOME=${TEST_DIR}/jdk PATH=${TEST_DIR}/jdk/bin:$PATH ${TEST_DIR}/tools/cts-tradefed"
     print_info "Will run tests with cts-tradefed from $TRADEFED" "$LINENO"
     print_info "Many CTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
     tf_cli="$TRADEFED run commandAndExit cts --skip-device-info \
@@ -407,6 +407,7 @@ fi
 
 # Add GCOV options if enabled
 if $GCOV; then
+    tf_cli+=" --enable-root"
     tf_cli+=$TRADEFED_GCOV_OPTIONS
 fi
 
