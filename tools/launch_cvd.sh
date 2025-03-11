@@ -150,12 +150,114 @@ function adb_checker() {
     fi
 }
 
+function create_kernel_build_cmd() {
+    local cf_kernel_repo_root=$1
+    local cf_kernel_version=$2
+
+    local regex="((?<=android-)mainline|(\K\d+\.\d+(?=-stable)))|((?:android)\K\d+)"
+    local android_version
+    android_version=$(grep -oP "$regex" <(echo "$cf_kernel_version"))
+    local build_cmd=""
+    if [ -f "$cf_kernel_repo_root/common-modules/virtual-device/BUILD.bazel" ]; then
+        # support android-mainline, android16, android15, android14, android13
+        build_cmd+="tools/bazel run --config=fast"
+        if [ "$GCOV" = true ]; then
+            build_cmd+=" --gcov"
+        fi
+        if [ "$DEBUG" = true ]; then
+            build_cmd+=" --debug"
+        fi
+        if [ "$KASAN" = true ]; then
+            build_cmd+=" --kasan"
+        fi
+        build_cmd+=" //common-modules/virtual-device:virtual_device_x86_64_dist"
+    elif [ -f "$cf_kernel_repo_root/build/build.sh" ]; then
+        if [[ "$android_version" == "12" ]]; then
+            build_cmd+="BUILD_CONFIG=common/build.config.gki.x86_64 build/build.sh"
+            build_cmd+=" && "
+            build_cmd+="BUILD_CONFIG=common-modules/virtual-device/build.config.virtual_device.x86_64 build/build.sh"
+        elif [[ "$android_version" == "11" ]] || [[ "$android_version" == "4.19" ]]; then
+            build_cmd+="BUILD_CONFIG=common/build.config.gki.x86_64 build/build.sh"
+            build_cmd+=" && "
+            build_cmd+="BUILD_CONFIG=common-modules/virtual-device/build.config.cuttlefish.x86_64 build/build.sh"
+        else
+            echo "The Kernel build $cf_kernel_version is not yet supported" >&2
+            return 1
+        fi
+    else
+        echo "The Kernel build $cf_kernel_version is not yet supported" >&2
+        return 1
+    fi
+
+    echo "$build_cmd"
+}
+
+function create_kernel_build_path() {
+    local cf_kernel_version=$1
+
+    local regex="((?<=android-)mainline|(\K\d+\.\d+(?=-stable)))|((?:android)\K\d+)"
+    local android_version
+    android_version=$(grep -oP "$regex" <(echo "$cf_kernel_version"))
+    if [ "$android_version" = "mainline" ] || greater_than_or_equal_to "$android_version" "14"; then
+        # support android-mainline, android16, android15, android14
+        echo "out/virtual_device_x86_64/dist"
+    elif greater_than_or_equal_to "$android_version" "11" || [[ "$android_version" == "4.19" ]]; then
+        # support android13, android12, android11, android-4.19-stable
+        echo "out/$cf_kernel_version/dist"
+    else
+        echo "The version of this kernel build $cf_kernel_version is not supported yet" >&2
+        return 1
+    fi
+}
+
 function go_to_repo_root() {
     current_dir="$1"
     while [ ! -d ".repo" ] && [ "$current_dir" != "/" ]; do
         current_dir=$(dirname "$current_dir")  # Go up one directory
         cd "$current_dir" || print_error "Failed to cd to $current_dir"
     done
+}
+
+function greater_than_or_equal_to() {
+    local num1="$1"
+    local num2="$2"
+
+    # This regex matches strings formatted as floating-point or integer numbers
+    local num_regex="^[0]([\.][0-9]+)?$|^[1-9][0-9]*([\.][0-9]+)?$"
+    if [[ ! "$num1" =~ $num_regex ]] || [[ ! "$num2" =~ $num_regex ]]; then
+        return 1
+    fi
+
+    if [[ $(echo "$num1 >= $num2" | bc -l) -eq 1 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Checks if target_path is within root_directory
+function is_path_in_root() {
+    local root_directory="$1"
+    local target_path="$2"
+
+    # expand the path variable, for example:
+    # "~/Documents" becomes "/home/user/Documents"
+    root_directory=$(eval echo "$root_directory")
+    target_path=$(eval echo "$target_path")
+
+    # remove the trailing slashes
+    root_directory=$(realpath -m "$root_directory")
+    target_path=$(realpath -m "$target_path")
+
+    # handles the corner case, for example:
+    # $root_directory="/home/user/Doc", $target_path="/home/user/Documents/"
+    root_directory="${root_directory}/"
+
+    if [[ "$target_path" = "$root_directory"* ]]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 function print_info() {
@@ -172,28 +274,7 @@ function print_error() {
     exit 1
 }
 
-function set_kernel_build_path () {
-    local cf_kernel_repo_root=$1
-    local cf_kernel_version=$2
-
-    if [ "$cf_kernel_version" == "android-mainline" ]; then
-        echo "$cf_kernel_repo_root/out/virtual_device_x86_64/dist"
-        return
-    fi
-
-    local android_version
-    android_version=$(grep -oP "^android\K\d+" <(echo "$cf_kernel_version"))
-    if [ -z "$android_version" ]; then
-        print_error "Unable to parse the android version when setting up the kernel build environment"
-    elif [ "$android_version" -ge "14" ]; then
-        echo "$cf_kernel_repo_root/out/virtual_device_x86_64/dist"
-    else
-        # support android13, android12
-        echo "$cf_kernel_repo_root/out/$cf_kernel_version/dist"
-    fi
-}
-
-function set_platform_repo () {
+function set_platform_repo() {
     print_warn "Build target product '${TARGET_PRODUCT}' does not match expected '$1'"
     local lunch_cli="source build/envsetup.sh && lunch $1"
     if [ -f "build/release/release_configs/trunk_staging.textproto" ]; then
@@ -205,7 +286,7 @@ function set_platform_repo () {
     eval "$lunch_cli"
 }
 
-function find_repo () {
+function find_repo() {
     manifest_output=$(grep -e "superproject" -e "gs-pixel" -e "private/google-modules/soc/gs" \
     -e "kernel/common" -e "common-modules/virtual-device" .repo/manifests/default.xml)
     case "$manifest_output" in
@@ -223,10 +304,13 @@ function find_repo () {
                 CF_KERNEL_REPO_ROOT="$PWD"
                 CF_KERNEL_VERSION=$(grep -e "common-modules/virtual-device" \
                 .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
-                print_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, \
-                CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
+                print_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
                 if [ -z "$KERNEL_BUILD" ]; then
-                    KERNEL_BUILD=$(set_kernel_build_path "$CF_KERNEL_REPO_ROOT" "$CF_KERNEL_VERSION")
+                    output=$(create_kernel_build_path "$CF_KERNEL_VERSION" 2>&1)
+                    if [[ $? -ne 0 ]]; then
+                        print_error "$output"
+                    fi
+                    KERNEL_BUILD="${CF_KERNEL_REPO_ROOT}/$output"
                     print_info "KERNEL_BUILD=$KERNEL_BUILD"
                 fi
             fi
@@ -237,7 +321,7 @@ function find_repo () {
     esac
 }
 
-function rebuild_platform () {
+function rebuild_platform() {
     build_cmd="m -j12"
     print_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
     eval "$build_cmd"
@@ -256,8 +340,6 @@ function rebuild_platform () {
 
 adb_checker
 
-# LOCAL_REPO= $ Unused
-
 OLD_PWD=$PWD
 MY_NAME=$0
 
@@ -272,8 +354,6 @@ if [[ "$REPO_LIST_OUT" == "error"* ]]; then
 else
     go_to_repo_root "$PWD"
 fi
-
-# REPO_ROOT_PATH="$PWD" # unused
 
 find_repo
 
@@ -307,57 +387,49 @@ if [ "$SKIP_BUILD" = false ] && [ -n "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" != 
     fi
 fi
 
-if [ "$SKIP_BUILD" = false ] && [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]] \
-&& [ -d "$KERNEL_BUILD" ]; then
-    # Check if kernel repo is provided, if yes rebuild
-    cd "$KERNEL_BUILD" || print_error "Failed to cd to $KERNEL_BUILD"
+if [ "$SKIP_BUILD" = false ] && [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]]; then
+    if [ -d "$CF_KERNEL_REPO_ROOT" ] && [ -n "$CF_KERNEL_VERSION" ] && is_path_in_root "$CF_KERNEL_REPO_ROOT" "$KERNEL_BUILD"; then
+        # Support first-build in the local kernel repository
+        target_path="$CF_KERNEL_REPO_ROOT"
+    elif [ -d $KERNEL_BUILD ]; then
+        target_path="$KERNEL_BUILD"
+    else
+        print_error "Built kernel not found. Either build the kernel or use the default kernel from the local repository"
+    fi
+
+    cd "$target_path" || print_error "Failed to cd to $target_path"
     KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
-    if [[ "$KERNEL_REPO_LIST_OUT" == "error"* ]]; then
-        print_error "Current path $PWD is not in an Android repo."
-    fi
+    if [[ "$KERNEL_REPO_LIST_OUT" != "error"* ]]; then
+        go_to_repo_root "$target_path"
+        target_kernel_repo_root="$PWD"
+        target_cf_kernel_version=$(grep -e "common-modules/virtual-device" \
+        .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
 
-    go_to_repo_root "$PWD"
+        print_info "target_kernel_repo_root=$target_kernel_repo_root, target_cf_kernel_version=$target_cf_kernel_version"
 
-    # Build a new kernel
-    build_cmd=""
-    if [ -f "common-modules/virtual-device/BUILD.bazel" ]; then
-        # KERNEL_VERSION=$(grep -e "common-modules/virtual-device" .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*') # unused
-        build_cmd+="tools/bazel run --config=fast"
-        if [ "$GCOV" = true ]; then
-            build_cmd+=" --gcov"
+        output=$(create_kernel_build_cmd $PWD $target_cf_kernel_version 2>&1)
+        if [[ $? -ne 0 ]]; then
+            print_error "$output"
         fi
-        if [ "$DEBUG" = true ]; then
-            build_cmd+=" --debug"
-        fi
-        if [ "$KASAN" = true ]; then
-            build_cmd+=" --kasan"
-        fi
-        build_cmd+=" //common-modules/virtual-device:virtual_device_x86_64_dist"
-    elif [ -f "build/build.sh" ]; then
-        # TODO(b/365590299): Add build support to android12 and earlier kernels
-        build_cmd+="BUILD_CONFIG=common/build.config.gki.x86_64 build/build.sh"
-        build_cmd+=" && "
-        build_cmd+="BUILD_CONFIG=common-modules/virtual-device/build.config.virtual_device.x86_64 build/build.sh"
+        build_cmd="$output"
+        print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
+        eval "$build_cmd" && print_info "$build_cmd succeeded" || print_error "$build_cmd failed"
     else
-        print_error "Kernel build for this branch is not yet supported in this kernel tree"
+        print_warn "Current path $PWD is not a valid Android repo, please ensure it contains the kernel"
     fi
-
-    print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
-    eval "$build_cmd"
-    exit_code=$?
-    if [ $exit_code -eq 0 ]; then
-        print_info "$build_cmd succeeded"
-    else
-        print_error "$build_cmd failed"
-    fi
-    #KERNEL_BUILD="$PWD/out/virtual_device_x86_64/dist" # unused
 fi
-
 
 if [ -z "$ACLOUD_BIN" ] || ! [ -x "$ACLOUD_BIN" ]; then
     output=$(which acloud 2>&1)
     if [ -z "$output" ]; then
         print_info "Use acloud binary from $ACLOUD_PREBUILT"
+        if [ -n "${PLATFORM_REPO_ROOT}" ]; then
+            ACLOUD_PREBUILT="${PLATFORM_REPO_ROOT}/${ACLOUD_PREBUILT}"
+        elif  [ -n "${CF_KERNEL_REPO_ROOT}" ]; then
+            ACLOUD_PREBUILT="${CF_KERNEL_REPO_ROOT}/${ACLOUD_PREBUILT}"
+        else
+            print_error "Unable to determine repository root path from repo manifest"
+        fi
         ACLOUD_BIN="$ACLOUD_PREBUILT"
     else
         print_info "Use acloud binary from $output"
