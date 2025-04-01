@@ -363,18 +363,18 @@ fi
 
 print_info "Will run tests with test artifacts in $TEST_DIR" "$LINENO"
 
-if [ -f "${TEST_DIR}/tools/vts-tradefed" ]; then
-    TRADEFED="JAVA_HOME=${TEST_DIR}/jdk PATH=${TEST_DIR}/jdk/bin:$PATH ${TEST_DIR}/tools/vts-tradefed"
-    print_info "Will run tests with vts-tradefed from $TRADEFED" "$LINENO"
+if [[ "$TEST_DIR" == */android-vts/* ]] && [ -f "${TEST_DIR}/tools/vts-tradefed" ]; then
+    print_info "Will run tests with vts-tradefed from $TEST_DIR" "$LINENO"
     print_info "Many VTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
-    tf_cli="$TRADEFED run commandAndExit \
-    vts --skip-device-info --log-level-display info --log-file-path=$LOG_DIR \
+    cd "${TEST_DIR}"
+    tf_cli="tools/vts-tradefed run commandAndExit vts --skip-device-info \
+    --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
-elif [ -f "${TEST_DIR}/tools/cts-tradefed" ]; then
-    TRADEFED="JAVA_HOME=${TEST_DIR}/jdk PATH=${TEST_DIR}/jdk/bin:$PATH ${TEST_DIR}/tools/cts-tradefed"
-    print_info "Will run tests with cts-tradefed from $TRADEFED" "$LINENO"
+elif [[ "$TEST_DIR" == */android-cts/* ]] &&  [ -f "${TEST_DIR}/tools/cts-tradefed" ]; then
+    print_info "Will run tests with cts-tradefed from $TEST_DIR" "$LINENO"
     print_info "Many CTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
-    tf_cli="$TRADEFED run commandAndExit cts --skip-device-info \
+    cd "${TEST_DIR}"
+    tf_cli="tools/cts-tradefed run commandAndExit cts --skip-device-info \
     --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "${ANDROID_HOST_OUT}/bin/tradefed.sh" ] ; then
