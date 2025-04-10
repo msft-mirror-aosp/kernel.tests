@@ -1017,7 +1017,7 @@ function get_mix_ramdisk_script() {
 }
 
 function mixing_build() {
-    if [ -n ${PLATFORM_REPO_ROOT_PATH} ] && [ -f "$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME"]; then
+    if [ -n ${PLATFORM_REPO_ROOT_PATH} ] && [ -f "$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME" ]; then
         mix_kernel_cmd="$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME"
     elif [ -f "$DOWNLOAD_PATH/$MIX_SCRIPT_NAME" ]; then
         mix_kernel_cmd="$DOWNLOAD_PATH/$MIX_SCRIPT_NAME"
