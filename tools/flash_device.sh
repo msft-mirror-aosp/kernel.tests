@@ -408,12 +408,25 @@ function format_ab_kernel_build_string() {
     local _build_target="${array[3]}"
     local _build_id="${array[4]}"
     if [ -z "$_branch" ]; then
+        print_info "$KERNEL_BUILD provided in -kb doesn't have branch info. Will use the kernel version from device" "$LINENO"
         if [ -z "$DEVICE_KERNEL_VERSION" ]; then
-            print_error "Branch is not provided in kernel build $KERNEL_BUILD. \
-            The kernel version can not be retrieved from device to decide GKI kernel build" "$LINENO"
+            print_error "The kernel version can not be retrieved from device to decide GKI kernel build" "$LINENO"
         fi
-        print_info "Branch is not specified in kernel build as ab://<branch>. Using $DEVICE_KERNEL_VERSION kernel branch." "$LINENO"
+        print_info "Branch is not specified in kernel build as ab://<branch>. Using device's existing kernel version $DEVICE_KERNEL_VERSION." "$LINENO"
         _branch="$DEVICE_KERNEL_VERSION"
+        KERNEL_VERSION="$DEVICE_KERNEL_VERSION"
+    else
+        if [[ "$_branch" == *mainline* ]]; then
+            KERNEL_VERSION="android-mainline"
+        else
+            local _android_version=$(echo "$_branch" | grep -oE 'android[0-9]+')
+            local _kernel_version=$(echo "$_branch" | grep -oE '[0-9]+\.[0-9]+')
+            if [ -z "$_android_version" ] || [ -z "$_kernel_version" ]; then
+                print_warn "Unable to get kernel version from $KERNEL_BUILD" "$LINENO"
+            else
+                KERNEL_VERSION="$_android_version-$_kernel_version"
+            fi
+        fi
     fi
     if [[ "$_branch" == "android"* ]]; then
         _branch="aosp_kernel-common-$_branch"
@@ -581,17 +594,40 @@ function download_platform_build() {
 }
 
 function download_gki_build() {
-    print_info "Downloading $1 to $PWD" "$LINENO"
-    local _build_info="$1"
-    local _file_patterns=( "boot-lz4.img"  )
-
-    if [[ "$PRODUCT" == "oriole" ]] || [[ "$PRODUCT" == "raven" ]]; then
-        if [[ "$_build_info" != *android13* ]]; then
-            _file_patterns+=("system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers")
-        fi
-    else
-        _file_patterns+=("system_dlkm.img")
+    print_info "Download GKI kernel build $KERNEL_BUILD" "$LINENO"
+    if [ -d "$DOWNLOAD_PATH/gki_dir" ]; then
+        rm -rf "$DOWNLOAD_PATH/gki_dir"
     fi
+    local _gki_dir="$DOWNLOAD_PATH/gki_dir"
+    mkdir -p "$_gki_dir"
+    cd "$_gki_dir" || $(print_error "Fail to go to $_gki_dir" "$LINENO")
+    print_info "Downloading $KERNEL_BUILD to $PWD" "$LINENO"
+
+    local _build_info="$KERNEL_BUILD"
+    local _file_patterns
+    case "$PRODUCT" in
+        oriole | raven | bluejay)
+            _file_patterns=( "boot-lz4.img" )
+            if [ -n "$VENDOR_KERNEL_BUILD" ]; then
+                _file_patterns+=( "system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers" )
+            fi
+            ;;
+        kirkwood)
+            _file_patterns=( "boot.img" "system_dlkm.flatten.erofs.img" )
+            ;;
+        eos | aurora | betty | harriet)
+            _file_patterns=( "boot.img" "system_dlkm.flatten.ext4.img" )
+            ;;
+        slsi | qcom )
+            _file_patterns=( "boot-gz.img" "system_dlkm.img"  )
+            ;;
+        mtk )
+            _file_patterns=( "boot.img" "system_dlkm.img"  )
+            ;;
+        *)
+            _file_patterns=( "boot-lz4.img" "system_dlkm.img" )
+            ;;
+    esac
     for _pattern in "${_file_patterns[@]}"; do
         print_info "Downloading $_build_info/$_pattern" "$LINENO"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
@@ -606,6 +642,7 @@ function download_gki_build() {
         fi
     done
     echo ""
+    KERNEL_BUILD="$_gki_dir"
 }
 
 function download_vendor_kernel_build() {
@@ -685,33 +722,52 @@ function download_vendor_kernel_for_direct_flash() {
 
 }
 
-function flash_gki_build() {
-    local _flash_cmd
-    if [[ "$KERNEL_BUILD" == ab://* ]]; then
-        IFS='/' read -ra array <<< "$KERNEL_BUILD"
-        KERNEL_VERSION=$(echo "${array[2]}" | sed "s/aosp_kernel-common-//g")
-        _flash_cmd="$CL_FLASH_CLI --nointeractive -w -s $DEVICE_SERIAL_NUMBER "
-        _flash_cmd+=" -t ${array[3]}"
-        if [ -n "${array[4]}" ] && [[ "${array[4]}" != latest* ]]; then
-            _flash_cmd+=" --bid ${array[4]}"
-        else
-            _flash_cmd+=" -l ${array[2]}"
+function reboot_device_into_bootloader() {
+    if [ -n "$ADB_SERIAL_NUMBER" ] && (( $(adb devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
+        print_info "Reboot $ADB_SERIAL_NUMBER into bootloader" "$LINENO"
+        adb -s "$ADB_SERIAL_NUMBER" reboot bootloader
+        sleep 10
+        if [ -z "$FASTBOOT_SERIAL_NUMBER" ]; then
+            find_fastboot_serial_number
         fi
-    elif [ -d "$KERNEL_BUILD" ]; then
-        _flash_cmd="$LOCAL_FLASH_CLI --nointeractive -w --kernel_dist_dir=$KERNEL_BUILD -s $DEVICE_SERIAL_NUMBER"
-    else
-        print_error "Can not flash GKI kernel from $KERNEL_BUILD" "$LINENO"
+    elif [ -n "$FASTBOOT_SERIAL_NUMBER" ] && (( $(fastboot devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
+        print_info "Reboot $FASTBOOT_SERIAL_NUMBER into bootloader" "$LINENO"
+        fastboot -s "$FASTBOOT_SERIAL_NUMBER" reboot bootloader
+        sleep 2
     fi
+}
 
-    IFS='-' read -ra array <<< "$KERNEL_VERSION"
-    KERNEL_VERSION="${array[0]}-${array[1]}"
-    print_info "$KERNEL_BUILD is KERNEL_VERSION $KERNEL_VERSION" "$LINENO"
+function flash_gki_build() {
+    print_info "The boot image in $KERNEL_BUILD has kernel verson: $KERNEL_VERSION" "$LINENO"
     if [ -n "$DEVICE_KERNEL_VERSION" ] && [[ "$KERNEL_VERSION" != "$DEVICE_KERNEL_VERSION"* ]]; then
-        print_warn "Device $PRODUCT $SERIAL_NUMBER comes with $DEVICE_KERNEL_STRING $DEVICE_KERNEL_VERSION kernel. \
-        Can't flash $KERNEL_VERSION GKI directly. Please use a platform build with the $KERNEL_VERSION kernel \
-        or use a vendor kernel build by flag -vkb, for example -vkb -vkb ab://kernel-${array[0]}-gs-pixel-${array[1]}/<kernel_target>/latest" "$LINENO"
+        print_warn "Device $PRODUCT $SERIAL_NUMBER comes with $DEVICE_KERNEL_VERSION kernel. \
+Can't flash $KERNEL_VERSION GKI directly. Please use a platform build with the $KERNEL_VERSION kernel \
+or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel-*.*" "$LINENO"
         print_error "Cannot flash $KERNEL_VERSION GKI to device $SERIAL_NUMBER directly." "$LINENO"
     fi
+
+    reboot_device_into_bootloader
+    print_info "Flash GKI kernel from $KERNEL_BUILD" "$LINENO"
+    print_info "Wiping the device" "$LINENO"
+    fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
+    print_info "Disabling oem verification" "$LINENO"
+    fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem disable-verification
+    local $_flash_cmd
+    if [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
+        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-lz4.img"
+    elif [ -f "$KERNEL_BUILD/boot-gz.img" ]; then
+        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-gz.img"
+    elif [ -f "$KERNEL_BUILD/boot.img" ]; then
+        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot.img"
+    fi
+    if [ -f "$KERNEL_BUILD/system_dlkm.img" ]; then
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $KERNEL_BUILD/system_dlkm.img"
+    elif [ -f "$KERNEL_BUILD/system_dlkm.flatten.ext4.img" ]; then
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $KERNEL_BUILD/system_dlkm.flatten.ext4.img"
+    elif [ -f "$KERNEL_BUILD/system_dlkm.flatten.erofs.img" ]; then
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $KERNEL_BUILD/system_dlkm.flatten.erofs.img"
+    fi
+    _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
 
     print_info "Flashing GKI kernel with: $_flash_cmd" "$LINENO"
     eval "$_flash_cmd"
@@ -765,20 +821,8 @@ function flash_vendor_kernel_build() {
 
     cd $VENDOR_KERNEL_BUILD
 
-    # Switch to flashstatoin after b/390489174
     print_info "Flash vendor kernel from $VENDOR_KERNEL_BUILD" "$LINENO"
-    if [ -n "$ADB_SERIAL_NUMBER" ] && (( $(adb devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
-        print_info "Reboot $ADB_SERIAL_NUMBER into bootloader" "$LINENO"
-        adb -s "$ADB_SERIAL_NUMBER" reboot bootloader
-        sleep 10
-        if [ -z "$FASTBOOT_SERIAL_NUMBER" ]; then
-            find_fastboot_serial_number
-        fi
-    elif [ -n "$FASTBOOT_SERIAL_NUMBER" ] && (( $(fastboot devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
-        print_info "Reboot $FASTBOOT_SERIAL_NUMBER into bootloader" "$LINENO"
-        fastboot -s "$FASTBOOT_SERIAL_NUMBER" reboot bootloader
-        sleep 2
-    fi
+    reboot_device_into_bootloader
     print_info "Wiping the device" "$LINENO"
     fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
     print_info "Disabling oem verification" "$LINENO"
@@ -1025,18 +1069,6 @@ function mixing_build() {
         PLATFORM_BUILD="$PLATFORM_DIR"
     fi
 
-    if [[ "$KERNEL_BUILD" == ab://* ]]; then
-        print_info "Download kernel build $KERNEL_BUILD" "$LINENO"
-        if [ -d "$DOWNLOAD_PATH/gki_dir" ]; then
-            rm -rf "$DOWNLOAD_PATH/gki_dir"
-        fi
-        GKI_DIR="$DOWNLOAD_PATH/gki_dir"
-        mkdir -p "$GKI_DIR"
-        cd "$GKI_DIR" || $(print_error "Fail to go to $GKI_DIR" "$LINENO")
-        download_gki_build $KERNEL_BUILD
-        KERNEL_BUILD="$GKI_DIR"
-    fi
-
     local new_device_dir="$DOWNLOAD_PATH/new_device_dir"
     if [ -d "$new_device_dir" ]; then
         rm -rf "$new_device_dir"
@@ -1063,59 +1095,23 @@ get_kernel_version_from_boot_image() {
     local version_output
 
     # Check for mainline kernel
-    version_output=$(strings "$boot_image_path" | grep mainline)
-    if [ -n "$version_output" ]; then
+    version_output=$(strings "$boot_image_path" | grep android.*-g.*-ab.* | tail -n 1)
+    if [[ "$version_output" == *-mainline* ]]; then
         KERNEL_VERSION="android-mainline"
-        return  # Exit the function early if a match is found
+    elif [[ "$version_output" == *-android* ]]; then
+        # Extract the substring between the first hyphen and the second hyphen
+        KERNEL_VERSION=$(echo "$version_output" | awk -F '-' '{print $2"-"$1}' | cut -d '.' -f -2)
+    else
+       print_warn "Can not parse $version_output into kernel version" "$LINENO"
+       KERNEL_VERSION=
     fi
-
-    # Check for Android 15 6.6 kernel
-    version_output=$(strings "$boot_image_path" | grep "android15" | grep "6.6")
-    if [ -n "$version_output" ]; then
-        KERNEL_VERSION="android15-6.6"
-        return
-    fi
-
-    # Check for Android 14 6.1 kernel
-    version_output=$(strings "$boot_image_path" | grep "android14" | grep "6.1")
-    if [ -n "$version_output" ]; then
-        KERNEL_VERSION="android14-6.1"
-        return
-    fi
-
-    # Check for Android 14 5.15 kernel
-    version_output=$(strings "$boot_image_path" | grep "android14" | grep "5.15")
-    if [ -n "$version_output" ]; then
-        KERNEL_VERSION="android14-5.15"
-        return
-    fi
-
-    # Check for Android 13 5.15 kernel
-    version_output=$(strings "$boot_image_path" | grep "android13" | grep "5.15")
-    if [ -n "$version_output" ]; then
-        KERNEL_VERSION="android13-5.15"
-        return
-    fi
-
-    # Check for Android 13 5.10 kernel
-    version_output=$(strings "$boot_image_path" | grep "android13" | grep "5.10")
-    if [ -n "$version_output" ]; then
-        KERNEL_VERSION="android13-5.10"
-        return
-    fi
-
-    # Check for Android 12 5.10 kernel
-    version_output=$(strings "$boot_image_path" | grep "android12" | grep "5.10")
-    if [ -n "$version_output" ]; then
-        KERNEL_VERSION="android12-5.10"
-        return
-    fi
+    print_info "Boot image $boot_image_path has kernel version: $KERNEL_VERSION" "$LINENO"
 }
 
 function extract_device_kernel_version() {
     local kernel_string="$1"
     # Check if the string contains '-android'
-    if [[ "$kernel_string" == *"-mainline"* ]]; then
+    if [[ "$kernel_string" == *-mainline* ]]; then
         DEVICE_KERNEL_VERSION="android-mainline"
     elif [[ "$kernel_string" == *"-android"* ]]; then
         # Extract the substring between the first hyphen and the second hyphen
@@ -1123,7 +1119,7 @@ function extract_device_kernel_version() {
     else
        print_warn "Can not parse $kernel_string into kernel version" "$LINENO"
     fi
-    print_info "Device kernel version is $DEVICE_KERNEL_VERSION" "$LINENO"
+    print_info "Device $DEVICE_SERIAL_NUMBER kernel version: $DEVICE_KERNEL_VERSION" "$LINENO"
 }
 
 function find_adb_serial_number() {
@@ -1185,7 +1181,6 @@ function get_device_info_from_adb {
 
     BUILD_TYPE=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.build.type)
     DEVICE_KERNEL_STRING=$(adb -s "$ADB_SERIAL_NUMBER" shell uname -r)
-    extract_device_kernel_version "$DEVICE_KERNEL_STRING"
     SYSTEM_DLKM_INFO=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop dev.mnt.blk.system_dlkm)
     if [[ "$SERIAL_NUMBER" != "$DEVICE_SERIAL_NUMBER" ]]; then
         print_info "Device $SERIAL_NUMBER has DEVICE_SERIAL_NUMBER=$DEVICE_SERIAL_NUMBER, ADB_SERIAL_NUMBER=$ADB_SERIAL_NUMBER" "$LINENO"
@@ -1193,6 +1188,7 @@ function get_device_info_from_adb {
     local _build_fingerprint=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.build.fingerprint)
     print_info "Device $SERIAL_NUMBER info: BUILD_FINGERPRINT=$_build_fingerprint BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE \
 SYSTEM_DLKM_INFO=$SYSTEM_DLKM_INFO, DEVICE_KERNEL_STRING=$DEVICE_KERNEL_STRING" "$LINENO"
+    extract_device_kernel_version "$DEVICE_KERNEL_STRING"
 }
 
 function get_device_info_from_fastboot {
@@ -1374,11 +1370,13 @@ find_flashstation_binary
 
 if [[ "$KERNEL_BUILD" == ab://* ]]; then
     format_ab_kernel_build_string
+    download_gki_build
 elif [ -n "$KERNEL_BUILD" ] && [ -d "$KERNEL_BUILD" ]; then
     # Check if kernel repo is provided
     cd "$KERNEL_BUILD" || $(print_error "Fail to go to $KERNEL_BUILD" "$LINENO")
     KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$KERNEL_REPO_LIST_OUT" != "error"* ]]; then
+        print_info "$KERNEL_BUILD is in a kernel tree repo"
         go_to_repo_root "$PWD"
         if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
             find_repo
@@ -1392,8 +1390,12 @@ elif [ -n "$KERNEL_BUILD" ] && [ -d "$KERNEL_BUILD" ]; then
             fi
         fi
         KERNEL_BUILD="$PWD/out/kernel_aarch64/dist"
-    elif [ -f "$KERNEL_BUILD/boot*.img" ]; then
-        get_kernel_version_from_boot_image "$KERNEL_BUILD/boot*.img"
+    elif [ -f "$KERNEL_BUILD/boot.img" ]; then
+        get_kernel_version_from_boot_image "$KERNEL_BUILD/boot.img"
+    elif [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
+        get_kernel_version_from_boot_image "$KERNEL_BUILD/boot-lz4.img"
+    elif [ -f "$KERNEL_BUILD/boot-gz.img" ]; then
+        get_kernel_version_from_boot_image "$KERNEL_BUILD/boot-gz.img"
     fi
 fi
 
