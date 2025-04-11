@@ -19,15 +19,6 @@ LOCAL_JDK_PATH=/usr/local/buildtools/java/jdk11
 LOG_DIR=$PWD/out/test_logs/$(date +%Y%m%d_%H%M%S)
 MIN_FASTBOOT_VERSION="35.0.2-12583183"
 VENDOR_KERNEL_IMGS=("boot.img" "initramfs.img" "dtb.img" "dtbo.img" "vendor_dlkm.img")
-# Color constants
-BOLD="$(tput bold)"
-END="$(tput sgr0)"
-GREEN="$(tput setaf 2)"
-RED="$(tput setaf 198)"
-YELLOW="$(tput setaf 3)"
-ORANGE="$(tput setaf 208)"
-BLUE=$(tput setaf 4)
-
 SKIP_UPDATE_BOOTLOADER=false
 SKIP_BUILD=false
 GCOV=false
@@ -1260,7 +1251,19 @@ function get_device_info() {
     print_error "$SERIAL_NUMBER is not connected with adb or fastboot" "$LINENO"
 }
 
-adb_checker
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
+if [[ -f "$LIB_PATH" ]]; then
+    if ! . "$LIB_PATH"; then
+        echo "Fatal Error：Cannot load library '$LIB_PATH'" >&2
+        exit 1
+    fi
+else
+    echo "Fatal Error：Cannot find library '$LIB_PATH'" >&2
+    exit 1
+fi
+
+check_command "adb"
 
 LOCAL_REPO=
 

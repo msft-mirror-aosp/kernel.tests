@@ -20,19 +20,6 @@ TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
 
-BOLD="$(tput bold)"
-END="$(tput sgr0)"
-GREEN="$(tput setaf 2)"
-RED="$(tput setaf 198)"
-YELLOW="$(tput setaf 3)"
-BLUE="$(tput setaf 34)"
-
-function adb_checker() {
-    if ! which adb &> /dev/null; then
-        echo -e "\n${RED}Adb not found!${END}"
-    fi
-}
-
 function go_to_repo_root() {
     current_dir="$1"
     while [ ! -d ".repo" ] && [ "$current_dir" != "/" ]; do
@@ -140,6 +127,18 @@ function run_test_in_platform_repo() {
     cd $OLD_PWD
     exit $exit_code
 }
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
+if [[ -f "$LIB_PATH" ]]; then
+    if ! . "$LIB_PATH"; then
+        echo "Fatal Error：Cannot load library '$LIB_PATH'" >&2
+        exit 1
+    fi
+else
+    echo "Fatal Error：Cannot find library '$LIB_PATH'" >&2
+    exit 1
+fi
 
 OLD_PWD=$PWD
 MY_NAME=$0
@@ -259,7 +258,7 @@ fi
 REPO_ROOT_PATH="$PWD"
 FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT"
 
-adb_checker
+check_command "adb"
 
 # Set default LOG_DIR if not provided
 if [ -z "$LOG_DIR" ]; then
