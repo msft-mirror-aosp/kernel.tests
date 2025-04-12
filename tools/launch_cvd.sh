@@ -16,6 +16,7 @@ YELLOW="$(tput setaf 3)"
 # BLUE="$(tput setaf 34)" # Unused
 
 SKIP_BUILD=false
+USE_RBE=false
 GCOV=false
 DEBUG=false
 KASAN=false
@@ -27,6 +28,8 @@ function print_help() {
     echo "This script will build images and launch a Cuttlefish device."
     echo ""
     echo "Available options:"
+    echo "  --use-rbe             Enable Remote Build Execution to speed up large, non-google3 builds."
+    echo "                        Requires RBE service access; See go/build-fast for details."
     echo "  --skip-build          Skip the image build step. Will build by default if in repo."
     echo "  --gcov                Launch CVD with gcov enabled kernel"
     echo "  --debug               Launch CVD with debug enabled kernel"
@@ -69,6 +72,10 @@ function parse_arg() {
         case "$1" in
             -h|--help)
                 print_help
+                ;;
+            --use-rbe)
+                USE_RBE=true
+                shift
                 ;;
             --skip-build)
                 SKIP_BUILD=true
@@ -287,15 +294,23 @@ function set_platform_repo() {
 }
 
 function find_repo() {
-    manifest_output=$(grep -e "superproject" -e "gs-pixel" -e "private/google-modules/soc/gs" \
-    -e "kernel/common" -e "common-modules/virtual-device" .repo/manifests/default.xml)
+    manifest_output=$(grep -e "superproject" -e "common-modules/virtual-device" -e "default revision" \
+        .repo/manifests/default.xml)
     case "$manifest_output" in
         *platform/superproject*)
             PLATFORM_REPO_ROOT="$PWD"
-            PLATFORM_VERSION=$(grep -e "platform/superproject" .repo/manifests/default.xml | \
-            grep -oP 'revision="\K[^"]*')
+            PLATFORM_VERSION=$(grep -oP 'platform/superproject.*revision="\K[^"]*' <(echo "$manifest_output"))
+            if [ -z "$PLATFORM_VERSION" ]; then
+                # on main branch, <superproject> tag doesn't have a 'revision' attribute
+                # try to extract the information from <default> tag
+                PLATFORM_VERSION=$(grep -oP 'default revision="(refs/tags/)?\K[^"]*' <(echo "$manifest_output"))
+            fi
+            if [ -z "$PLATFORM_VERSION" ]; then
+                print_error "Could not find platform version information."
+            fi
             print_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION"
             if [ -z "$PLATFORM_BUILD" ]; then
+                # Temporarily assigned to root. Will be reset after lunch (build target)
                 PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
             fi
             ;;
@@ -322,7 +337,11 @@ function find_repo() {
 }
 
 function rebuild_platform() {
-    build_cmd="m -j12"
+    build_cmd=""
+    if [ "${USE_RBE}" = false ]; then
+        build_cmd+="USE_RBE=false"
+    fi
+    build_cmd+=" m -j$(nproc)"
     print_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
     eval "$build_cmd"
     exit_code=$?
@@ -357,18 +376,22 @@ fi
 
 find_repo
 
-if [ "$SKIP_BUILD" = false ] && [ -n "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] \
-&& [ -d "$PLATFORM_BUILD" ]; then
+if [ -n "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] && [ -d "$PLATFORM_BUILD" ]; then
     # Check if PLATFORM_BUILD is an Android platform repo, if yes rebuild
     cd "$PLATFORM_BUILD" || print_error "Failed to cd to $PLATFORM_BUILD"
     PLATFORM_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$PLATFORM_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
+        # Still need to source envsetup.sh and lunch the target, even when skipping the image build.
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "$PRODUCT" ]]; then
             set_platform_repo "$PRODUCT"
-            rebuild_platform
-            PLATFORM_BUILD=${ANDROID_PRODUCT_OUT}
         fi
+        if [ "$SKIP_BUILD" = false ]; then
+            rebuild_platform
+        fi
+        PLATFORM_BUILD=${ANDROID_PRODUCT_OUT}
+    else
+        [[ "$SKIP_BUILD" == false ]] && print_warn "Cannot rebuild, current path $PWD is not a valid Android repo."
     fi
 fi
 
