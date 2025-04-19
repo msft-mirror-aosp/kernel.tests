@@ -20,19 +20,6 @@ TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
 
-BOLD="$(tput bold)"
-END="$(tput sgr0)"
-GREEN="$(tput setaf 2)"
-RED="$(tput setaf 198)"
-YELLOW="$(tput setaf 3)"
-BLUE="$(tput setaf 34)"
-
-function adb_checker() {
-    if ! which adb &> /dev/null; then
-        echo -e "\n${RED}Adb not found!${END}"
-    fi
-}
-
 function go_to_repo_root() {
     current_dir="$1"
     while [ ! -d ".repo" ] && [ "$current_dir" != "/" ]; do
@@ -106,14 +93,14 @@ function print_help() {
 }
 
 function set_platform_repo() {
-    print_warn "Build target product '${TARGET_PRODUCT}' does not match device product '$PRODUCT'"
+    print_warn "Build target product '${TARGET_PRODUCT}' does not match device product '$PRODUCT'" "$LINENO"
     lunch_cli="source build/envsetup.sh && "
     if [ -f "build/release/release_configs/trunk_staging.textproto" ]; then
         lunch_cli+="lunch $PRODUCT-trunk_staging-$BUILD_TYPE"
     else
         lunch_cli+="lunch $PRODUCT-trunk_staging-$BUILD_TYPE"
     fi
-    print_info "Setup build environment with: $lunch_cli"
+    print_info "Setup build environment with: $lunch_cli" "$LINENO"
     eval "$lunch_cli"
 }
 
@@ -128,6 +115,7 @@ function run_test_in_platform_repo() {
     if $GCOV; then
         atest_cli+="$TRADEFED_GCOV_OPTIONS"
     fi
+    print_info "Running the test with: $atest_cli ${TEST_ARGS[*]}" "$LINENO"
     eval "$atest_cli" "${TEST_ARGS[*]}"
     exit_code=$?
 
@@ -135,11 +123,35 @@ function run_test_in_platform_repo() {
         atest_log_dir="/tmp/atest_result_$USER/LATEST"
         create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $atest_log_dir/log -o $atest_log_dir/cov.info"
         print_info "Skip creating tracefile. If you have full kernel source, run the following command:"
-        print_info "$create_tracefile_cli"
+        print_info "$create_tracefile_cli" "$LINENO"
     fi
     cd $OLD_PWD
     exit $exit_code
 }
+
+function unset_android_environment() {
+    for var in $(env); do
+      # Extract the variable name
+      var_name="${var%%=*}"
+      # Check if the variable name starts with "ANDROID"
+      if [[ "$var_name" == "ANDROID"* ]]; then
+        # Unset the variable
+        unset "$var_name"
+      fi
+    done
+}
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
+if [[ -f "$LIB_PATH" ]]; then
+    if ! . "$LIB_PATH"; then
+        echo "Fatal Error：Cannot load library '$LIB_PATH'" >&2
+        exit 1
+    fi
+else
+    echo "Fatal Error：Cannot find library '$LIB_PATH'" >&2
+    exit 1
+fi
 
 OLD_PWD=$PWD
 MY_NAME=$0
@@ -191,27 +203,27 @@ while test $# -gt 0; do
         -ta)
             shift
             if test $# -gt 0; then
-                TEST_ARGS+=$1
+                TEST_ARGS+=($1)
             else
                 print_error "test arg is not specified"
             fi
             shift
             ;;
         --test-arg*)
-            TEST_ARGS+=$(echo $1 | sed -e "s/^[^=]*=//g")
+            TEST_ARGS+=($(echo $1 | sed -e "s/^[^=]*=//g"))
             shift
             ;;
         -t)
             shift
             if test $# -gt 0; then
-                TEST_NAMES+=$1
+                TEST_NAMES+=($1)
             else
                 print_error "test name is not specified"
             fi
             shift
             ;;
         --test*)
-            TEST_NAMES+=$(echo $1 | sed -e "s/^[^=]*=//g")
+            TEST_NAMES+=($(echo $1 | sed -e "s/^[^=]*=//g"))
             shift
             ;;
         -tf)
@@ -259,7 +271,7 @@ fi
 REPO_ROOT_PATH="$PWD"
 FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT"
 
-adb_checker
+check_command "adb"
 
 # Set default LOG_DIR if not provided
 if [ -z "$LOG_DIR" ]; then
@@ -297,9 +309,9 @@ if [ -z "$TEST_DIR" ]; then
 fi
 
 TEST_FILTERS=
-for i in "$TEST_NAMES"; do
-    TEST_NAME=$(echo $i | sed "s/:/ /g")
-    TEST_FILTERS+=" --include-filter '$TEST_NAME'"
+for i in "${TEST_NAMES[@]}"; do
+    _test_name=$(echo $i | sed "s/:/ /g")
+    TEST_FILTERS+=" --include-filter '$_test_name'"
 done
 
 if [[ "$TEST_DIR" == ab://* ]]; then
@@ -367,6 +379,7 @@ if [[ "$TEST_DIR" == */android-vts/* ]] && [ -f "${TEST_DIR}/tools/vts-tradefed"
     print_info "Will run tests with vts-tradefed from $TEST_DIR" "$LINENO"
     print_info "Many VTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
     cd "${TEST_DIR}"
+    unset_android_environment
     tf_cli="tools/vts-tradefed run commandAndExit vts --skip-device-info \
     --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
@@ -374,6 +387,7 @@ elif [[ "$TEST_DIR" == */android-cts/* ]] &&  [ -f "${TEST_DIR}/tools/cts-tradef
     print_info "Will run tests with cts-tradefed from $TEST_DIR" "$LINENO"
     print_info "Many CTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
     cd "${TEST_DIR}"
+    unset_android_environment
     tf_cli="tools/cts-tradefed run commandAndExit cts --skip-device-info \
     --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"

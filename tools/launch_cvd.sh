@@ -7,14 +7,6 @@
 ACLOUD_PREBUILT="prebuilts/asuite/acloud/linux-x86/acloud"
 OPT_SKIP_PRERUNCHECK='--skip-pre-run-check'
 PRODUCT='aosp_cf_x86_64_phone'
-# Color constants
-#BOLD="$(tput bold)" # Unused
-END="$(tput sgr0)"
-GREEN="$(tput setaf 2)"
-RED="$(tput setaf 198)"
-YELLOW="$(tput setaf 3)"
-# BLUE="$(tput setaf 34)" # Unused
-
 SKIP_BUILD=false
 USE_RBE=false
 GCOV=false
@@ -149,12 +141,6 @@ function parse_arg() {
                 ;;
         esac
     done
-}
-
-function adb_checker() {
-    if ! which adb &> /dev/null; then
-        print_error "adb not found!"
-    fi
 }
 
 function create_kernel_build_cmd() {
@@ -357,7 +343,19 @@ function rebuild_platform() {
     fi
 }
 
-adb_checker
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
+if [[ -f "$LIB_PATH" ]]; then
+    if ! . "$LIB_PATH"; then
+        echo "Fatal Error：Cannot load library '$LIB_PATH'" >&2
+        exit 1
+    fi
+else
+    echo "Fatal Error：Cannot find library '$LIB_PATH'" >&2
+    exit 1
+fi
+
+check_command "adb"
 
 OLD_PWD=$PWD
 MY_NAME=$0
