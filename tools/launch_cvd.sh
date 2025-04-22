@@ -58,7 +58,7 @@ function print_help() {
     echo "$0"
     echo "$0 --acloud-arg=--local-instance"
     echo "$0 -pb ab://git_main/aosp_cf_x86_64_phone-userdebug/latest"
-    echo "$0 -pb ~/aosp-main/out/target/product/vsoc_x86_64/"
+    echo "$0 -pb ~/main/out/target/product/vsoc_x86_64/"
     echo "$0 -kb ~/android-mainline/out/virtual_device_x86_64/"
     echo ""
     exit 0
@@ -81,40 +81,40 @@ function parse_arg() {
             -pb)
                 shift
                 if test $# -gt 0; then
-                    PLATFORM_BUILD=$1
+                    PLATFORM_BUILD="$1"
                 else
                     print_error "platform build is not specified"
                 fi
                 shift
                 ;;
             --platform-build=*)
-                PLATFORM_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                PLATFORM_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             -sb)
                 shift
                 if test $# -gt 0; then
-                    SYSTEM_BUILD=$1
+                    SYSTEM_BUILD="$1"
                 else
                     print_error "system build is not specified"
                 fi
                 shift
                 ;;
             --system-build=*)
-                SYSTEM_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                SYSTEM_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             -kb)
                 shift
                 if test $# -gt 0; then
-                    KERNEL_BUILD=$1
+                    KERNEL_BUILD="$1"
                 else
                     print_error "kernel build path is not specified"
                 fi
                 shift
                 ;;
             --kernel-build=*)
-                KERNEL_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                KERNEL_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             --acloud-arg=*)
@@ -122,11 +122,11 @@ function parse_arg() {
                 shift
                 ;;
             --acloud-bin=*)
-                ACLOUD_BIN=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                ACLOUD_BIN="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             --cf-product=*)
-                PRODUCT=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                PRODUCT="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             --gcov)
@@ -347,11 +347,11 @@ check_command "adb"
 parse_arg "$@"
 
 if is_in_repo_workspace; then
-  go_to_repo_root "$PWD"
+    go_to_repo_root "$PWD"
 else
-  print_error "Current path $PWD is not in an Android repo. Change path to repo root." 0
-  go_to_repo_root $CALLER_SCRIPT_DIR
-  print_info "Has changed path to $PWD"
+    print_error "Current path $PWD is not in an Android repo. Change path to repo root." 0
+    go_to_repo_root $CALLER_SCRIPT_DIR
+    print_info "Has changed path to $PWD"
 fi
 
 find_repo
@@ -396,9 +396,6 @@ if [ "$SKIP_BUILD" = false ] && [ -n "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" != 
 fi
 
 if  [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]]; then
-    # if [ ! -d "$KERNEL_BUILD" ]; then
-    #     print_error "Built kernel not found. Either build the kernel or use the default kernel from the local repository"
-    # fi
     cd "$KERNEL_BUILD" || print_error "Failed to cd to $KERNEL_BUILD"
 
     if is_in_repo_workspace; then
@@ -468,8 +465,8 @@ EXTRA_OPTIONS+=("$OPT_SKIP_PRERUNCHECK")
 # Add in branch if not specified
 
 if [ -z "$PLATFORM_BUILD" ]; then
-    print_warn "Platform build is not specified, will use the latest aosp-main build."
-    acloud_cli+=' --branch aosp-main'
+    print_warn "Platform build is not specified, will use the latest git_main build."
+    acloud_cli+=' --branch git_main'
 elif [[ "$PLATFORM_BUILD" == ab://* ]]; then
     IFS='/' read -ra array <<< "$PLATFORM_BUILD"
     acloud_cli+=" --branch ${array[2]}"
