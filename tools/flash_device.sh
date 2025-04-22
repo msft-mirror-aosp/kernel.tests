@@ -4,12 +4,10 @@
 # A handy tool to flash device with local build or remote build.
 
 # Constants
-FETCH_SCRIPT="fetch_artifact.sh"
 # Please see go/cl_flashstation
 CL_FLASH_CLI=/google/bin/releases/android/flashstation/cl_flashstation
 LOCAL_FLASH_CLI=/google/bin/releases/android/flashstation/local_flashstation
 MIX_SCRIPT_NAME="build_mixed_kernels_ramdisk"
-FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 DOWNLOAD_PATH="/tmp/downloaded_images"
 KERNEL_TF_PREBUILT=prebuilts/tradefed/filegroups/tradefed/tradefed.sh
 PLATFORM_TF_PREBUILT=tools/tradefederation/prebuilts/filegroups/tradefed/tradefed.sh
