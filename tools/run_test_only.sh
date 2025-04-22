@@ -7,26 +7,16 @@
 
 KERNEL_TF_PREBUILT=prebuilts/tradefed/filegroups/tradefed/tradefed.sh
 PLATFORM_TF_PREBUILT=tools/tradefederation/prebuilts/filegroups/tradefed/tradefed.sh
-JDK_PATH=prebuilts/jdk/jdk11/linux-x86
-PLATFORM_JDK_PATH=prebuilts/jdk/jdk21/linux-x86
 DEFAULT_LOG_DIR=$PWD/out/test_logs/$(date +%Y%m%d_%H%M%S)
 DOWNLOAD_PATH="/tmp/downloaded_tests"
 GCOV=false
 CREATE_TRACEFILE_SCRIPT="kernel/tests/tools/create-tracefile.py"
-FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
 TRADEFED=
 TRADEFED_GCOV_OPTIONS=" --coverage --coverage-toolchain GCOV_KERNEL --auto-collect GCOV_KERNEL_COVERAGE"
 TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
-
-function go_to_repo_root() {
-    current_dir="$1"
-    while [ ! -d ".repo" ] && [ "$current_dir" != "/" ]; do
-        current_dir=$(dirname "$current_dir")  # Go up one directory
-        cd "$current_dir"
-    done
-}
+USE_RBE=false
 
 function print_info() {
     local log_prompt=$MY_NAME
@@ -77,6 +67,8 @@ function print_help() {
     echo "  -tf <tradefed_binary_path>, --tradefed-bin=<tradefed_binary_path>"
     echo "                        The alternative tradefed binary to run test with."
     echo "  --gcov                Collect coverage data from the test result"
+    echo "  --use-rbe             Enable Remote Build Execution to speed up testing process."
+    echo "                        Requires RBE service access; See go/build-fast for details."
     echo "  -h, --help            Display this help message and exit"
     echo ""
     echo "Examples:"
@@ -111,7 +103,11 @@ function run_test_in_platform_repo() {
         [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]]; then
         set_platform_repo
     fi
-    atest_cli="atest ${TEST_NAMES[*]} -s $SERIAL_NUMBER --"
+    atest_cli=""
+    if [ "$USE_RBE" = false ]; then
+        atest_cli+="USE_RBE=false RBE_ENABLED=false "
+    fi
+    atest_cli+="atest ${TEST_NAMES[*]} -s $SERIAL_NUMBER --"
     if $GCOV; then
         atest_cli+="$TRADEFED_GCOV_OPTIONS"
     fi
@@ -164,46 +160,46 @@ while test $# -gt 0; do
         -s)
             shift
             if test $# -gt 0; then
-                SERIAL_NUMBER=$1
+                SERIAL_NUMBER="$1"
             else
                 print_error "device serial is not specified"
             fi
             shift
             ;;
         --serial*)
-            SERIAL_NUMBER=$(echo $1 | sed -e "s/^[^=]*=//g")
+            SERIAL_NUMBER="$(echo "$1" | sed -e "s/^[^=]*=//g")"
             shift
             ;;
         -tl)
             shift
             if test $# -gt 0; then
-                LOG_DIR=$1
+                LOG_DIR="$1"
             else
                 print_error "test log directory is not specified"
             fi
             shift
             ;;
         --test-log*)
-            LOG_DIR=$(echo $1 | sed -e "s/^[^=]*=//g")
+            LOG_DIR=$(echo "$1" | sed -e "s/^[^=]*=//g")
             shift
             ;;
         -td | -tb )
             shift
             if test $# -gt 0; then
-                TEST_DIR=$1
+                TEST_DIR="$1"
             else
                 print_error "test directory is not specified"
             fi
             shift
             ;;
         --test-dir* | --test-build*)
-            TEST_DIR=$(echo $1 | sed -e "s/^[^=]*=//g")
+            TEST_DIR=$(echo "$1" | sed -e "s/^[^=]*=//g")
             shift
             ;;
         -ta)
             shift
             if test $# -gt 0; then
-                TEST_ARGS+=($1)
+                TEST_ARGS+=("$1")
             else
                 print_error "test arg is not specified"
             fi
@@ -216,31 +212,35 @@ while test $# -gt 0; do
         -t)
             shift
             if test $# -gt 0; then
-                TEST_NAMES+=($1)
+                TEST_NAMES+=("$1")
             else
                 print_error "test name is not specified"
             fi
             shift
             ;;
         --test*)
-            TEST_NAMES+=($(echo $1 | sed -e "s/^[^=]*=//g"))
+            TEST_NAMES+=("$(echo "$1" | sed -e "s/^[^=]*=//g")")
             shift
             ;;
         -tf)
             shift
             if test $# -gt 0; then
-                TRADEFED=$1
+                TRADEFED="$1"
             else
                 print_error "tradefed binary is not specified"
             fi
             shift
             ;;
         --tradefed-bin*)
-            TRADEFED=$(echo $1 | sed -e "s/^[^=]*=//g")
+            TRADEFED="$(echo "$1" | sed -e "s/^[^=]*=//g")"
             shift
             ;;
         --gcov)
             GCOV=true
+            shift
+            ;;
+        --use-rbe)
+            USE_RBE=true
             shift
             ;;
         *)
@@ -289,7 +289,6 @@ if [ -z "$TEST_DIR" ]; then
         # In the platform repo
         print_info "Run test with atest" "$LINENO"
         run_test_in_platform_repo
-        return
     elif [[ "$BOARD" == "cutf"* ]] && [[ "$REPO_LIST_OUT" == *"common-modules/virtual-device"* ]]; then
         # In the android kernel repo
         if [[ "$ABI" == "arm64"* ]]; then
@@ -334,7 +333,7 @@ if [[ "$TEST_DIR" == ab://* ]]; then
         print_error "Failed to download ${file_name}" "$LINENO"
     fi
     TEST_DIR="$DOWNLOAD_PATH/$file_name"
-elif [ ! -z "$TEST_DIR" ]; then
+elif [ -n "$TEST_DIR" ]; then
     if [ -d $TEST_DIR ]; then
         test_file_path=$TEST_DIR
     elif [ -f "$TEST_DIR" ]; then
@@ -351,7 +350,6 @@ elif [ ! -z "$TEST_DIR" ]; then
         print_info "Test_dir $TEST_DIR is from Android platform repo. Run test with atest" "$LINENO"
         go_to_repo_root "$PWD"
         run_test_in_platform_repo
-        return
     fi
 fi
 
@@ -406,7 +404,7 @@ elif [ -f "$PLATFORM_TF_PREBUILT" ]; then
     --template:map test=suite/test_mapping_suite  --tests-dir=$TEST_DIR\
     $TEST_FILTERS -s $SERIAL_NUMBER"
 elif [ -f "$KERNEL_TF_PREBUILT" ]; then
-    TRADEFED="JAVA_HOME=$JDK_PATH PATH=$JDK_PATH/bin:$PATH $KERNEL_TF_PREBUILT"
+    TRADEFED="JAVA_HOME=$KERNEL_JDK_PATH PATH=$KERNEL_JDK_PATH/bin:$PATH $KERNEL_TF_PREBUILT"
     print_info "Use the tradefed prebuilt from $KERNEL_TF_PREBUILT" "$LINENO"
     tf_cli="$TRADEFED run commandAndExit template/local_min \
     --log-level-display info --log-file-path=$LOG_DIR \

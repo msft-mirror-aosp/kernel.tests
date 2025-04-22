@@ -13,6 +13,10 @@ __COMMON_LIB_SOURCED__=1
 CALLER_SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[1]}" )" &> /dev/null && pwd )"
 CALLER_SCRIPT_NAME=$(basename "${BASH_SOURCE[1]}")
 CALLER_SCRIPT_PATH="${CALLER_SCRIPT_DIR}/${CALLER_SCRIPT_NAME}"
+FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
+KERNEL_JDK_PATH="prebuilts/jdk/jdk11/linux-x86"
+LOCAL_JDK_PATH="/usr/local/buildtools/java/jdk11"
+PLATFORM_JDK_PATH="prebuilts/jdk/jdk21/linux-x86"
 
 # Color Constants
 BLUE="$(tput setaf 4)"
