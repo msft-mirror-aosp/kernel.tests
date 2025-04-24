@@ -554,7 +554,10 @@ function format_ab_vendor_kernel_build_string() {
 function download_platform_build() {
     print_info "Downloading $PLATFORM_BUILD to $PWD" "$LINENO"
     local _build_info="$PLATFORM_BUILD"
-    local _file_patterns=("*$PRODUCT-img-*.zip" "bootloader.img" "radio.img")
+    local _file_patterns=("*$PRODUCT-img-*.zip" "radio.img")
+    if [ "$SKIP_UPDATE_BOOTLOADER" = false ]; then
+        _file_pattern+=("bootloader.img")
+    fi
     if [ -n "$VENDOR_KERNEL_BUILD" ]; then
         _file_patterns+=("misc_info.txt" "otatools.zip")
         if [[ "$1" == *git_sc* ]]; then
