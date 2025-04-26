@@ -13,6 +13,11 @@ GCOV=false
 DEBUG=false
 KASAN=false
 EXTRA_OPTIONS=()
+CF_KERNEL_REPO_ROOT=""
+CF_KERNEL_VERSION=""
+PLATFORM_REPO_ROOT=""
+PLATFORM_VERSION=""
+
 
 function print_help() {
     echo "Usage: $0 [OPTIONS]"
@@ -53,7 +58,7 @@ function print_help() {
     echo "$0"
     echo "$0 --acloud-arg=--local-instance"
     echo "$0 -pb ab://git_main/aosp_cf_x86_64_phone-userdebug/latest"
-    echo "$0 -pb ~/aosp-main/out/target/product/vsoc_x86_64/"
+    echo "$0 -pb ~/main/out/target/product/vsoc_x86_64/"
     echo "$0 -kb ~/android-mainline/out/virtual_device_x86_64/"
     echo ""
     exit 0
@@ -76,40 +81,40 @@ function parse_arg() {
             -pb)
                 shift
                 if test $# -gt 0; then
-                    PLATFORM_BUILD=$1
+                    PLATFORM_BUILD="$1"
                 else
                     print_error "platform build is not specified"
                 fi
                 shift
                 ;;
             --platform-build=*)
-                PLATFORM_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                PLATFORM_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             -sb)
                 shift
                 if test $# -gt 0; then
-                    SYSTEM_BUILD=$1
+                    SYSTEM_BUILD="$1"
                 else
                     print_error "system build is not specified"
                 fi
                 shift
                 ;;
             --system-build=*)
-                SYSTEM_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                SYSTEM_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             -kb)
                 shift
                 if test $# -gt 0; then
-                    KERNEL_BUILD=$1
+                    KERNEL_BUILD="$1"
                 else
                     print_error "kernel build path is not specified"
                 fi
                 shift
                 ;;
             --kernel-build=*)
-                KERNEL_BUILD=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                KERNEL_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             --acloud-arg=*)
@@ -117,11 +122,11 @@ function parse_arg() {
                 shift
                 ;;
             --acloud-bin=*)
-                ACLOUD_BIN=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                ACLOUD_BIN="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             --cf-product=*)
-                PRODUCT=$(echo "$1" | sed -e "s/^[^=]*=//g")
+                PRODUCT="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             --gcov)
@@ -203,14 +208,6 @@ function create_kernel_build_path() {
     fi
 }
 
-function go_to_repo_root() {
-    current_dir="$1"
-    while [ ! -d ".repo" ] && [ "$current_dir" != "/" ]; do
-        current_dir=$(dirname "$current_dir")  # Go up one directory
-        cd "$current_dir" || print_error "Failed to cd to $current_dir"
-    done
-}
-
 function greater_than_or_equal_to() {
     local num1="$1"
     local num2="$2"
@@ -253,18 +250,20 @@ function is_path_in_root() {
     fi
 }
 
+# NOTE: In a future update, the 'log_xxx' functions within 'common_lib.sh'
+# will be renamed to 'print_xxx' (e.g., 'log_info' to 'print_info') and will
+# replace the existing 'print_xxx' functions in original scripts under
+# 'kernel/test/tools'.
 function print_info() {
-    echo "[$MY_NAME]: ${GREEN}$1${END}"
+    log_info "$1"
 }
 
 function print_warn() {
-    echo "[$MY_NAME]: ${YELLOW}$1${END}"
+    log_warn "$1"
 }
 
 function print_error() {
-    echo -e "[$MY_NAME]: ${RED}$1${END}"
-    cd "$OLD_PWD" || echo "Failed to cd to $OLD_PWD"
-    exit 1
+    log_error "$1" "${2:-1}"
 }
 
 function set_platform_repo() {
@@ -295,10 +294,6 @@ function find_repo() {
                 print_error "Could not find platform version information."
             fi
             print_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION"
-            if [ -z "$PLATFORM_BUILD" ]; then
-                # Temporarily assigned to root. Will be reset after lunch (build target)
-                PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
-            fi
             ;;
         *kernel/superproject*)
             if [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
@@ -306,14 +301,6 @@ function find_repo() {
                 CF_KERNEL_VERSION=$(grep -e "common-modules/virtual-device" \
                 .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
                 print_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
-                if [ -z "$KERNEL_BUILD" ]; then
-                    output=$(create_kernel_build_path "$CF_KERNEL_VERSION" 2>&1)
-                    if [[ $? -ne 0 ]]; then
-                        print_error "$output"
-                    fi
-                    KERNEL_BUILD="${CF_KERNEL_REPO_ROOT}/$output"
-                    print_info "KERNEL_BUILD=$KERNEL_BUILD"
-                fi
             fi
             ;;
         *)
@@ -357,28 +344,28 @@ fi
 
 check_command "adb"
 
-OLD_PWD=$PWD
-MY_NAME=$0
-
 parse_arg "$@"
 
-FULL_COMMAND_PATH=$(dirname "$PWD/$0")
-REPO_LIST_OUT=$(repo list 2>&1)
-if [[ "$REPO_LIST_OUT" == "error"* ]]; then
-    echo -e "[$MY_NAME]: ${RED}Current path $PWD is not in an Android repo. Change path to repo root.${END}"
-    go_to_repo_root "$FULL_COMMAND_PATH"
-    print_info "Changed path to $PWD"
-else
+if is_in_repo_workspace; then
     go_to_repo_root "$PWD"
+else
+    print_error "Current path $PWD is not in an Android repo. Change path to repo root." 0
+    go_to_repo_root $CALLER_SCRIPT_DIR
+    print_info "Has changed path to $PWD"
 fi
 
 find_repo
 
+if [ -z "$PLATFORM_BUILD" ] && [ -n "$PLATFORM_REPO_ROOT" ]; then
+    # Temporarily assigned to root. Will be reset after lunch (build target)
+    PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
+fi
+
 if [ -n "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] && [ -d "$PLATFORM_BUILD" ]; then
     # Check if PLATFORM_BUILD is an Android platform repo, if yes rebuild
     cd "$PLATFORM_BUILD" || print_error "Failed to cd to $PLATFORM_BUILD"
-    PLATFORM_REPO_LIST_OUT=$(repo list 2>&1)
-    if [[ "$PLATFORM_REPO_LIST_OUT" != "error"* ]]; then
+
+    if is_in_repo_workspace; then
         go_to_repo_root "$PWD"
         # Still need to source envsetup.sh and lunch the target, even when skipping the image build.
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "$PRODUCT" ]]; then
@@ -408,33 +395,42 @@ if [ "$SKIP_BUILD" = false ] && [ -n "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" != 
     fi
 fi
 
-if [ "$SKIP_BUILD" = false ] && [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]]; then
-    if [ -d "$CF_KERNEL_REPO_ROOT" ] && [ -n "$CF_KERNEL_VERSION" ] && is_path_in_root "$CF_KERNEL_REPO_ROOT" "$KERNEL_BUILD"; then
-        # Support first-build in the local kernel repository
-        target_path="$CF_KERNEL_REPO_ROOT"
-    elif [ -d $KERNEL_BUILD ]; then
-        target_path="$KERNEL_BUILD"
-    else
-        print_error "Built kernel not found. Either build the kernel or use the default kernel from the local repository"
-    fi
+if  [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]]; then
+    cd "$KERNEL_BUILD" || print_error "Failed to cd to $KERNEL_BUILD"
 
-    cd "$target_path" || print_error "Failed to cd to $target_path"
-    KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
-    if [[ "$KERNEL_REPO_LIST_OUT" != "error"* ]]; then
-        go_to_repo_root "$target_path"
+    if is_in_repo_workspace; then
+        go_to_repo_root "$PWD"
         target_kernel_repo_root="$PWD"
         target_cf_kernel_version=$(grep -e "common-modules/virtual-device" \
         .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
 
         print_info "target_kernel_repo_root=$target_kernel_repo_root, target_cf_kernel_version=$target_cf_kernel_version"
 
-        output=$(create_kernel_build_cmd $PWD $target_cf_kernel_version 2>&1)
+        output=$(create_kernel_build_path "$target_cf_kernel_version" 2>&1)
         if [[ $? -ne 0 ]]; then
             print_error "$output"
         fi
-        build_cmd="$output"
-        print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
-        eval "$build_cmd" && print_info "$build_cmd succeeded" || print_error "$build_cmd failed"
+
+        KERNEL_BUILD="${target_kernel_repo_root}/$output"
+        print_info "KERNEL_BUILD=$KERNEL_BUILD"
+
+        if [[ "$SKIP_BUILD" == false ]]; then
+            output=$(create_kernel_build_cmd $PWD $target_cf_kernel_version 2>&1)
+            if [[ $? -ne 0 ]]; then
+                print_error "$output"
+            fi
+            build_cmd="$output"
+            print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
+            eval "$build_cmd" && print_info "$build_cmd succeeded" || print_error "$build_cmd failed"
+        fi
+
+        if [ ! -d "$KERNEL_BUILD" ]; then
+            message="Built kernel not found."
+            if [[ "$SKIP_BUILD" == true ]]; then
+                message+=" Don't skip re-building the kernel."
+            fi
+            print_error "$message"
+        fi
     else
         print_warn "Current path $PWD is not a valid Android repo, please ensure it contains the kernel"
     fi
@@ -469,8 +465,8 @@ EXTRA_OPTIONS+=("$OPT_SKIP_PRERUNCHECK")
 # Add in branch if not specified
 
 if [ -z "$PLATFORM_BUILD" ]; then
-    print_warn "Platform build is not specified, will use the latest aosp-main build."
-    acloud_cli+=' --branch aosp-main'
+    print_warn "Platform build is not specified, will use the latest git_main build."
+    acloud_cli+=' --branch git_main'
 elif [[ "$PLATFORM_BUILD" == ab://* ]]; then
     IFS='/' read -ra array <<< "$PLATFORM_BUILD"
     acloud_cli+=" --branch ${array[2]}"
