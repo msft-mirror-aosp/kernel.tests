@@ -26,7 +26,6 @@ EXTRA_OPTIONS=()
 LOCAL_REPO=
 DEVICE_VARIANT="userdebug"
 
-BOARD=
 ABI=
 PRODUCT=
 BUILD_TYPE=
@@ -387,6 +386,34 @@ function format_ab_platform_build_string() {
     print_info "Platform build to be used is $PLATFORM_BUILD" "$LINENO"
 }
 
+function format_ab_system_build_string() {
+    if [[ "$SYSTEM_BUILD" != ab://* ]]; then
+        print_error "Please provide the system build in the form of ab:// with flag -sb" "$LINENO"
+        return 1
+    fi
+    IFS='/' read -ra array <<< "$SYSTEM_BUILD"
+    local _branch="${array[2]}"
+    local _build_target="${array[3]}"
+    local _build_id="${array[4]}"
+    if [ -z "$_branch" ]; then
+        print_info "Branch is not specified in system build as ab://<branch>. Using git_main branch" "$LINENO"
+        _branch="git_main"
+    fi
+    if [ -z "$_build_target" ]; then
+        _build_target="gsi_arm64-userdebug"
+    fi
+    if [[ "$_branch" == aosp-main* ]] || [[ "$_branch" == git_main* ]]; then
+        if [[ "$_build_target" != *-trunk_staging-* ]] || [[ "$_build_target" != *-next-* ]]  || [[ "$_build_target" != *-trunk_food-* ]]; then
+            _build_target="${_build_target/-user/-trunk_staging-user}"
+        fi
+    fi
+    if [ -z "$_build_id" ]; then
+        _build_id="latest"
+    fi
+    SYSTEM_BUILD="ab://$_branch/$_build_target/$_build_id"
+    print_info "System build to be used is $SYSTEM_BUILD" "$LINENO"
+}
+
 function format_ab_kernel_build_string() {
     if [[ "$KERNEL_BUILD" != ab://* ]]; then
         print_error "Please provide the kernel build in the form of ab:// with flag -kb" "$LINENO"
@@ -580,6 +607,23 @@ function download_platform_build() {
         fi
         if [[ "$_pattern" == "vendor_ramdisk-debug.img" ]]; then
             cp vendor_ramdisk-debug.img vendor_ramdisk.img
+        fi
+    done
+    echo ""
+}
+
+function download_system_build() {
+    print_info "Downloading $SYSTEM_BUILD to $PWD" "$LINENO"
+    local _build_info="$SYSTEM_BUILD"
+    local _file_patterns=("*_arm64-img-*.zip")
+    for _pattern in "${_file_patterns[@]}"; do
+        print_info "Downloading $_build_info/$_pattern" "$LINENO"
+        eval "$FETCH_SCRIPT $_build_info/$_pattern"
+        exit_code=$?
+        if [ $exit_code -eq 0 ]; then
+            print_info "Downloading $_build_info/$_pattern succeeded" "$LINENO"
+        else
+            print_error "Downloading $_build_info/$_pattern failed" "$LINENO"
         fi
     done
     echo ""
@@ -957,6 +1001,67 @@ function flash_platform_build() {
 
 }
 
+function flash_system_build() {
+    if [[ "$SYSTEM_BUILD" == ab://* ]]; then
+        if [ -d "$DOWNLOAD_PATH/system_dir" ]; then
+            rm -rf "$DOWNLOAD_PATH/system_dir"
+        fi
+        SYSTEM_DIR="$DOWNLOAD_PATH/system_dir"
+        mkdir -p "$SYSTEM_DIR"
+        cd "$SYSTEM_DIR" || $(print_error "Fail to go to $SYSTEM_DIR" "$LINENO")
+        download_system_build
+        SYSTEM_BUILD="$SYSTEM_DIR"
+    fi
+    if [ ! -f "$SYSTEM_BUILD/system.img" ]; then
+        local _device_image=$(find "$SYSTEM_BUILD" -maxdepth 1 -type f -name *-img*.zip)
+        if [ -f "$_device_image" ]; then
+            unzip -j "$_device_image" -d "$SYSTEM_BUILD"
+            if [ ! -f "$SYSTEM_BUILD/system.img" ]; then
+                print_error "There is no system.img in $_device_image" "$LINENO"
+            fi
+        else
+            print_error "$SYSTEM_BUILD doesn't have valid system image or device image to be flashed with" "$LINENO"
+        fi
+    fi
+
+    local _flash_cmd
+
+    print_info "Flash GSI from $SYSTEM_BUILD" "$LINENO"
+    reboot_device_into_bootloader
+    local _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar current-slot 2>&1)
+    local _current_slot=$(echo "$_output" | grep "^current-slot:" | awk '{print $2}')
+    print_info "Wiping the device" "$LINENO"
+    fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
+    print_info "Reboot device into fastbootd" "$LINENO"
+    fastboot -s "$FASTBOOT_SERIAL_NUMBER" reboot-fastboot
+    print_info "Delete logical partition product_$_current_slot" "$LINENO"
+    fastboot -s "$FASTBOOT_SERIAL_NUMBER" delete-logical-partition product_"$_current_slot"
+    print_info "Erase logical partition system_$_current_slot" "$LINENO"
+    fastboot -s "$FASTBOOT_SERIAL_NUMBER" erase system_"$_current_slot"
+
+    local $_flash_cmd
+    if [ -f "$SYSTEM_BUILD/system.img" ]; then
+        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash system $SYSTEM_BUILD/system.img"
+    fi
+    if [ -f "$KERNEL_BUILD/pvmfw.img" ]; then
+        _flash_cmd=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash pvmfw $SYSTEM_BUILD/pvmfw.img"
+    fi
+    _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
+
+    print_info "Flashing GSI with: $_flash_cmd" "$LINENO"
+    eval "$_flash_cmd"
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo "Flash GSI succeeded"
+        wait_for_device_in_adb
+        return
+    else
+        echo "Flash GSI failed with exit code $exit_code"
+        exit 1
+    fi
+
+}
+
 function prepare_to_flash_platform_build_from_local_directory () {
     print_info "Setting up local environment to flash platform build from $$PLATFORM_BUILD" "$LINENO"
     if [ ! -f "$PLATFORM_BUILD/android-info.txt" ] || [ ! -f "$PLATFORM_BUILD/boot.img" ]; then
@@ -1159,15 +1264,19 @@ function get_device_info_from_adb {
             print_error "Can not get device serial adb -s $ADB_SERIAL_NUMBER" "$LINENO"
         fi
     fi
-    BOARD=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.product.board)
+    PRODUCT=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.product.board)
     ABI=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
 
     # Only get PRODUCT if it's not already set
     if [ -z "$PRODUCT" ]; then
+        print_warn "$ADB_SERIAL_NUMBER does not have a valid product.board value" "$LINENO"
         PRODUCT=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.build.product)
         # Check if PRODUCT is valid after attempting to retrieve it
         if [ -z "$PRODUCT" ]; then
-            print_error "$ADB_SERIAL_NUMBER does not have a valid product value" "$LINENO"
+            print_error "$ADB_SERIAL_NUMBER does not have a valid build product value" "$LINENO"
+        fi
+        if [[ "$PRODUCT" == generic_arm64 ]]; then
+            print_error "$ADB_SERIAL_NUMBER has generic system image installed. Can not use the build.product to get hardward product value." "$LINENO"
         fi
     fi
 
@@ -1178,7 +1287,7 @@ function get_device_info_from_adb {
         print_info "Device $SERIAL_NUMBER has DEVICE_SERIAL_NUMBER=$DEVICE_SERIAL_NUMBER, ADB_SERIAL_NUMBER=$ADB_SERIAL_NUMBER" "$LINENO"
     fi
     local _build_fingerprint=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.build.fingerprint)
-    print_info "Device $SERIAL_NUMBER info: BUILD_FINGERPRINT=$_build_fingerprint BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE \
+    print_info "Device $SERIAL_NUMBER info: BUILD_FINGERPRINT=$_build_fingerprint, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE \
 SYSTEM_DLKM_INFO=$SYSTEM_DLKM_INFO, DEVICE_KERNEL_STRING=$DEVICE_KERNEL_STRING" "$LINENO"
     extract_device_kernel_version "$DEVICE_KERNEL_STRING"
 }
@@ -1348,28 +1457,6 @@ elif [ -n "$PLATFORM_BUILD" ] && [ -d "$PLATFORM_BUILD" ]; then
     fi
 fi
 
-if [[ "$SYSTEM_BUILD" == ab://* ]]; then
-    print_warn "System build is not supoort yet" "$LINENO"
-elif [ -n "$SYSTEM_BUILD" ] && [ -d "$SYSTEM_BUILD" ]; then
-    print_warn "System build is not supported yet" "$LINENO"
-    # Get GSI build
-    cd "$SYSTEM_BUILD"  || $(print_error "Fail to go to $SYSTEM_BUILD" "$LINENO")
-    SYSTEM_REPO_LIST_OUT=$(repo list 2>&1)
-    if [[ "$SYSTEM_REPO_LIST_OUT" != "error"* ]]; then
-        go_to_repo_root "$PWD"
-        if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
-            find_repo
-        fi
-        if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "_arm64" ]]; then
-            set_platform_repo "aosp_arm64"
-            if [ "$SKIP_BUILD" = false ] ; then
-                build_platform
-            fi
-            SYSTEM_BUILD="${ANDROID_PRODUCT_OUT}/system.img"
-        fi
-    fi
-fi
-
 find_flashstation_binary
 
 if [[ "$KERNEL_BUILD" == ab://* ]]; then
@@ -1465,7 +1552,7 @@ elif [ -n "$VENDOR_KERNEL_BUILD" ] && [ -d "$VENDOR_KERNEL_BUILD" ]; then
 fi
 
 if [ -z "$PLATFORM_BUILD" ]; then  # No platform build provided
-    if [ -z "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then  # No kernel or vendor kernel build
+    if [ -z "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ] && [ -z "$SYSTEM_BUILD" ]; then
         print_info "KERNEL_BUILD=$KERNEL_BUILD VENDOR_KERNEL_BUILD=$VENDOR_KERNEL_BUILD" "$LINENO"
         print_error "Nothing to flash" "$LINENO"
     fi
@@ -1493,6 +1580,30 @@ else  # Platform build provided
         mixing_build
         flash_platform_build
     fi
+fi
+
+if [[ "$SYSTEM_BUILD" == ab://* ]]; then
+    format_ab_system_build_string
+elif [ -n "$SYSTEM_BUILD" ] && [ -d "$SYSTEM_BUILD" ]; then
+    cd "$SYSTEM_BUILD"  || $(print_error "Fail to go to $SYSTEM_BUILD" "$LINENO")
+    SYSTEM_REPO_LIST_OUT=$(repo list 2>&1)
+    if [[ "$SYSTEM_REPO_LIST_OUT" != "error"* ]]; then
+        go_to_repo_root "$PWD"
+        if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
+            find_repo
+        fi
+        if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "gsi_arm64" ]]; then
+            set_platform_repo "gsi_arm64"
+            if [ "$SKIP_BUILD" = false ] ; then
+                build_platform
+            fi
+            SYSTEM_BUILD="${ANDROID_PRODUCT_OUT}"
+        fi
+    fi
+fi
+
+if [ -n "$SYSTEM_BUILD" ]; then
+    flash_system_build
 fi
 
 get_device_info
