@@ -375,7 +375,8 @@ function format_ab_platform_build_string() {
         fi
     fi
     if [[ "$_branch" == aosp-main* ]] || [[ "$_branch" == git_main* ]]; then
-        if [[ "$_build_target" != *-trunk_staging-* ]] || [[ "$_build_target" != *-next-* ]]  || [[ "$_build_target" != *-trunk_food-* ]]; then
+        if [[ "$_build_target" != *-trunk_staging-* ]] && [[ "$_build_target" != *-next-* ]] \
+        && [[ "$_build_target" != *-trunk_food-* ]]; then
             _build_target="${_build_target/-user/-trunk_staging-user}"
         fi
     fi
@@ -403,7 +404,8 @@ function format_ab_system_build_string() {
         _build_target="gsi_arm64-userdebug"
     fi
     if [[ "$_branch" == aosp-main* ]] || [[ "$_branch" == git_main* ]]; then
-        if [[ "$_build_target" != *-trunk_staging-* ]] || [[ "$_build_target" != *-next-* ]]  || [[ "$_build_target" != *-trunk_food-* ]]; then
+        if [[ "$_build_target" != *-trunk_staging-* ]] && [[ "$_build_target" != *-next-* ]]  && \
+        [[ "$_build_target" != *-trunk_food-* ]]; then
             _build_target="${_build_target/-user/-trunk_staging-user}"
         fi
     fi
