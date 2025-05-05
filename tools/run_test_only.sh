@@ -17,6 +17,7 @@ TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
 USE_RBE=false
+readonly REQUIRED_COMMANDS=("adb" "dirname")
 
 function print_info() {
     local log_prompt=$MY_NAME
@@ -84,23 +85,11 @@ function print_help() {
     exit 0
 }
 
-function set_platform_repo() {
-    print_warn "Build target product '${TARGET_PRODUCT}' does not match device product '$PRODUCT'" "$LINENO"
-    lunch_cli="source build/envsetup.sh && "
-    if [ -f "build/release/release_configs/trunk_staging.textproto" ]; then
-        lunch_cli+="lunch $PRODUCT-trunk_staging-$BUILD_TYPE"
-    else
-        lunch_cli+="lunch $PRODUCT-trunk_staging-$BUILD_TYPE"
-    fi
-    print_info "Setup build environment with: $lunch_cli" "$LINENO"
-    eval "$lunch_cli"
-}
-
 function run_test_in_platform_repo() {
-    if [ -z "${TARGET_PRODUCT}" ]; then
-        set_platform_repo
-    elif [[ "${TARGET_PRODUCT}" != *"x86"* && "${PRODUCT}" == *"x86"* ]] || \
-        [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]]; then
+    if [[ "${TARGET_PRODUCT}" != *"x86"* && "${PRODUCT}" == *"x86"* ]] || \
+    [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]] || \
+    [ -z "${TARGET_PRODUCT}" ]; then
+        print_warn "Build target product '${TARGET_PRODUCT}' does not match device product '$PRODUCT'. Reset build environment." "$LINENO"
         set_platform_repo
     fi
     atest_cli=""
@@ -137,7 +126,8 @@ function unset_android_environment() {
     done
 }
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$( cd "$( dirname "${SCRIPT_PATH}" )" &> /dev/null && pwd -P)"
 LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
 if [[ -f "$LIB_PATH" ]]; then
     if ! . "$LIB_PATH"; then
@@ -271,7 +261,10 @@ fi
 REPO_ROOT_PATH="$PWD"
 FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT"
 
-check_command "adb"
+print_info "Checking required commands..." "$LINENO"
+if ! check_commands_available "${REQUIRED_COMMANDS[@]}"; then
+    print_error "One or more required commands are missing. Please install them and retry." "$LINENO"
+fi
 
 # Set default LOG_DIR if not provided
 if [ -z "$LOG_DIR" ]; then
