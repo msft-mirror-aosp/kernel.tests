@@ -3,10 +3,11 @@
 
 # A handy tool to launch CVD with local build or remote build.
 
-# Constants
-ACLOUD_PREBUILT="prebuilts/asuite/acloud/linux-x86/acloud"
-OPT_SKIP_PRERUNCHECK='--skip-pre-run-check'
-PRODUCT='aosp_cf_x86_64_phone'
+# --- Configuration Constants ---
+readonly ACLOUD_PREBUILT="prebuilts/asuite/acloud/linux-x86/acloud"
+readonly OPT_SKIP_PRERUNCHECK='--skip-pre-run-check'
+PRODUCT='aosp_cf_x86_64_only_phone'
+readonly DEFAULT_GSI_PRODUCT='gsi_x86_64' # Assuming this for GSI builds
 SKIP_BUILD=false
 USE_RBE=false
 GCOV=false
@@ -18,7 +19,26 @@ CF_KERNEL_VERSION=""
 PLATFORM_REPO_ROOT=""
 PLATFORM_VERSION=""
 
+readonly REQUIRED_COMMANDS=("adb" "grep" "basename" "dirname" "read" "realpath" "nproc" "bc")
 
+# --- Library Import ---
+SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$( cd "$( dirname "${SCRIPT_PATH}" )" &> /dev/null && pwd -P)"
+LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
+
+if [[ ! -f "$LIB_PATH" ]]; then
+    # Cannot use log_error yet as library isn't sourced
+    echo "FATAL ERROR: Cannot find required library '$LIB_PATH'" >&2
+    exit 1
+fi
+
+# Source the library. Check return code in case sourcing fails (e.g., missing dependency in lib)
+if ! . "$LIB_PATH"; then
+    echo "FATAL ERROR: Failed to source library '$LIB_PATH'. Check common_lib.sh dependencies." >&2
+    exit 1
+fi
+
+# --- Functions ---
 function print_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -64,7 +84,16 @@ function print_help() {
     exit 0
 }
 
-function parse_arg() {
+# Logs an error message and exits with the specified code (default 1).
+function fail_error() {
+    local message="$1"
+    local exit_code="${2:-1}"
+    # Pass frame offset 2 to log_error to point to the caller of fail_error
+    log_error "$message" "$exit_code" 2
+    exit "$exit_code"
+}
+
+function parse_args() {
     while test $# -gt 0; do
         case "$1" in
             -h|--help)
@@ -83,7 +112,7 @@ function parse_arg() {
                 if test $# -gt 0; then
                     PLATFORM_BUILD="$1"
                 else
-                    print_error "platform build is not specified"
+                    fail_error "platform build is not specified"
                 fi
                 shift
                 ;;
@@ -96,7 +125,7 @@ function parse_arg() {
                 if test $# -gt 0; then
                     SYSTEM_BUILD="$1"
                 else
-                    print_error "system build is not specified"
+                    fail_error "system build is not specified"
                 fi
                 shift
                 ;;
@@ -109,7 +138,7 @@ function parse_arg() {
                 if test $# -gt 0; then
                     KERNEL_BUILD="$1"
                 else
-                    print_error "kernel build path is not specified"
+                    fail_error "kernel build path is not specified"
                 fi
                 shift
                 ;;
@@ -142,7 +171,7 @@ function parse_arg() {
                 shift
                 ;;
             *)
-                print_error "Unsupported flag: $1" >&2
+                fail_error "Unsupported flag: $1" >&2
                 ;;
         esac
     done
@@ -158,7 +187,7 @@ function create_kernel_build_cmd() {
     local build_cmd=""
     if [ -f "$cf_kernel_repo_root/common-modules/virtual-device/BUILD.bazel" ]; then
         # support android-mainline, android16, android15, android14, android13
-        build_cmd+="tools/bazel run --config=fast"
+        build_cmd+="tools/bazel run"
         if [ "$GCOV" = true ]; then
             build_cmd+=" --gcov"
         fi
@@ -215,9 +244,11 @@ function greater_than_or_equal_to() {
     # This regex matches strings formatted as floating-point or integer numbers
     local num_regex="^[0]([\.][0-9]+)?$|^[1-9][0-9]*([\.][0-9]+)?$"
     if [[ ! "$num1" =~ $num_regex ]] || [[ ! "$num2" =~ $num_regex ]]; then
+        log_warn "Invalid numeric input for comparison: '$num1', '$num2'"
         return 1
     fi
 
+    # Use bc for comparison
     if [[ $(echo "$num1 >= $num2" | bc -l) -eq 1 ]]; then
         return 0
     else
@@ -250,34 +281,6 @@ function is_path_in_root() {
     fi
 }
 
-# NOTE: In a future update, the 'log_xxx' functions within 'common_lib.sh'
-# will be renamed to 'print_xxx' (e.g., 'log_info' to 'print_info') and will
-# replace the existing 'print_xxx' functions in original scripts under
-# 'kernel/test/tools'.
-function print_info() {
-    log_info "$1"
-}
-
-function print_warn() {
-    log_warn "$1"
-}
-
-function print_error() {
-    log_error "$1" "${2:-1}"
-}
-
-function set_platform_repo() {
-    print_warn "Build target product '${TARGET_PRODUCT}' does not match expected '$1'"
-    local lunch_cli="source build/envsetup.sh && lunch $1"
-    if [ -f "build/release/release_configs/trunk_staging.textproto" ]; then
-        lunch_cli+="-trunk_staging-userdebug"
-    else
-        lunch_cli+="-userdebug"
-    fi
-    print_info "Setup build environment with: $lunch_cli"
-    eval "$lunch_cli"
-}
-
 function find_repo() {
     manifest_output=$(grep -e "superproject" -e "common-modules/virtual-device" -e "default revision" \
         .repo/manifests/default.xml)
@@ -291,112 +294,206 @@ function find_repo() {
                 PLATFORM_VERSION=$(grep -oP 'default revision="(refs/tags/)?\K[^"]*' <(echo "$manifest_output"))
             fi
             if [ -z "$PLATFORM_VERSION" ]; then
-                print_error "Could not find platform version information."
+                fail_error "Could not find platform version information."
             fi
-            print_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION"
+            log_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION"
             ;;
         *kernel/superproject*)
             if [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
                 CF_KERNEL_REPO_ROOT="$PWD"
                 CF_KERNEL_VERSION=$(grep -e "common-modules/virtual-device" \
                 .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
-                print_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
+                log_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
             fi
             ;;
         *)
-            print_warn "Unexpected manifest output. Could not determine repository type."
+            log_warn "Unexpected manifest output. Could not determine repository type."
             ;;
     esac
 }
 
+# Rebuilds the platform images using 'm'. Assumes environment is already set (lunch).
+# WARNING: Uses 'eval'. Consider refactoring if build command becomes complex.
 function rebuild_platform() {
-    build_cmd=""
-    if [ "${USE_RBE}" = false ]; then
-        build_cmd+="USE_RBE=false"
+    local build_env_vars=""
+    local make_cmd="m -j$(nproc)" # Use nproc for parallelism
+
+    # Conditionally add USE_RBE=false if not enabled via flag
+    if [[ "$USE_RBE" == false ]]; then
+        build_env_vars="USE_RBE=false "
     fi
-    build_cmd+=" m -j$(nproc)"
-    print_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
-    eval "$build_cmd"
-    exit_code=$?
-    if [ $exit_code -eq 0 ]; then
-        if [ -f "${ANDROID_PRODUCT_OUT}/system.img" ]; then
-            print_info "$build_cmd succeeded"
+
+    local full_build_cmd="${build_env_vars}${make_cmd}"
+
+    log_warn "Flag --skip-build is not set. Rebuilding platform images at $PWD"
+    log_info "Executing build command: ${BOLD}${full_build_cmd}${END}"
+
+    # Execute the build command
+    local build_output build_exit_code
+    # Using eval here is still risky. If possible, invoke 'm' directly after exporting vars.
+    if build_output=$(eval "$full_build_cmd" 2>&1); then
+        build_exit_code=0
+    else
+        build_exit_code=$?
+    fi
+
+    # Check build success and output image existence
+    if [[ $build_exit_code -eq 0 ]]; then
+        if [[ -f "${ANDROID_PRODUCT_OUT}/system.img" ]]; then
+            log_info "Platform build command succeeded."
+            # log_info "Build output:\n${build_output}" # Optional: show output on success
+            return 0
         else
-            print_error "${ANDROID_PRODUCT_OUT}/system.img doesn't exist"
+            fail_error "Platform build command succeeded, but required output '${ANDROID_PRODUCT_OUT}/system.img' not found." 1
         fi
     else
-        print_warn "$build_cmd returned exit_code $exit_code or ${ANDROID_PRODUCT_OUT}/system.img is not found"
-        print_error "$build_cmd failed"
+        fail_error "Platform build command failed (Exit Code $build_exit_code). Output:\n${build_output}" "$build_exit_code"
     fi
 }
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
-if [[ -f "$LIB_PATH" ]]; then
-    if ! . "$LIB_PATH"; then
-        echo "Fatal Error：Cannot load library '$LIB_PATH'" >&2
-        exit 1
+# Rebuilds the kernel images. Assumes running in the kernel repo root.
+# WARNING: Uses 'eval'. Consider refactoring.
+function rebuild_kernel() {
+    local kernel_repo_root="$1"
+    local kernel_version="$2"
+
+    log_warn "Flag --skip-build is not set. Rebuilding kernel images at $PWD"
+
+    local build_cmd build_output build_exit_code
+
+    # Get the build command string
+    if ! build_cmd=$(create_kernel_build_cmd "$kernel_repo_root" "$kernel_version"); then
+        fail_error "Failed to determine kernel build command." 1
     fi
-else
-    echo "Fatal Error：Cannot find library '$LIB_PATH'" >&2
-    exit 1
+
+    log_info "Executing kernel build command: ${BOLD}${build_cmd}${END}"
+
+    # Execute the build command
+    # Using eval here is risky. Refactor if build_cmd structure allows.
+    if build_output=$(eval "$build_cmd" 2>&1); then
+        build_exit_code=0
+    else
+        build_exit_code=$?
+    fi
+
+    if [[ $build_exit_code -eq 0 ]]; then
+        log_info "Kernel build command succeeded."
+        # log_info "Build output:\n${build_output}" # Optional
+        return 0
+    else
+        fail_error "Kernel build command failed (Exit Code $build_exit_code). Output:\n${build_output}" "$build_exit_code"
+    fi
+}
+
+# --- Main Script Logic ---
+
+# 1. Check Core Dependencies
+log_info "Checking required commands..."
+if ! check_commands_available "${REQUIRED_COMMANDS[@]}"; then
+    fail_error "One or more required commands are missing. Please install them and retry." 1
 fi
 
-check_command "adb"
+# 2. Parse Arguments
+log_info "Parsing command line arguments..."
+parse_args "$@"
 
-parse_arg "$@"
-
-if is_in_repo_workspace; then
-    go_to_repo_root "$PWD"
+# 3. Determine Repo Root and Type
+log_info "Determining repository context..."
+repository_path="$PWD"
+if ! is_in_repo_workspace; then
+    log_warn "Current directory '$PWD' is not within an Android repo workspace."
+    repository_path="$SCRIPT_DIR"
+fi
+if ! go_to_repo_root "$repository_path"; then
+    fail_error "Failed to navigate to repo root from $PWD." 1
 else
-    print_error "Current path $PWD is not in an Android repo. Change path to repo root." 0
-    go_to_repo_root $CALLER_SCRIPT_DIR
-    print_info "Has changed path to $PWD"
+    find_repo
 fi
 
-find_repo
-
-if [ -z "$PLATFORM_BUILD" ] && [ -n "$PLATFORM_REPO_ROOT" ]; then
-    # Temporarily assigned to root. Will be reset after lunch (build target)
+# 4. Handle Platform Build/Path
+log_info "Processing platform build..."
+if [[ -z "$PLATFORM_BUILD" && -n "$PLATFORM_REPO_ROOT" ]]; then
+    log_info "Platform build not specified, using detected local platform repo: ${platform_repo_root}"
     PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
 fi
 
-if [ -n "$PLATFORM_BUILD" ] && [[ "$PLATFORM_BUILD" != ab://* ]] && [ -d "$PLATFORM_BUILD" ]; then
-    # Check if PLATFORM_BUILD is an Android platform repo, if yes rebuild
-    cd "$PLATFORM_BUILD" || print_error "Failed to cd to $PLATFORM_BUILD"
+if [[ -n "$PLATFORM_BUILD" && "$PLATFORM_BUILD" != ab://* ]]; then
+    log_info "Local platform build path specified: ${PLATFORM_BUILD}"
+    # Resolve the path
+    if ! PLATFORM_BUILD=$(realpath -- "$PLATFORM_BUILD" 2>/dev/null); then
+        fail_error "Invalid local platform build path: ${PLATFORM_BUILD}" 1
+    fi
+    if [[ ! -d "$PLATFORM_BUILD" ]]; then
+        fail_error "Local platform build path does not exist or is not a directory: ${PLATFORM_BUILD}" 1
+    fi
+
+    cd "$PLATFORM_BUILD" || fail_error "Failed to cd to $PLATFORM_BUILD"
 
     if is_in_repo_workspace; then
         go_to_repo_root "$PWD"
-        # Still need to source envsetup.sh and lunch the target, even when skipping the image build.
+
+        # Set up build environment (lunch)
+        log_info "Setting up platform build environment for product: $PRODUCT"
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "$PRODUCT" ]]; then
-            set_platform_repo "$PRODUCT"
+            log_info "TARGET_PRODUCT ('${TARGET_PRODUCT:-}') is not set or doesn't match '$PRODUCT'. Running lunch..."
+            if ! set_platform_repo "$PRODUCT" "userdebug" "$PWD"; then ## Assumes 'userdebug' variant, might need flexibility?
+                fail_error "Failed to set platform build environment (lunch)." 1
+            fi
+        else
+            log_info "Build environment already set for TARGET_PRODUCT=${TARGET_PRODUCT}."
         fi
-        if [ "$SKIP_BUILD" = false ]; then
+
+        if [[ "$SKIP_BUILD" == false ]]; then
             rebuild_platform
+        else
+            log_info "--skip-build specified, skipping platform rebuild."
         fi
-        PLATFORM_BUILD=${ANDROID_PRODUCT_OUT}
+        # After potential build, set platform_build to the actual output directory
+        if [[ -n "${ANDROID_PRODUCT_OUT:-}" && -d "${ANDROID_PRODUCT_OUT}" ]]; then
+            log_info "Setting platform build path to lunch output: ${ANDROID_PRODUCT_OUT}"
+            PLATFORM_BUILD="${ANDROID_PRODUCT_OUT}"
+        else
+            fail_error "ANDROID_PRODUCT_OUT ('${ANDROID_PRODUCT_OUT:-}') is not set or not a directory after lunch/build attempt." 1
+        fi
     else
-        [[ "$SKIP_BUILD" == false ]] && print_warn "Cannot rebuild, current path $PWD is not a valid Android repo."
+        if [[ "$SKIP_BUILD" == false ]]; then
+            log_warn "Local platform build path provided ('${PLATFORM_BUILD}'). --skip-build was not used, but automatic rebuilding is only done when running from within the platform repo source directory."
+        else
+            log_info "Current path $PWD is not a valid Android platform repo, please ensure it contains the platform image."
+        fi
     fi
 fi
 
+# 5. Handle System Build/Path
 if [ "$SKIP_BUILD" = false ] && [ -n "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" != ab://* ]] \
 && [ -d "$SYSTEM_BUILD" ]; then
     # Get GSI build
-    cd "$SYSTEM_BUILD" || print_error "Failed to cd to $SYSTEM_BUILD"
+    cd "$SYSTEM_BUILD" || fail_error "Failed to cd to $SYSTEM_BUILD"
     SYSTEM_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$SYSTEM_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
-        if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "aosp_x86_64" ]]; then
-            set_platform_repo "aosp_x86_64"
+        if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "${DEFAULT_GSI_PRODUCT}" ]]; then
+            log_warn "Build target product '${TARGET_PRODUCT}' does not match expected '${DEFAULT_GSI_PRODUCT}'. Reset build environment."
+            set_platform_repo "${DEFAULT_GSI_PRODUCT}"
             rebuild_platform
             SYSTEM_BUILD="${ANDROID_PRODUCT_OUT}/system.img"
         fi
     fi
 fi
 
-if  [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]]; then
-    cd "$KERNEL_BUILD" || print_error "Failed to cd to $KERNEL_BUILD"
+# 6. Handle Kernel Build/Path
+if  [[ -n "$KERNEL_BUILD" && "$KERNEL_BUILD" != ab://* ]]; then
+    log_info "Local kernel build path specified: ${KERNEL_BUILD}"
+    # Resolve the path
+    if ! KERNEL_BUILD=$(realpath -- "$KERNEL_BUILD" 2>/dev/null); then
+         fail_error "Invalid local kernel build path: ${KERNEL_BUILD}" 1
+    fi
+    if [[ ! -d "$KERNEL_BUILD" ]]; then
+         fail_error "Local kernel build path does not exist or is not a directory: ${KERNEL_BUILD}" 1
+    fi
+
+    log_info "Changing directory to kernel build: ${KERNEL_BUILD}"
+    cd -- "$KERNEL_BUILD" || fail_error "Failed to cd into kernel build directory: ${KERNEL_BUILD}" 1
 
     if is_in_repo_workspace; then
         go_to_repo_root "$PWD"
@@ -404,68 +501,79 @@ if  [ -n "$KERNEL_BUILD" ] && [[ "$KERNEL_BUILD" != ab://* ]]; then
         target_cf_kernel_version=$(grep -e "common-modules/virtual-device" \
         .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
 
-        print_info "target_kernel_repo_root=$target_kernel_repo_root, target_cf_kernel_version=$target_cf_kernel_version"
+        log_info "target_kernel_repo_root=$target_kernel_repo_root, target_cf_kernel_version=$target_cf_kernel_version"
 
-        output=$(create_kernel_build_path "$target_cf_kernel_version" 2>&1)
-        if [[ $? -ne 0 ]]; then
-            print_error "$output"
-        fi
-
-        KERNEL_BUILD="${target_kernel_repo_root}/$output"
-        print_info "KERNEL_BUILD=$KERNEL_BUILD"
-
+        # Rebuild if not skipped
         if [[ "$SKIP_BUILD" == false ]]; then
-            output=$(create_kernel_build_cmd $PWD $target_cf_kernel_version 2>&1)
-            if [[ $? -ne 0 ]]; then
-                print_error "$output"
-            fi
-            build_cmd="$output"
-            print_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
-            eval "$build_cmd" && print_info "$build_cmd succeeded" || print_error "$build_cmd failed"
-        fi
-
-        if [ ! -d "$KERNEL_BUILD" ]; then
-            message="Built kernel not found."
-            if [[ "$SKIP_BUILD" == true ]]; then
-                message+=" Don't skip re-building the kernel."
-            fi
-            print_error "$message"
-        fi
-    else
-        print_warn "Current path $PWD is not a valid Android repo, please ensure it contains the kernel"
-    fi
-fi
-
-if [ -z "$ACLOUD_BIN" ] || ! [ -x "$ACLOUD_BIN" ]; then
-    output=$(which acloud 2>&1)
-    if [ -z "$output" ]; then
-        print_info "Use acloud binary from $ACLOUD_PREBUILT"
-        if [ -n "${PLATFORM_REPO_ROOT}" ]; then
-            ACLOUD_PREBUILT="${PLATFORM_REPO_ROOT}/${ACLOUD_PREBUILT}"
-        elif  [ -n "${CF_KERNEL_REPO_ROOT}" ]; then
-            ACLOUD_PREBUILT="${CF_KERNEL_REPO_ROOT}/${ACLOUD_PREBUILT}"
+            rebuild_kernel "$target_kernel_repo_root" "$target_cf_kernel_version" # Assumes PWD is kernel root
         else
-            print_error "Unable to determine repository root path from repo manifest"
+            log_info "--skip-build specified, skipping kernel rebuild."
         fi
-        ACLOUD_BIN="$ACLOUD_PREBUILT"
-    else
-        print_info "Use acloud binary from $output"
-        ACLOUD_BIN="$output"
-    fi
 
-    # Check if the newly found or prebuilt ACLOUD_BIN is executable
-    if ! [ -x "$ACLOUD_BIN" ]; then
-        print_error "$ACLOUD_BIN is not executable"
+        # Determine the expected output path after potential build
+        kernel_out_path=""
+        if ! kernel_out_path=$(create_kernel_build_path "$target_cf_kernel_version"); then
+            fail_error "Failed to determine kernel build output path for version ${cf_kernel_version}." 1
+        fi
+        full_kernel_path="${target_kernel_repo_root}/${kernel_out_path}"
+
+        # Check if the expected output directory exists
+        if [[ -d "$full_kernel_path" ]]; then
+            log_info "Setting kernel build path to detected output: ${full_kernel_path}"
+            KERNEL_BUILD="$full_kernel_path"
+        else
+            err_msg="Expected kernel build output directory '${full_kernel_path}' not found."
+            if [[ "$SKIP_BUILD" == true ]]; then
+                err_msg+="Don't skip re-building the kernel image."
+            fi
+            fail_error "$err_msg" 1
+        fi
+    else
+        if [[ "$SKIP_BUILD" == false ]]; then
+            log_warn "Local kernel build path provided ('${KERNEL_BUILD}'). --skip-build was not used, but automatic rebuilding is only done when running from within the kernel repo source directory."
+        else
+            log_info  "Current path $PWD is not a valid Android repo, please ensure it contains the kernel image."
+        fi
     fi
 fi
+
+# 7. Find acloud Binary
+if [ -z "$ACLOUD_BIN" ] || ! [ -x "$ACLOUD_BIN" ]; then
+    log_info "Acloud binary path not specified or is not executable(--acloud-bin). Searching..."
+    if ACLOUD_BIN=$(which acloud 2>&1); then
+        log_info "Use acloud binary from: ${ACLOUD_BIN}"
+    else
+        # Fallback to prebuilt location relative to a detected repo root
+        potential_prebuilt_path=""
+        if [ -n "${PLATFORM_REPO_ROOT}" ]; then
+            potential_prebuilt_path="${PLATFORM_REPO_ROOT}/${ACLOUD_PREBUILT}"
+        elif  [ -n "${CF_KERNEL_REPO_ROOT}" ]; then
+            potential_prebuilt_path="${CF_KERNEL_REPO_ROOT}/${ACLOUD_PREBUILT}"
+        fi
+
+        if [[ -n "$potential_prebuilt_path" && -x "$potential_prebuilt_path" ]]; then
+            log_info "Using prebuilt acloud from repository: ${potential_prebuilt_path}"
+            ACLOUD_BIN="$potential_prebuilt_path"
+        else
+            fail_error "Could not find 'acloud' in PATH and failed to locate a valid prebuilt acloud in detected repo roots (${platform_repo_root:-none}, ${cf_kernel_repo_root:-none}). Specify path using --acloud-bin."
+        fi
+    fi
+fi
+
+
+# Final check if the determined/specified acloud binary is executable
+if [[ ! -x "$ACLOUD_BIN" ]]; then
+    fail_error "Acloud binary found or specified is not executable: ${ACLOUD_BIN}"
+fi
+log_info "Using acloud binary: ${BOLD}${ACLOUD_BIN}${END}"
 
 acloud_cli="$ACLOUD_BIN create"
 EXTRA_OPTIONS+=("$OPT_SKIP_PRERUNCHECK")
 
 # Add in branch if not specified
-
+# 8. Construct acloud Command Arguments
 if [ -z "$PLATFORM_BUILD" ]; then
-    print_warn "Platform build is not specified, will use the latest git_main build."
+    log_warn "Platform build was not specified, and could not be determined from local repo. Will use the latest git_main build."
     acloud_cli+=' --branch git_main'
 elif [[ "$PLATFORM_BUILD" == ab://* ]]; then
     IFS='/' read -ra array <<< "$PLATFORM_BUILD"
@@ -485,7 +593,7 @@ else
 fi
 
 if [ -z "$KERNEL_BUILD" ]; then
-    print_warn "Flag --kernel-build is not set, will not launch Cuttlefish with different kernel."
+    log_warn "Flag --kernel-build is not set, will not launch Cuttlefish with different kernel."
 elif [[ "$KERNEL_BUILD" == ab://* ]]; then
     IFS='/' read -ra array <<< "$KERNEL_BUILD"
     acloud_cli+=" --kernel-branch ${array[2]}"
@@ -504,7 +612,7 @@ else
 fi
 
 if [ -z "$SYSTEM_BUILD" ]; then
-    print_warn "System build is not specified, will not launch Cuttlefish with GSI mixed build."
+    log_warn "System build is not specified, will not launch Cuttlefish with GSI mixed build."
 elif [[ "$SYSTEM_BUILD" == ab://* ]]; then
     IFS='/' read -ra array <<< "$SYSTEM_BUILD"
     acloud_cli+=" --system-branch ${array[2]}"
@@ -522,6 +630,7 @@ else
     acloud_cli+=" --local-system-image $SYSTEM_BUILD"
 fi
 
+# 9. Execute acloud Command
 acloud_cli+=" ${EXTRA_OPTIONS[*]}"
-print_info "Launch CVD with command: $acloud_cli"
+log_info "Launch CVD with command: $acloud_cli"
 eval "$acloud_cli"
