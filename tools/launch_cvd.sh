@@ -576,17 +576,17 @@ if [ -z "$PLATFORM_BUILD" ]; then
     log_warn "Platform build was not specified, and could not be determined from local repo. Will use the latest git_main build."
     acloud_cli+=' --branch git_main'
 elif [[ "$PLATFORM_BUILD" == ab://* ]]; then
-    IFS='/' read -ra array <<< "$PLATFORM_BUILD"
-    acloud_cli+=" --branch ${array[2]}"
+    ab_branch="" ab_target="" ab_id=""
 
-    # Check if array[3] exists before using it
-    if [ ${#array[@]} -ge 3 ] && [ -n "${array[3]}" ]; then
-        acloud_cli+=" --build-target ${array[3]}"
+    parse_ab_url "$PLATFORM_BUILD" ab_branch ab_target ab_id
+    if [[ $? -ne 0 ]]; then
+        fail_error "Platform Build URL $PLATFORM_BUILD parsing failed" 1
+    fi
 
-        # Check if array[4] exists and is not 'latest' before using it
-        if [ ${#array[@]} -ge 4 ] && [ -n "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
-            acloud_cli+=" --build-id ${array[4]}"
-        fi
+    acloud_cli+=" --branch ${ab_branch}"
+    acloud_cli+=" --build-target ${ab_target}"
+    if [[ "${ab_id}" != "latest" ]]; then
+        acloud_cli+=" --build-id ${ab_id}"
     fi
 else
     acloud_cli+=" --local-image $PLATFORM_BUILD"
@@ -595,17 +595,17 @@ fi
 if [ -z "$KERNEL_BUILD" ]; then
     log_warn "Flag --kernel-build is not set, will not launch Cuttlefish with different kernel."
 elif [[ "$KERNEL_BUILD" == ab://* ]]; then
-    IFS='/' read -ra array <<< "$KERNEL_BUILD"
-    acloud_cli+=" --kernel-branch ${array[2]}"
+    ab_branch="" ab_target="" ab_id=""
 
-    # Check if array[3] exists before using it
-    if [ ${#array[@]} -ge 3 ] && [ -n "${array[3]}" ]; then
-        acloud_cli+=" --kernel-build-target ${array[3]}"
+    parse_ab_url "$KERNEL_BUILD" ab_branch ab_target ab_id
+    if [[ $? -ne 0 ]]; then
+        fail_error "Kernel Build URL $KERNEL_BUILD parsing failed" 1
+    fi
 
-        # Check if array[4] exists and is not 'latest' before using it
-        if [ ${#array[@]} -ge 4 ] && [ -n "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
-            acloud_cli+=" --kernel-build-id ${array[4]}"
-        fi
+    acloud_cli+=" --kernel-branch ${ab_branch}"
+    acloud_cli+=" --kernel-build-target ${ab_target}"
+    if [[ "${ab_id}" != "latest" ]]; then
+        acloud_cli+=" --kernel-build-id ${ab_id}"
     fi
 else
     acloud_cli+=" --local-kernel-image $KERNEL_BUILD"
@@ -614,17 +614,17 @@ fi
 if [ -z "$SYSTEM_BUILD" ]; then
     log_warn "System build is not specified, will not launch Cuttlefish with GSI mixed build."
 elif [[ "$SYSTEM_BUILD" == ab://* ]]; then
-    IFS='/' read -ra array <<< "$SYSTEM_BUILD"
-    acloud_cli+=" --system-branch ${array[2]}"
+    ab_branch="" ab_target="" ab_id=""
 
-     # Check if array[3] exists before using it
-    if [ ${#array[@]} -ge 3 ] && [ -n "${array[3]}" ]; then
-        acloud_cli+=" --system-build-target ${array[3]}"
+    parse_ab_url "$SYSTEM_BUILD" ab_branch ab_target ab_id
+    if [[ $? -ne 0 ]]; then
+        fail_error "System Build URL $SYSTEM_BUILD parsing failed" 1
+    fi
 
-        # Check if array[4] exists and is not 'latest' before using it
-        if [ ${#array[@]} -ge 4 ] && [ -n "${array[4]}" ] && [ "${array[4]}" != 'latest' ]; then
-            acloud_cli+=" --system-build-id ${array[4]}"
-        fi
+    acloud_cli+=" --system-branch ${ab_branch}"
+    acloud_cli+=" --system-build-target ${ab_target}"
+    if [[ "${ab_id}" != "latest" ]]; then
+        acloud_cli+=" --system-build-id ${ab_id}"
     fi
 else
     acloud_cli+=" --local-system-image $SYSTEM_BUILD"
