@@ -464,4 +464,46 @@ function set_platform_repo() {
     return 0 # Success
 }
 
+function parse_ab_url() {
+    local url="$1"
+    local branch_var="$2"
+    local target_var="$3"
+    local id_var="$4"
+
+    if [[ "$url" != ab://* ]]; then
+        log_error "Invalid ab URL format: $url" 1
+        return 1
+    fi
+
+    local path_part="${url#ab://}"
+    local -a parts=()
+    local IFS='/'
+    read -r -a parts <<< "$path_part"
+
+    if [[ ${#parts[@]} -lt 2 ]]; then # Must have at least branch and target
+        log_error "Malformed ab URL (not enough parts): $url" 1
+        return 1
+    fi
+
+    if [[ -z "${parts[0]}" ]]; then
+        log_error "branch variable has no value, check url format: $url" 1
+        return 1
+    fi
+
+    if [[ -z "${parts[1]}" ]]; then
+        log_error "target variable has no value, check url format: $url" 1
+        return 1
+    fi
+    printf -v "$branch_var" "%s" "${parts[0]}"
+    printf -v "$target_var" "%s" "${parts[1]}"
+
+    if [[ ${#parts[@]} -ge 3 && -n "${parts[2]}" ]]; then
+        printf -v "$id_var" "%s" "${parts[2]}"
+    else
+        log_warn "id variable is empty, use 'latest' as default id"
+        printf -v "$id_var" "%s" "latest"
+    fi
+    return 0
+}
+
 log_info "common_lib.sh sourced successfully."
