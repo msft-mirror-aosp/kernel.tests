@@ -32,6 +32,7 @@ BUILD_TYPE=
 DEVICE_KERNEL_STRING=
 DEVICE_KERNEL_VERSION=
 SYSTEM_DLKM_INFO=
+readonly REQUIRED_COMMANDS=("adb" "dirname")
 
 function print_help() {
     echo "Usage: $0 [OPTIONS]"
@@ -211,14 +212,6 @@ function adb_checker() {
     if ! which adb &> /dev/null; then
         print_error "adb not found!"
     fi
-}
-
-function go_to_repo_root() {
-    current_dir="$1"
-    while [ ! -d ".repo" ] && [ "$current_dir" != "/" ]; do
-        current_dir=$(dirname "$current_dir")  # Go up one directory
-        cd "$current_dir"
-    done
 }
 
 function print_info() {
@@ -1363,7 +1356,8 @@ function get_device_info() {
     print_error "$SERIAL_NUMBER is not connected with adb or fastboot" "$LINENO"
 }
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$( cd "$( dirname "${SCRIPT_PATH}" )" &> /dev/null && pwd -P)"
 LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
 if [[ -f "$LIB_PATH" ]]; then
     if ! . "$LIB_PATH"; then
@@ -1375,7 +1369,10 @@ else
     exit 1
 fi
 
-check_command "adb"
+print_info "Checking required commands..." "$LINENO"
+if ! check_commands_available "${REQUIRED_COMMANDS[@]}"; then
+    print_error "One or more required commands are missing. Please install them and retry." "$LINENO"
+fi
 
 LOCAL_REPO=
 
