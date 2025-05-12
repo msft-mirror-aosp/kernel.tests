@@ -256,31 +256,6 @@ function greater_than_or_equal_to() {
     fi
 }
 
-# Checks if target_path is within root_directory
-function is_path_in_root() {
-    local root_directory="$1"
-    local target_path="$2"
-
-    # expand the path variable, for example:
-    # "~/Documents" becomes "/home/user/Documents"
-    root_directory=$(eval echo "$root_directory")
-    target_path=$(eval echo "$target_path")
-
-    # remove the trailing slashes
-    root_directory=$(realpath -m "$root_directory")
-    target_path=$(realpath -m "$target_path")
-
-    # handles the corner case, for example:
-    # $root_directory="/home/user/Doc", $target_path="/home/user/Documents/"
-    root_directory="${root_directory}/"
-
-    if [[ "$target_path" = "$root_directory"* ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 function find_repo() {
     manifest_output=$(grep -e "superproject" -e "common-modules/virtual-device" -e "default revision" \
         .repo/manifests/default.xml)
@@ -315,39 +290,24 @@ function find_repo() {
 # Rebuilds the platform images using 'm'. Assumes environment is already set (lunch).
 # WARNING: Uses 'eval'. Consider refactoring if build command becomes complex.
 function rebuild_platform() {
-    local build_env_vars=""
-    local make_cmd="m -j$(nproc)" # Use nproc for parallelism
-
     # Conditionally add USE_RBE=false if not enabled via flag
-    if [[ "$USE_RBE" == false ]]; then
-        build_env_vars="USE_RBE=false "
-    fi
-
-    local full_build_cmd="${build_env_vars}${make_cmd}"
-
+    $USE_RBE || set_env_var "USE_RBE" false
+    local build_cmd_parts=("m" "-j$(nproc)") # Use nproc for parallelism
     log_warn "Flag --skip-build is not set. Rebuilding platform images at $PWD"
-    log_info "Executing build command: ${BOLD}${full_build_cmd}${END}"
+    log_info "Executing build command: ${BOLD}${build_cmd_parts[*]}${END}"
 
     # Execute the build command
-    local build_output build_exit_code
-    # Using eval here is still risky. If possible, invoke 'm' directly after exporting vars.
-    if build_output=$(eval "$full_build_cmd" 2>&1); then
-        build_exit_code=0
-    else
-        build_exit_code=$?
-    fi
-
-    # Check build success and output image existence
-    if [[ $build_exit_code -eq 0 ]]; then
+    run_command "${build_cmd_parts[@]}"
+    build_status=$?
+    if (( build_status == 0 )); then
         if [[ -f "${ANDROID_PRODUCT_OUT}/system.img" ]]; then
             log_info "Platform build command succeeded."
-            # log_info "Build output:\n${build_output}" # Optional: show output on success
             return 0
         else
             fail_error "Platform build command succeeded, but required output '${ANDROID_PRODUCT_OUT}/system.img' not found." 1
         fi
     else
-        fail_error "Platform build command failed (Exit Code $build_exit_code). Output:\n${build_output}" "$build_exit_code"
+        fail_error "Platform build command failed." "$build_status"
     fi
 }
 
@@ -359,7 +319,7 @@ function rebuild_kernel() {
 
     log_warn "Flag --skip-build is not set. Rebuilding kernel images at $PWD"
 
-    local build_cmd build_output build_exit_code
+    local build_cmd build_status
 
     # Get the build command string
     if ! build_cmd=$(create_kernel_build_cmd "$kernel_repo_root" "$kernel_version"); then
@@ -370,18 +330,12 @@ function rebuild_kernel() {
 
     # Execute the build command
     # Using eval here is risky. Refactor if build_cmd structure allows.
-    if build_output=$(eval "$build_cmd" 2>&1); then
-        build_exit_code=0
-    else
-        build_exit_code=$?
-    fi
-
-    if [[ $build_exit_code -eq 0 ]]; then
+    eval "$build_cmd"
+    build_status=$?
+    if (( build_status == 0 )); then
         log_info "Kernel build command succeeded."
-        # log_info "Build output:\n${build_output}" # Optional
-        return 0
     else
-        fail_error "Kernel build command failed (Exit Code $build_exit_code). Output:\n${build_output}" "$build_exit_code"
+        fail_error "Kernel build command failed" build "$build_status"
     fi
 }
 
@@ -567,70 +521,65 @@ if [[ ! -x "$ACLOUD_BIN" ]]; then
 fi
 log_info "Using acloud binary: ${BOLD}${ACLOUD_BIN}${END}"
 
-acloud_cli="$ACLOUD_BIN create"
+acloud_cmd_parts=("$ACLOUD_BIN" "create")
 EXTRA_OPTIONS+=("$OPT_SKIP_PRERUNCHECK")
 
 # Add in branch if not specified
 # 8. Construct acloud Command Arguments
 if [ -z "$PLATFORM_BUILD" ]; then
     log_warn "Platform build was not specified, and could not be determined from local repo. Will use the latest git_main build."
-    acloud_cli+=' --branch git_main'
+    acloud_cmd_parts+=("--branch" "git_main")
 elif [[ "$PLATFORM_BUILD" == ab://* ]]; then
     ab_branch="" ab_target="" ab_id=""
-
     parse_ab_url "$PLATFORM_BUILD" ab_branch ab_target ab_id
     if [[ $? -ne 0 ]]; then
         fail_error "Platform Build URL $PLATFORM_BUILD parsing failed" 1
     fi
-
-    acloud_cli+=" --branch ${ab_branch}"
-    acloud_cli+=" --build-target ${ab_target}"
+    acloud_cmd_parts+=("--branch" "${ab_branch}")
+    acloud_cmd_parts+=("--build-target" "${ab_target}")
     if [[ "${ab_id}" != "latest" ]]; then
-        acloud_cli+=" --build-id ${ab_id}"
+        acloud_cmd_parts+=("--build-id" "${ab_id}")
     fi
 else
-    acloud_cli+=" --local-image $PLATFORM_BUILD"
+    acloud_cmd_parts+=("--local-image" "$PLATFORM_BUILD")
 fi
 
 if [ -z "$KERNEL_BUILD" ]; then
     log_warn "Flag --kernel-build is not set, will not launch Cuttlefish with different kernel."
 elif [[ "$KERNEL_BUILD" == ab://* ]]; then
     ab_branch="" ab_target="" ab_id=""
-
     parse_ab_url "$KERNEL_BUILD" ab_branch ab_target ab_id
     if [[ $? -ne 0 ]]; then
         fail_error "Kernel Build URL $KERNEL_BUILD parsing failed" 1
     fi
 
-    acloud_cli+=" --kernel-branch ${ab_branch}"
-    acloud_cli+=" --kernel-build-target ${ab_target}"
+    acloud_cmd_parts+=("--kernel-branch" "${ab_branch}")
+    acloud_cmd_parts+=("--kernel-build-target" "${ab_target}")
     if [[ "${ab_id}" != "latest" ]]; then
-        acloud_cli+=" --kernel-build-id ${ab_id}"
+        acloud_cmd_parts+=("--kernel-build-id" "${ab_id}")
     fi
 else
-    acloud_cli+=" --local-kernel-image $KERNEL_BUILD"
+    acloud_cmd_parts+=("--local-kernel-image" "$KERNEL_BUILD")
 fi
 
 if [ -z "$SYSTEM_BUILD" ]; then
     log_warn "System build is not specified, will not launch Cuttlefish with GSI mixed build."
 elif [[ "$SYSTEM_BUILD" == ab://* ]]; then
     ab_branch="" ab_target="" ab_id=""
-
     parse_ab_url "$SYSTEM_BUILD" ab_branch ab_target ab_id
     if [[ $? -ne 0 ]]; then
         fail_error "System Build URL $SYSTEM_BUILD parsing failed" 1
     fi
-
-    acloud_cli+=" --system-branch ${ab_branch}"
-    acloud_cli+=" --system-build-target ${ab_target}"
+    acloud_cmd_parts+=("--system-branch" "${ab_branch}")
+    acloud_cmd_parts+=("--system-build-target" "${ab_target}")
     if [[ "${ab_id}" != "latest" ]]; then
-        acloud_cli+=" --system-build-id ${ab_id}"
+        acloud_cmd_parts+=("--system-build-id" "${ab_id}")
     fi
 else
-    acloud_cli+=" --local-system-image $SYSTEM_BUILD"
+    acloud_cmd_parts+=("--local-system-image" "$SYSTEM_BUILD")
 fi
 
 # 9. Execute acloud Command
-acloud_cli+=" ${EXTRA_OPTIONS[*]}"
-log_info "Launch CVD with command: $acloud_cli"
-eval "$acloud_cli"
+acloud_cmd_parts+=("${EXTRA_OPTIONS[@]}")
+log_info "Launch CVD with command: ${acloud_cmd_parts[*]}"
+run_command "${acloud_cmd_parts[@]}"
