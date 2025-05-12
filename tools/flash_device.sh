@@ -585,7 +585,7 @@ function download_platform_build() {
     local _build_info="$PLATFORM_BUILD"
     local _file_patterns=("*$PRODUCT-img-*.zip" "radio.img")
     if [ "$SKIP_UPDATE_BOOTLOADER" = false ]; then
-        _file_pattern+=("bootloader.img")
+        _file_patterns+=("bootloader.img")
     fi
     if [ -n "$VENDOR_KERNEL_BUILD" ]; then
         _file_patterns+=("misc_info.txt" "otatools.zip")
