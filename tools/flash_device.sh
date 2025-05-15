@@ -681,7 +681,7 @@ function download_vendor_kernel_build() {
     local _build_info="$1"
     local _file_patterns=("Image.lz4" "dtbo.img" "initramfs.img")
 
-    if [[ "$VENDOR_KERNEL_VERSION" == *6.6 ]]; then
+    if [[ "$VENDOR_KERNEL_VERSION" == *6.6 ]] || [[ "$VENDOR_KERNEL_VERSION" == *6.12 ]]; then
         _file_patterns+=("*vendor_dev_nodes_fragment.img")
     fi
 
