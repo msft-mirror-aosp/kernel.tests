@@ -909,21 +909,23 @@ function wait_for_device_in_adb() {
 
 function find_flashstation_binary() {
     if [ -x "${ANDROID_HOST_OUT}/bin/local_flashstation" ]; then
-        $LOCAL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/local_flashstation"
+        LOCAL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/local_flashstation"
     elif [ ! -x "$LOCAL_FLASH_CLI" ]; then
         if ! which local_flashstation &> /dev/null; then
-            print_error "Can not find local_flashstation binary. \
-            Please see go/web-flashstation-command-line to download it" "$LINENO"
+            print_warn "Can not find local_flashstation binary. Will use fastboot to flash device. \
+            Please see go/web-flashstation-command-line to download flashstation cli" "$LINENO"
+            LOCAL_FLASH_CLI=
         else
             LOCAL_FLASH_CLI="local_flashstation"
         fi
     fi
     if [ -x "${ANDROID_HOST_OUT}/bin/cl_flashstation" ]; then
-        $CL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/cl_flashstation"
+        CL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/cl_flashstation"
     elif [ ! -x "$CL_FLASH_CLI" ]; then
         if ! which cl_flashstation &> /dev/null; then
-            print_error "Can not find cl_flashstation binary. \
-            Please see go/web-flashstation-command-line to download it" "$LINENO"
+            print_warn "Can not find cl_flashstation binary. Will use fastboot to flash device. \
+            Please see go/web-flashstation-command-line to download flashstation cli" "$LINENO"
+            CL_FLASH_CLI=
         else
             CL_FLASH_CLI="cl_flashstation"
         fi
@@ -931,7 +933,7 @@ function find_flashstation_binary() {
 }
 
 function flash_platform_build() {
-    if [ "$SKIP_UPDATE_BOOTLOADER" = true ] && [[ "$PLATFORM_BUILD" == ab://* ]]; then
+    if [ "$SKIP_UPDATE_BOOTLOADER" = true ] && [[ "$PLATFORM_BUILD" == ab://* ]] || [ -z "$CL_FLASH_CLI"]; then
         if [ -d "$DOWNLOAD_PATH/device_dir" ]; then
             rm -rf "$DOWNLOAD_PATH/device_dir"
         fi
