@@ -176,6 +176,11 @@ function log_error() {
 
 function check_command() {
     local cmd="$1"
+    if [[ -z "$cmd" ]]; then
+        log_error "Usage: check_command <cmd>"
+        return 1
+    fi
+
     if command -v "$cmd" &> /dev/null; then
         return 0
     else
