@@ -113,7 +113,7 @@ function _print_log() {
     caller_info=$(caller "$frame_to_report" 2>/dev/null) || caller_info="? <unknown> <unknown>"
 
     # Simple parsing of caller output (e.g., "123 my_func ./script.sh")
-    local caller_line caller_function caller_path caller_file context_info=""
+    local caller_line="" caller_function="" caller_path="" caller_file="" context_info=""
     if read -r caller_line caller_function caller_path <<< "$caller_info"; then
          caller_file=$(basename "$caller_path")
          context_info="[$caller_file:$caller_line ($caller_function)]"
@@ -176,6 +176,11 @@ function log_error() {
 
 function check_command() {
     local cmd="$1"
+    if [[ -z "$cmd" ]]; then
+        log_error "Usage: check_command <cmd>"
+        return 1
+    fi
+
     if command -v "$cmd" &> /dev/null; then
         return 0
     else
@@ -261,15 +266,15 @@ function go_to_repo_root() {
 
     log_info "Repo root found: '${repo_root}'. Changing directory..."
 
-    # Attempt to change directory
-    if cd -- "$repo_root"; then
-        log_info "Successfully changed directory to repo root: $PWD"
-        return 0
-    else
-        cd_status=$?
+    cd -- "$repo_root" &>/dev/null
+    cd_status=$?
+    if (( cd_status != 0 )); then
         log_error "Failed to change directory to: '${repo_root}'" "$cd_status"
         return "$cd_status"
     fi
+
+    log_info "Successfully changed directory to repo root: $PWD"
+    return 0
 }
 
 function is_in_repo_workspace() {
@@ -287,7 +292,7 @@ function is_in_repo_workspace() {
     repo_output=$( (cd -- "$resolved_path" && repo list) 2>&1 >/dev/null )
     repo_status=$?
 
-    if [[ $repo_status -ne 0 ]]; then
+    if (( repo_status != 0 )); then
         # Log detailed warning including repo command output for debugging
         log_warn "'repo list' command failed (exit code $repo_status) in '$resolved_path'. Not a repo workspace or repo tool issue? Output: ${repo_output}" "$repo_status"
     fi
@@ -344,7 +349,8 @@ function is_platform_repo() {
     # Run in a subshell to cd safely and capture output/errors
     output=$( (cd -- "$resolved_path" && repo list -p) 2>&1 )
     repo_status=$?
-    if [[ $repo_status -ne 0 ]]; then
+
+    if (( repo_status != 0 )); then
         log_error "'repo list -p' failed in '${resolved_path}' (Exit Code $repo_status):$(printf '\n%s' "$output")" "$repo_status"
         return 1
     fi
@@ -406,25 +412,27 @@ function set_platform_repo() {
     # Use pushd/popd to manage directory changes reliably
     log_info "Changing directory to '${resolved_root}' for setup..."
 
-    if pushd "$resolved_root" > /dev/null; then
-        log_info "Changed directory to '${resolved_root}' successfully."
-    else
-        local pushd_status=$?
+    pushd "$resolved_root" > /dev/null
+    local pushd_status=$?
+    if (( pushd_status != 0 )); then
         log_error "Failed to pushd into platform root: '${resolved_root}'" "$pushd_status"
         return "$pushd_status"
     fi
 
-    # Source the setup script. This executes it in the CURRENT shell.
-    log_info "Sourcing ${envsetup_script}..."
+    log_info "Changed directory to '${resolved_root}' successfully."
 
-    if . "${envsetup_script}"; then
-        log_info "Sourced envsetup.sh successfully."
-    else
-        local source_status=$?
+    # Source the setup script. This executes it in the CURRENT shell.
+    env_cmd=("." "${envsetup_script}")
+    log_info "Sourcing Script: ${env_cmd[*]}..."
+    run_command "${env_cmd[@]}"
+    local source_status=$?
+    if (( source_status != 0 )); then
         log_error "Sourcing ${envsetup_script} failed." "$source_status"
         popd > /dev/null
         return "$source_status"
     fi
+
+    log_info "Sourced envsetup.sh successfully."
 
     # Run the lunch command (should be defined after sourcing envsetup.sh).
     if ! check_command "lunch"; then
@@ -438,6 +446,7 @@ function set_platform_repo() {
     local lunch_output
     local temp_file=$(mktemp)
     lunch "${lunch_target}" 1>"$temp_file" 2>&1
+    local lunch_status=$?
     lunch_output=$(cat "$temp_file")
     # Clean up the temporary file
     rm "$temp_file"
@@ -445,23 +454,19 @@ function set_platform_repo() {
     if [[ "$lunch_output" != *"error:"* ]]; then
         log_info "Build environment successfully set for ${lunch_target}."
     else
-        lunch_status=$?
-        log_error "'lunch ${lunch_target}' failed (Exit Code $lunch_status). Output:$(printf '\n%s' "$lunch_output")" "$lunch_status"
+        log_error "'lunch ${lunch_target}' failed. Output:$(printf '\n%s' "$lunch_output")" "$lunch_status"
         popd > /dev/null
         return "$lunch_status"
     fi
 
-    # log_info "Returning to original directory..."
-    if popd > /dev/null; then
-        log_info "Returned to original directory: $PWD"
-    else
-        local popd_status=$?
-        # This is unusual if pushd succeeded, log warning but don't fail the overall function
+    popd > /dev/null
+    local popd_status=$?
+    if (( popd_status != 0 )); then
         log_warn "popd failed (Exit Code ${popd_status}) after successful setup. Current directory: $PWD"
     fi
 
-    log_info "Setup complete. Returning to original directory via popd trap."
-    return 0 # Success
+    log_info "Setup complete. Returned to original directory via popd."
+    return 0
 }
 
 function parse_ab_url() {
@@ -503,6 +508,38 @@ function parse_ab_url() {
         log_warn "id variable is empty, use 'latest' as default id"
         printf -v "$id_var" "%s" "latest"
     fi
+    return 0
+}
+
+function run_command() {
+    local -a command_to_run=("$@")
+    local status_code
+
+    # log_info "Running: '${command_to_run[*]}'"
+
+    "${command_to_run[@]}"
+    status_code=$?
+    if (( status_code == 0 )); then
+        log_info "Succeeded."
+    else
+        log_error "Failed." "$status_code"
+    fi
+
+    return $status_code
+}
+
+function set_env_var() {
+    local var_name="$1"
+    local var_value="$2"
+
+    # Validate variable name (POSIX-compliant)
+    if ! [[ "$var_name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        log_error "Invalid environment variable name '$var_name'"
+        return 1
+    fi
+
+    export "$var_name=$var_value"
+    log_info "Exported environment variable: ${var_name}='${var_value}'"
     return 0
 }
 
