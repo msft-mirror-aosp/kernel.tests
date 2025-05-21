@@ -1328,7 +1328,7 @@ function get_device_info() {
         return 0
     fi
 
-    if [ -x pontis ]; then
+    if [[ -x "$(command -v pontis)" ]]; then
         local _pontis_device=$(pontis devices | grep "$SERIAL_NUMBER")
         if [[ "$_pontis_device" == *Fastboot* ]]; then
             DEVICE_SERIAL_NUMBER="$SERIAL_NUMBER"
@@ -1375,38 +1375,26 @@ if [ -z "$SERIAL_NUMBER" ]; then
     print_error "Device serial is not provided with flag -s <serial_number>." "$LINENO"
 fi
 
-get_device_info
-
-FULL_COMMAND_PATH=$(dirname "$PWD/$0")
-REPO_LIST_OUT=$(repo list 2>&1)
-if [[ "$REPO_LIST_OUT" == "error"* ]]; then
-    print_warn "Current path $PWD is not in an Android repo. Change path to repo root." "$LINENO"
-    go_to_repo_root "$FULL_COMMAND_PATH"
-    print_info "Changed path to $PWD" "$LINENO"
-else
-    go_to_repo_root "$PWD"
-fi
-
-REPO_ROOT_PATH="$PWD"
-FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT"
-
-find_repo
-
-if [[ "$PLATFORM_BUILD" == "None" ]]; then
-    PLATFORM_BUILD=
-fi
-
-if [[ "$KERNEL_BUILD" == "None" ]]; then
-    KERNEL_BUILD=
-fi
-
-if [[ "$VENDOR_KERNEL_BUILD" == "None" ]]; then
-    VENDOR_KERNEL_BUILD=
-fi
-
 if [ ! -d "$DOWNLOAD_PATH" ]; then
     mkdir -p "$DOWNLOAD_PATH" || print_error "Fail to create directory $DOWNLOAD_PATH" "$LINENO"
 fi
+
+get_device_info
+
+if is_in_repo_workspace; then
+    go_to_repo_root "$PWD"
+else
+    log_warn "Current path $PWD is not in an Android repo. Change path to repo root."
+    go_to_repo_root "$SCRIPT_DIR"
+fi
+
+readonly REPO_ROOT_PATH="$PWD"
+
+find_repo
+
+[[ "$PLATFORM_BUILD" == "None" ]] && PLATFORM_BUILD=""
+[[ "$KERNEL_BUILD" == "None" ]] && KERNEL_BUILD=""
+[[ "$VENDOR_KERNEL_BUILD" == "None" ]] && VENDOR_KERNEL_BUILD=""
 
 if [[ "$PLATFORM_BUILD" == ab://* ]]; then
     format_ab_platform_build_string
