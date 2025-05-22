@@ -1389,6 +1389,7 @@ else
 fi
 
 readonly REPO_ROOT_PATH="$PWD"
+readonly FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT_PATH_IN_REPO"
 
 find_repo
 

@@ -259,7 +259,7 @@ else
 fi
 
 REPO_ROOT_PATH="$PWD"
-FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT"
+readonly FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT_PATH_IN_REPO"
 
 print_info "Checking required commands..." "$LINENO"
 if ! check_commands_available "${REQUIRED_COMMANDS[@]}"; then
