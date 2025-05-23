@@ -434,4 +434,21 @@ if $GCOV; then
 fi
 
 cd $OLD_PWD
-exit $exit_code
+if (( exit_code > 0 )); then
+    exit $exit_code
+fi
+
+INVOCATION_SUMMARY="$TEST_DIR/results/latest/invocation_summary.txt"
+failure_number=$(grep "FAILED[[:space:]]*:" "$INVOCATION_SUMMARY" | awk -F ":" '{print $NF}' | tr -d ' ')
+
+if [ -n "$failure_number" ]; then
+    if (( failure_number == 0 )); then
+        print_info "There is no test failure"
+    elif (( failure_number == 1 )); then
+        print_error "There is a test failure"
+    else
+        print_error "There are $failure_number test failures"
+    fi
+else
+    print_error "$INVOCATION_SUMMARY doesn't have 'FAILED :' line"
+fi
