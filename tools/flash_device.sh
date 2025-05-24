@@ -5,8 +5,6 @@
 
 # Constants
 # Please see go/cl_flashstation
-CL_FLASH_CLI=/google/bin/releases/android/flashstation/cl_flashstation
-LOCAL_FLASH_CLI=/google/bin/releases/android/flashstation/local_flashstation
 MIX_SCRIPT_NAME="build_mixed_kernels_ramdisk"
 DOWNLOAD_PATH="/tmp/downloaded_images"
 KERNEL_TF_PREBUILT=prebuilts/tradefed/filegroups/tradefed/tradefed.sh
@@ -23,7 +21,6 @@ GCOV=false
 DEBUG=false
 KASAN=false
 EXTRA_OPTIONS=()
-LOCAL_REPO=
 DEVICE_VARIANT="userdebug"
 
 ABI=
@@ -202,16 +199,9 @@ function parse_arg() {
                 ;;
             *)
                 print_error "Unsupported flag: $1" >&2
-                shift
                 ;;
         esac
     done
-}
-
-function adb_checker() {
-    if ! which adb &> /dev/null; then
-        print_error "adb not found!"
-    fi
 }
 
 function print_info() {
@@ -631,7 +621,7 @@ function download_gki_build() {
     fi
     local _gki_dir="$DOWNLOAD_PATH/gki_dir"
     mkdir -p "$_gki_dir"
-    cd "$_gki_dir" || $(print_error "Fail to go to $_gki_dir" "$LINENO")
+    cd "$_gki_dir" || print_error "Fail to go to $_gki_dir" "$LINENO"
     print_info "Downloading $KERNEL_BUILD to $PWD" "$LINENO"
 
     local _build_info="$KERNEL_BUILD"
@@ -783,7 +773,7 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
     print_info "Disabling oem verification" "$LINENO"
     fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem disable-verification
-    local $_flash_cmd
+    local _flash_cmd
     if [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
         _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-lz4.img"
     elif [ -f "$KERNEL_BUILD/boot-gz.img" ]; then
@@ -821,8 +811,8 @@ function check_fastboot_version() {
         print_info "The existing fastboot version $_fastboot_version doesn't meet minimum requirement $MIN_FASTBOOT_VERSION. Download the latest fastboot" "$LINENO"
 
         local _download_file_name="ab://aosp-sdk-release/sdk/latest/fastboot"
-        mkdir -p "/tmp/fastboot" || $(print_error "Fail to mkdir /tmp/fastboot" "$LINENO")
-        cd /tmp/fastboot || $(print_error "Fail to go to /tmp/fastboot" "$LINENO")
+        mkdir -p "/tmp/fastboot" || print_error "Fail to mkdir /tmp/fastboot" "$LINENO"
+        cd /tmp/fastboot || print_error "Fail to go to /tmp/fastboot" "$LINENO"
 
         # Use $FETCH_SCRIPT and $_download_file_name correctly
         eval "$FETCH_SCRIPT $_download_file_name"
@@ -933,13 +923,13 @@ function find_flashstation_binary() {
 }
 
 function flash_platform_build() {
-    if [ "$SKIP_UPDATE_BOOTLOADER" = true ] && [[ "$PLATFORM_BUILD" == ab://* ]] || [ -z "$CL_FLASH_CLI"]; then
+    if [ "$SKIP_UPDATE_BOOTLOADER" = true ] && [[ "$PLATFORM_BUILD" == ab://* ]] || [ -z "$CL_FLASH_CLI" ]; then
         if [ -d "$DOWNLOAD_PATH/device_dir" ]; then
             rm -rf "$DOWNLOAD_PATH/device_dir"
         fi
         PLATFORM_DIR="$DOWNLOAD_PATH/device_dir"
         mkdir -p "$PLATFORM_DIR"
-        cd "$PLATFORM_DIR" || $(print_error "Fail to go to $PLATFORM_DIR" "$LINENO")
+        cd "$PLATFORM_DIR" || print_error "Fail to go to $PLATFORM_DIR" "$LINENO"
         download_platform_build
         PLATFORM_BUILD="$PLATFORM_DIR"
     fi
@@ -1005,7 +995,7 @@ function flash_system_build() {
         fi
         SYSTEM_DIR="$DOWNLOAD_PATH/system_dir"
         mkdir -p "$SYSTEM_DIR"
-        cd "$SYSTEM_DIR" || $(print_error "Fail to go to $SYSTEM_DIR" "$LINENO")
+        cd "$SYSTEM_DIR" || print_error "Fail to go to $SYSTEM_DIR" "$LINENO"
         download_system_build
         SYSTEM_BUILD="$SYSTEM_DIR"
     fi
@@ -1036,7 +1026,7 @@ function flash_system_build() {
     print_info "Erase logical partition system_$_current_slot" "$LINENO"
     fastboot -s "$FASTBOOT_SERIAL_NUMBER" erase system_"$_current_slot"
 
-    local $_flash_cmd
+    local _flash_cmd
     if [ -f "$SYSTEM_BUILD/system.img" ]; then
         _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash system $SYSTEM_BUILD/system.img"
     fi
@@ -1111,12 +1101,12 @@ function get_mix_ramdisk_script() {
 }
 
 function mixing_build() {
-    if [ -n ${PLATFORM_REPO_ROOT_PATH} ] && [ -f "$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME" ]; then
+    if [ -n "${PLATFORM_REPO_ROOT_PATH}" ] && [ -f "$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME" ]; then
         mix_kernel_cmd="$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME"
     elif [ -f "$DOWNLOAD_PATH/$MIX_SCRIPT_NAME" ]; then
         mix_kernel_cmd="$DOWNLOAD_PATH/$MIX_SCRIPT_NAME"
     else
-        cd "$DOWNLOAD_PATH" || $(print_error "Fail to go to $DOWNLOAD_PATH" "$LINENO")
+        cd "$DOWNLOAD_PATH" || print_error "Fail to go to $DOWNLOAD_PATH" "$LINENO"
         get_mix_ramdisk_script
         mix_kernel_cmd="$PWD/$MIX_SCRIPT_NAME"
     fi
@@ -1131,20 +1121,20 @@ function mixing_build() {
         fi
         PLATFORM_DIR="$DOWNLOAD_PATH/device_dir"
         mkdir -p "$PLATFORM_DIR"
-        cd "$PLATFORM_DIR" || $(print_error "Fail to go to $PLATFORM_DIR" "$LINENO")
+        cd "$PLATFORM_DIR" || print_error "Fail to go to $PLATFORM_DIR" "$LINENO"
         download_platform_build
         PLATFORM_BUILD="$PLATFORM_DIR"
     elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT"* ]]; then
         print_info "Copy platform build $PLATFORM_BUILD to $DOWNLOAD_PATH/device_dir" "$LINENO"
         PLATFORM_DIR="$DOWNLOAD_PATH/device_dir"
         mkdir -p "$PLATFORM_DIR"
-        cd "$PLATFORM_DIR" || $(print_error "Fail to go to $PLATFORM_DIR" "$LINENO")
+        cd "$PLATFORM_DIR" || print_error "Fail to go to $PLATFORM_DIR" "$LINENO"
         local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img.zip)
-        if [ -n "device_image" ]; then
+        if [ -n "$device_image" ]; then
             cp "$device_image $PLATFORM_DIR/$PRODUCT-img-0.zip" "$PLATFORM_DIR"
         else
             device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img-*.zip)
-            if [ -n "device_image" ]; then
+            if [ -n "$device_image" ]; then
                 cp "$device_image $PLATFORM_DIR/$PRODUCT-img-0.zip" "$PLATFORM_DIR"
             else
                 print_error "Can't find $RPODUCT-img-*.zip in $PLATFORM_BUILD"
@@ -1338,7 +1328,7 @@ function get_device_info() {
         return 0
     fi
 
-    if [ -x pontis ]; then
+    if [[ -x "$(command -v pontis)" ]]; then
         local _pontis_device=$(pontis devices | grep "$SERIAL_NUMBER")
         if [[ "$_pontis_device" == *Fastboot* ]]; then
             DEVICE_SERIAL_NUMBER="$SERIAL_NUMBER"
@@ -1376,8 +1366,6 @@ if ! check_commands_available "${REQUIRED_COMMANDS[@]}"; then
     print_error "One or more required commands are missing. Please install them and retry." "$LINENO"
 fi
 
-LOCAL_REPO=
-
 OLD_PWD=$PWD
 MY_NAME=$0
 
@@ -1385,47 +1373,35 @@ parse_arg "$@"
 
 if [ -z "$SERIAL_NUMBER" ]; then
     print_error "Device serial is not provided with flag -s <serial_number>." "$LINENO"
-    exit 1
+fi
+
+if [ ! -d "$DOWNLOAD_PATH" ]; then
+    mkdir -p "$DOWNLOAD_PATH" || print_error "Fail to create directory $DOWNLOAD_PATH" "$LINENO"
 fi
 
 get_device_info
 
-FULL_COMMAND_PATH=$(dirname "$PWD/$0")
-REPO_LIST_OUT=$(repo list 2>&1)
-if [[ "$REPO_LIST_OUT" == "error"* ]]; then
-    print_error "Current path $PWD is not in an Android repo. Change path to repo root." "$LINENO"
-    go_to_repo_root "$FULL_COMMAND_PATH"
-    print_info "Changed path to $PWD" "$LINENO"
-else
+if is_in_repo_workspace; then
     go_to_repo_root "$PWD"
+else
+    log_warn "Current path $PWD is not in an Android repo. Change path to repo root."
+    go_to_repo_root "$SCRIPT_DIR"
 fi
 
-REPO_ROOT_PATH="$PWD"
-FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT"
+readonly REPO_ROOT_PATH="$PWD"
+readonly FETCH_SCRIPT="$REPO_ROOT_PATH/$FETCH_SCRIPT_PATH_IN_REPO"
 
 find_repo
 
-if [[ "$PLATFORM_BUILD" == "None" ]]; then
-    PLATFORM_BUILD=
-fi
-
-if [[ "$KERNEL_BUILD" == "None" ]]; then
-    KERNEL_BUILD=
-fi
-
-if [[ "$VENDOR_KERNEL_BUILD" == "None" ]]; then
-    VENDOR_KERNEL_BUILD=
-fi
-
-if [ ! -d "$DOWNLOAD_PATH" ]; then
-    mkdir -p "$DOWNLOAD_PATH" || $(print_error "Fail to create directory $DOWNLOAD_PATH" "$LINENO")
-fi
+[[ "$PLATFORM_BUILD" == "None" ]] && PLATFORM_BUILD=""
+[[ "$KERNEL_BUILD" == "None" ]] && KERNEL_BUILD=""
+[[ "$VENDOR_KERNEL_BUILD" == "None" ]] && VENDOR_KERNEL_BUILD=""
 
 if [[ "$PLATFORM_BUILD" == ab://* ]]; then
     format_ab_platform_build_string
 elif [ -n "$PLATFORM_BUILD" ] && [ -d "$PLATFORM_BUILD" ]; then
     # Check if PLATFORM_BUILD is an Android platform repo
-    cd "$PLATFORM_BUILD"  || $(print_error "Fail to go to $PLATFORM_BUILD" "$LINENO")
+    cd "$PLATFORM_BUILD"  || print_error "Fail to go to $PLATFORM_BUILD" "$LINENO"
     PLATFORM_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$PLATFORM_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
@@ -1465,7 +1441,7 @@ if [[ "$KERNEL_BUILD" == ab://* ]]; then
     download_gki_build
 elif [ -n "$KERNEL_BUILD" ] && [ -d "$KERNEL_BUILD" ]; then
     # Check if kernel repo is provided
-    cd "$KERNEL_BUILD" || $(print_error "Fail to go to $KERNEL_BUILD" "$LINENO")
+    cd "$KERNEL_BUILD" || print_error "Fail to go to $KERNEL_BUILD" "$LINENO"
     KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$KERNEL_REPO_LIST_OUT" != "error"* ]]; then
         print_info "$KERNEL_BUILD is in a kernel tree repo"
@@ -1499,7 +1475,7 @@ if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     fi
     VENDOR_KERNEL_DIR="$DOWNLOAD_PATH/vendor_kernel_dir"
     mkdir -p "$VENDOR_KERNEL_DIR"
-    cd "$VENDOR_KERNEL_DIR" || $(print_error "Fail to go to $VENDOR_KERNEL_DIR" "$LINENO")
+    cd "$VENDOR_KERNEL_DIR" || print_error "Fail to go to $VENDOR_KERNEL_DIR" "$LINENO"
     if [ -z "$PLATFORM_BUILD" ]; then
         download_vendor_kernel_for_direct_flash $VENDOR_KERNEL_BUILD
     else
@@ -1508,7 +1484,7 @@ if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     VENDOR_KERNEL_BUILD="$VENDOR_KERNEL_DIR"
 elif [ -n "$VENDOR_KERNEL_BUILD" ] && [ -d "$VENDOR_KERNEL_BUILD" ]; then
     # Check if vendor kernel repo is provided
-    cd "$VENDOR_KERNEL_BUILD"  || $(print_error "Fail to go to $VENDOR_KERNEL_BUILD" "$LINENO")
+    cd "$VENDOR_KERNEL_BUILD"  || print_error "Fail to go to $VENDOR_KERNEL_BUILD" "$LINENO"
     VENDOR_KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$VENDOR_KERNEL_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
@@ -1586,7 +1562,7 @@ fi
 if [[ "$SYSTEM_BUILD" == ab://* ]]; then
     format_ab_system_build_string
 elif [ -n "$SYSTEM_BUILD" ] && [ -d "$SYSTEM_BUILD" ]; then
-    cd "$SYSTEM_BUILD"  || $(print_error "Fail to go to $SYSTEM_BUILD" "$LINENO")
+    cd "$SYSTEM_BUILD"  || print_error "Fail to go to $SYSTEM_BUILD" "$LINENO"
     SYSTEM_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$SYSTEM_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"

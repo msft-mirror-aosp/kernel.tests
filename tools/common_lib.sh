@@ -11,10 +11,15 @@ fi
 readonly __COMMON_LIB_SOURCED__=1
 
 # --- Constants ---
-readonly FETCH_SCRIPT="kernel/tests/tools/fetch_artifact.sh"
+readonly FETCH_SCRIPT_PATH_IN_REPO="kernel/tests/tools/fetch_artifact.sh"
 readonly KERNEL_JDK_PATH="prebuilts/jdk/jdk11/linux-x86"
 readonly LOCAL_JDK_PATH="/usr/local/buildtools/java/jdk11"
 readonly PLATFORM_JDK_PATH="prebuilts/jdk/jdk21/linux-x86"
+
+# --- BinFS ---
+readonly CL_FLASH_CLI=/google/bin/releases/android/flashstation/cl_flashstation
+readonly LOCAL_FLASH_CLI=/google/bin/releases/android/flashstation/local_flashstation
+
 
 # --- Internal State Flags ---
 __COMMON_LIB_NO_TPUT__="" # Flag set if tput is unavailable
@@ -79,7 +84,7 @@ function _timestamp() {
         printf "%s" "$ts"
         return 0
     elif ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null); then
-         printf "%s" "$ts"
+        printf "%s" "$ts"
         return 0
     else
         # If date command fails entirely
@@ -115,10 +120,10 @@ function _print_log() {
     # Simple parsing of caller output (e.g., "123 my_func ./script.sh")
     local caller_line="" caller_function="" caller_path="" caller_file="" context_info=""
     if read -r caller_line caller_function caller_path <<< "$caller_info"; then
-         caller_file=$(basename "$caller_path")
-         context_info="[$caller_file:$caller_line ($caller_function)]"
+        caller_file=$(basename "$caller_path")
+        context_info="[$caller_file:$caller_line ($caller_function)]"
     else
-         context_info="[${caller_info}]" # Fallback if parsing fails
+        context_info="[${caller_info}]" # Fallback if parsing fails
     fi
 
     # Format: TIMESTAMP LEVEL [script:line (function)]: Message
