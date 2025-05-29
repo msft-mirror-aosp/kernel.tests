@@ -28,8 +28,10 @@ PRODUCT=
 BUILD_TYPE=
 DEVICE_KERNEL_STRING=
 DEVICE_KERNEL_VERSION=
+LOCAL_FLASH_CLI=
+CL_FLASH_CLI=
 SYSTEM_DLKM_INFO=
-readonly REQUIRED_COMMANDS=("adb" "dirname")
+readonly REQUIRED_COMMANDS=("adb" "dirname" "fastboot")
 
 function print_help() {
     echo "Usage: $0 [OPTIONS]"
@@ -230,7 +232,7 @@ function print_error() {
     exit 1
 }
 
-function set_platform_repo () {
+function set_platform_repo() {
     print_warn "Build environment target product '${TARGET_PRODUCT}' does not match expected $1. \
     Reset build environment" "$LINENO"
     local lunch_cli="source build/envsetup.sh && lunch $1"
@@ -249,7 +251,7 @@ function set_platform_repo () {
     fi
 }
 
-function find_repo () {
+function find_repo() {
     manifest_output=$(grep -e "superproject" -e "gs-pixel" -e "kernel/private/devices/google/common" \
      -e "private/google-modules/soc/gs" -e "kernel/common" -e "common-modules/virtual-device" \
      .repo/manifests/default.xml)
@@ -288,7 +290,7 @@ function find_repo () {
     esac
 }
 
-function build_platform () {
+function build_platform() {
     if [[ "$SKIP_BUILD" = true ]]; then
         print_warn "--skip-build is set. Do not rebuild platform build" "$LINENO"
         return
@@ -309,7 +311,7 @@ function build_platform () {
     fi
 }
 
-function build_ack () {
+function build_ack() {
     if [[ "$SKIP_BUILD" = true ]]; then
         print_warn "--skip-build is set. Do not rebuild kernel" "$LINENO"
         return
@@ -338,7 +340,7 @@ function build_ack () {
 function format_ab_platform_build_string() {
     if [[ "$PLATFORM_BUILD" != ab://* ]]; then
         print_error "Please provide the platform build in the form of ab:// with flag -pb" "$LINENO"
-        return 1
+        return 1 # Keep return for consistency, though print_error exits
     fi
     IFS='/' read -ra array <<< "$PLATFORM_BUILD"
     local _branch="${array[2]}"
@@ -865,15 +867,18 @@ function flash_vendor_kernel_build() {
 }
 
 # Function to check and wait for an ADB device
+# shellcheck disable=SC2120
 function wait_for_device_in_adb() {
-    local timeout_seconds="${2:-300}"  # Timeout in seconds (default 5 minutes)
+    local timeout_seconds="${1:-300}"  # Timeout in seconds (default 5 minutes)
 
-    local start_time=$(date +%s)
-    local end_time=$((start_time + timeout_seconds))
-
+    local start_time
+    local end_time
+    start_time=$(date +%s)
+    end_time=$((start_time + timeout_seconds))
     while (( $(date +%s) < end_time )); do
         if [ -z "$ADB_SERIAL_NUMBER" ] && [ -x pontis ]; then
-            local _pontis_device=$(pontis devices | grep "$DEVICE_SERIAL_NUMBER")
+            local _pontis_device
+            _pontis_device=$(pontis devices | grep "$DEVICE_SERIAL_NUMBER")
             if [[ "$_pontis_device" == *ADB* ]]; then
                 print_info "Device $DEVICE_SERIAL_NUMBER is connected through pontis in adb" "$LINENO"
                 find_adb_serial_number
@@ -898,28 +903,37 @@ function wait_for_device_in_adb() {
 }
 
 function find_flashstation_binary() {
-    if [ -x "${ANDROID_HOST_OUT}/bin/local_flashstation" ]; then
+    # Prefer local build in ANDROID_HOST_OUT if available
+    if [[ -n "${ANDROID_HOST_OUT}" && -x "${ANDROID_HOST_OUT}/bin/local_flashstation" ]]; then
         LOCAL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/local_flashstation"
-    elif [ ! -x "$LOCAL_FLASH_CLI" ]; then
-        if ! which local_flashstation &> /dev/null; then
-            print_warn "Can not find local_flashstation binary. Will use fastboot to flash device. \
-            Please see go/web-flashstation-command-line to download flashstation cli" "$LINENO"
-            LOCAL_FLASH_CLI=
+    elif ! check_command "local_flashstation"; then
+        if check_command "$COMMON_LIB_LOCAL_FLASH_CLI"; then
+             LOCAL_FLASH_CLI="$COMMON_LIB_LOCAL_FLASH_CLI"
         else
-            LOCAL_FLASH_CLI="local_flashstation"
+            print_warn "Cannot find 'local_flashstation' in PATH. Will use fastboot to flash device.. \
+            Please see go/web-flashstation-command-line to download flashstation cli" "$LINENO"
+            LOCAL_FLASH_CLI=""
         fi
+    else
+        LOCAL_FLASH_CLI="local_flashstation"
     fi
-    if [ -x "${ANDROID_HOST_OUT}/bin/cl_flashstation" ]; then
+
+    if [[ -n "${ANDROID_HOST_OUT}" && -x "${ANDROID_HOST_OUT}/bin/cl_flashstation" ]]; then
         CL_FLASH_CLI="${ANDROID_HOST_OUT}/bin/cl_flashstation"
-    elif [ ! -x "$CL_FLASH_CLI" ]; then
-        if ! which cl_flashstation &> /dev/null; then
-            print_warn "Can not find cl_flashstation binary. Will use fastboot to flash device. \
-            Please see go/web-flashstation-command-line to download flashstation cli" "$LINENO"
-            CL_FLASH_CLI=
+    elif ! check_command "cl_flashstation"; then
+        if check_command "$COMMON_LIB_CL_FLASH_CLI"; then
+             CL_FLASH_CLI="$COMMON_LIB_CL_FLASH_CLI"
         else
-            CL_FLASH_CLI="cl_flashstation"
+            print_warn "Cannot find 'cl_flashstation' in PATH. Will use fastboot to flash device.. \
+            Please see go/web-flashstation-command-line to download flashstation cli" "$LINENO"
+            CL_FLASH_CLI=""
         fi
+    else
+        CL_FLASH_CLI="cl_flashstation"
     fi
+
+    print_info "Using LOCAL_FLASH_CLI: ${LOCAL_FLASH_CLI:-Not Found}" "$LINENO"
+    print_info "Using CL_FLASH_CLI: ${CL_FLASH_CLI:-Not Found}" "$LINENO"
 }
 
 function flash_platform_build() {
@@ -933,13 +947,21 @@ function flash_platform_build() {
         download_platform_build
         PLATFORM_BUILD="$PLATFORM_DIR"
     fi
+
     local _flash_cmd
     if [[ "$PLATFORM_BUILD" == ab://* ]]; then
         _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions --disable_verity -w -s $DEVICE_SERIAL_NUMBER "
-        IFS='/' read -ra array <<< "$PLATFORM_BUILD"
-        if [ -n "${array[3]}" ]; then
-            local _build_type="${array[3]#*-}"
-            if [[ "${array[2]}" == git_main* ]] && [[ "$_build_type" == user* ]]; then
+
+        local _branch
+        local _build_target
+        local _build_id
+        if ! parse_ab_url "$PLATFORM_BUILD" _branch _build_target _build_id &> /dev/null; then
+            print_error "Invalid Android Build url string. PLATFORM_BUILD=${PLATFORM_BUILD}"  "$LINENO"
+        fi
+
+        if [ -n "${_build_target}" ]; then
+            local _build_type="${_build_target#*-}"
+            if [[ "${_branch}" == git_main* ]] && [[ "$_build_type" == user* ]]; then
                 print_info "Build variant is not provided, using trunk_staging build" "$LINENO"
                 _build_type="trunk_staging-$_build_type"
             fi
@@ -949,16 +971,15 @@ function flash_platform_build() {
                 _flash_cmd+=" --force_debuggable"
             fi
         fi
-        if [ -n "${array[4]}" ] && [[ "${array[4]}" != latest* ]]; then
-            print_info "Flash $SERIAL_NUMBER by flash station with platform build from branch $PLATFORM_BUILD..." "$LINENO"
-            _flash_cmd+=" --bid ${array[4]}"
+        print_info "Flash $SERIAL_NUMBER by flash station with platform build $PLATFORM_BUILD..." "$LINENO"
+        if [ -n "${_build_id}" ] && [[ "${_build_id}" != latest* ]]; then
+            _flash_cmd+=" --bid ${_build_id}"
         else
-            print_info "Flash $SERIAL_NUMBER by flash station with platform build $PLATFORM_BUILD..." "$LINENO"
-            _flash_cmd+=" -l ${array[2]}"
+            _flash_cmd+=" -l ${_branch}"
         fi
     elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
     [ -x "$PLATFORM_REPO_ROOT/vendor/google/tools/flashall" ]; then
-        cd "$PLATFORM_REPO_ROOT"
+        cd "$PLATFORM_REPO_ROOT" || print_error "Fail to go to $PLATFORM_REPO_ROOT" "$LINENO"
         print_info "Flashing device by vendor/google/tools/flashall with platform build from $$PLATFORM_BUILD" "$LINENO"
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != *"$PRODUCT" ]]; then
             if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
@@ -974,18 +995,18 @@ function flash_platform_build() {
 
         _flash_cmd="$LOCAL_FLASH_CLI --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $DEVICE_SERIAL_NUMBER"
     fi
+
     print_info "Flashing device with: $_flash_cmd" "$LINENO"
     eval "$_flash_cmd"
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
+    if (( exit_code == 0 )); then
         echo "Flash platform succeeded"
         wait_for_device_in_adb
-        return
+        return 0
     else
-        echo "Flash platform build failed with exit code $exit_code"
-        exit 1
+        print_error "Flash platform build failed with exit code $exit_code" "$LINENO"
+        return 1
     fi
-
 }
 
 function flash_system_build() {
@@ -1279,7 +1300,7 @@ SYSTEM_DLKM_INFO=$SYSTEM_DLKM_INFO, DEVICE_KERNEL_STRING=$DEVICE_KERNEL_STRING" 
     extract_device_kernel_version "$DEVICE_KERNEL_STRING"
 }
 
-function get_device_info_from_fastboot {
+function get_device_info_from_fastboot() {
     # try get product by fastboot command
     if [ -z "$DEVICE_SERIAL_NUMBER" ]; then
         local _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar serialno 2>&1)
@@ -1306,7 +1327,8 @@ function get_device_info_from_fastboot {
 }
 
 function get_device_info() {
-    local _adb_count=$(adb devices | grep "$SERIAL_NUMBER" | wc -l)
+    local _adb_count
+    _adb_count=$(adb devices | grep "$SERIAL_NUMBER" | wc -l)
     if (( _adb_count > 0 )); then
         print_info "$SERIAL_NUMBER is connected through adb" "$LINENO"
         ADB_SERIAL_NUMBER="$SERIAL_NUMBER"
@@ -1317,7 +1339,8 @@ function get_device_info() {
         return 0
     fi
 
-    local _fastboot_count=$(fastboot devices | grep "$SERIAL_NUMBER" | wc -l)
+    local _fastboot_count
+    _fastboot_count=$(fastboot devices | grep "$SERIAL_NUMBER" | wc -l)
     if (( _fastboot_count > 0 )); then
         print_info "$SERIAL_NUMBER is connected through fastboot" "$LINENO"
         FASTBOOT_SERIAL_NUMBER="$SERIAL_NUMBER"
@@ -1329,7 +1352,8 @@ function get_device_info() {
     fi
 
     if [[ -x "$(command -v pontis)" ]]; then
-        local _pontis_device=$(pontis devices | grep "$SERIAL_NUMBER")
+        local _pontis_device
+        _pontis_device=$(pontis devices | grep "$SERIAL_NUMBER")
         if [[ "$_pontis_device" == *Fastboot* ]]; then
             DEVICE_SERIAL_NUMBER="$SERIAL_NUMBER"
             print_info "Device $SERIAL_NUMBER is connected through pontis in fastboot" "$LINENO"
@@ -1397,6 +1421,7 @@ find_repo
 [[ "$KERNEL_BUILD" == "None" ]] && KERNEL_BUILD=""
 [[ "$VENDOR_KERNEL_BUILD" == "None" ]] && VENDOR_KERNEL_BUILD=""
 
+# --- Platform Build Processing ---
 if [[ "$PLATFORM_BUILD" == ab://* ]]; then
     format_ab_platform_build_string
 elif [ -n "$PLATFORM_BUILD" ] && [ -d "$PLATFORM_BUILD" ]; then
