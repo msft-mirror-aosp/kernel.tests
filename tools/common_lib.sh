@@ -17,8 +17,8 @@ readonly LOCAL_JDK_PATH="/usr/local/buildtools/java/jdk11"
 readonly PLATFORM_JDK_PATH="prebuilts/jdk/jdk21/linux-x86"
 
 # --- BinFS ---
-readonly CL_FLASH_CLI=/google/bin/releases/android/flashstation/cl_flashstation
-readonly LOCAL_FLASH_CLI=/google/bin/releases/android/flashstation/local_flashstation
+readonly COMMON_LIB_CL_FLASH_CLI="/google/bin/releases/android/flashstation/cl_flashstation"
+readonly COMMON_LIB_LOCAL_FLASH_CLI="/google/bin/releases/android/flashstation/local_flashstation"
 
 
 # --- Internal State Flags ---
@@ -417,12 +417,7 @@ function set_platform_repo() {
     # Use pushd/popd to manage directory changes reliably
     log_info "Changing directory to '${resolved_root}' for setup..."
 
-    pushd "$resolved_root" > /dev/null
-    local pushd_status=$?
-    if (( pushd_status != 0 )); then
-        log_error "Failed to pushd into platform root: '${resolved_root}'" "$pushd_status"
-        return "$pushd_status"
-    fi
+    pushd "$resolved_root" &> /dev/null || { log_error "Failed to pushd into platform root: '${resolved_root}'"; return 1; }
 
     log_info "Changed directory to '${resolved_root}' successfully."
 
@@ -433,7 +428,7 @@ function set_platform_repo() {
     local source_status=$?
     if (( source_status != 0 )); then
         log_error "Sourcing ${envsetup_script} failed." "$source_status"
-        popd > /dev/null
+        popd > /dev/null || { log_error "'popd' failed after sourcing."; return 1; }
         return "$source_status"
     fi
 
@@ -442,14 +437,15 @@ function set_platform_repo() {
     # Run the lunch command (should be defined after sourcing envsetup.sh).
     if ! check_command "lunch"; then
         log_error "'lunch' command not found after sourcing envsetup.sh. Setup failed." 1
-        popd > /dev/null
+        popd > /dev/null || { log_error "'popd' failed after checking command."; return 1; }
         return 1
     fi
 
     log_info "Running: ${BOLD}lunch ${lunch_target}${END}"
 
     local lunch_output
-    local temp_file=$(mktemp)
+    local temp_file
+    temp_file=$(mktemp)
     lunch "${lunch_target}" 1>"$temp_file" 2>&1
     local lunch_status=$?
     lunch_output=$(cat "$temp_file")
@@ -460,15 +456,11 @@ function set_platform_repo() {
         log_info "Build environment successfully set for ${lunch_target}."
     else
         log_error "'lunch ${lunch_target}' failed. Output:$(printf '\n%s' "$lunch_output")" "$lunch_status"
-        popd > /dev/null
+        popd > /dev/null || { log_error "'popd' failed after lunching target."; return 1; }
         return "$lunch_status"
     fi
 
-    popd > /dev/null
-    local popd_status=$?
-    if (( popd_status != 0 )); then
-        log_warn "popd failed (Exit Code ${popd_status}) after successful setup. Current directory: $PWD"
-    fi
+    popd > /dev/null || log_warn "'popd' failed after successful setup. Current directory: $PWD"
 
     log_info "Setup complete. Returned to original directory via popd."
     return 0
