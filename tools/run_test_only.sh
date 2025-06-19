@@ -366,18 +366,18 @@ fi
 
 print_info "Will run tests with test artifacts in $TEST_DIR" "$LINENO"
 
-if [[ "$TEST_DIR" == */android-vts/* ]] && [ -f "${TEST_DIR}/tools/vts-tradefed" ]; then
+if [[ "${TEST_DIR%/}" == */android-vts && -f "${TEST_DIR}/tools/vts-tradefed" ]]; then
     print_info "Will run tests with vts-tradefed from $TEST_DIR" "$LINENO"
     print_info "Many VTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
-    cd "${TEST_DIR}"
+    cd "${TEST_DIR}" || print_error  "Failed to go to $TEST_DIR" "$LINENO"
     unset_android_environment
     tf_cli="tools/vts-tradefed run commandAndExit vts --skip-device-info \
     --log-level-display info --log-file-path=$LOG_DIR \
     $TEST_FILTERS -s $SERIAL_NUMBER"
-elif [[ "$TEST_DIR" == */android-cts/* ]] &&  [ -f "${TEST_DIR}/tools/cts-tradefed" ]; then
+elif [[ "${TEST_DIR%/}" == */android-cts && -f "${TEST_DIR}/tools/cts-tradefed" ]]; then
     print_info "Will run tests with cts-tradefed from $TEST_DIR" "$LINENO"
     print_info "Many CTS tests need WIFI connection, please make sure WIFI is connected before you run the test." "$LINENO"
-    cd "${TEST_DIR}"
+    cd "${TEST_DIR}" || print_error  "Failed to go to $TEST_DIR" "$LINENO"
     unset_android_environment
     tf_cli="tools/cts-tradefed run commandAndExit cts --skip-device-info \
     --log-level-display info --log-file-path=$LOG_DIR \
