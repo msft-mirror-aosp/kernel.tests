@@ -234,6 +234,7 @@ while test $# -gt 0; do
             shift
             ;;
         *)
+            print_error "Unsupported flag: $1" >&2
             ;;
     esac
 done
