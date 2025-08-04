@@ -5,7 +5,8 @@
 
 # --- Include Guard ---
 # Prevents the library from being sourced multiple times.
-if [[ -n "$__COMMON_LIB_SOURCED__" ]]; then
+
+if [[ -n "${__COMMON_LIB_SOURCED__:-}" ]]; then
     return 0
 fi
 readonly __COMMON_LIB_SOURCED__=1
@@ -71,19 +72,8 @@ readonly BLUE BOLD END GREEN ORANGE RED YELLOW
 
 function _timestamp() {
     local ts=""
-    # Try ISO 8601 format with nanoseconds if supported
-    if ts=$(date --iso-8601=ns 2>/dev/null); then
-        printf "%s" "$ts"
-        return 0
-    # Fallback to seconds
-    elif ts=$(date --iso-8601=seconds 2>/dev/null); then
-        printf "%s" "$ts"
-        return 0
-    # Fallback to high-precision format if ISO fails but N supported
-    elif ts=$(date '+%Y-%m-%d %H:%M:%S.%N' 2>/dev/null); then
-        printf "%s" "$ts"
-        return 0
-    elif ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null); then
+    ts=$(date +"%Y-%m-%d %H:%M:%S")
+    if ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null); then
         printf "%s" "$ts"
         return 0
     else
@@ -121,14 +111,14 @@ function _print_log() {
     local caller_line="" caller_function="" caller_path="" caller_file="" context_info=""
     if read -r caller_line caller_function caller_path <<< "$caller_info"; then
         caller_file=$(basename "$caller_path")
-        context_info="[$caller_file:$caller_line ($caller_function)]"
+        context_info="$caller_file:$caller_line ($caller_function)"
     else
-        context_info="[${caller_info}]" # Fallback if parsing fails
+        context_info="${caller_info}" # Fallback if parsing fails
     fi
 
     # Format: TIMESTAMP LEVEL [script:line (function)]: Message
     local log_prefix="${timestamp} ${log_level}"
-    local full_message_prefix="${log_prefix} ${context_info}: "
+    local full_message_prefix="[${log_prefix} ${context_info}]: "
     local full_message_suffix=""
 
     # Append exit code context for errors if provided and non-zero
@@ -145,7 +135,7 @@ function _print_log() {
 
     # Print using printf with %s for the message to handle special characters safely
     # Structure: ColorStart Prefix Message Suffix ColorEnd Newline
-    printf "%s%s%s%s%s\n" "${color_code}" "${full_message_prefix}" "$message" "${full_message_suffix}" "${END}" > "$output_stream"
+    printf "%s%s%s%s%s\n" "${full_message_prefix}" "${color_code}" "$message" "${full_message_suffix}" "${END}" > "$output_stream"
 }
 
 # --- Public API Functions ---
@@ -159,7 +149,7 @@ function log_info() {
 function log_warn() {
     local message="$1"
     local exit_code="${2:-}" # Optional context code
-    _print_log "WARN" "${YELLOW}" "$message" "$exit_code"
+    _print_log "WARN" "${ORANGE}" "$message" "$exit_code"
     return 0
 }
 
@@ -539,5 +529,3 @@ function set_env_var() {
     log_info "Exported environment variable: ${var_name}='${var_value}'"
     return 0
 }
-
-log_info "common_lib.sh sourced successfully."
