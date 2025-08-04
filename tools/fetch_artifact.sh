@@ -20,19 +20,6 @@ RED="$(tput setaf 198)"
 YELLOW="$(tput setaf 3)"
 BLUE="$(tput setaf 34)"
 
-function print_info() {
-    echo "[$MY_NAME]: ${GREEN}$1${END}"
-}
-
-function print_warn() {
-    echo "[$MY_NAME]: ${YELLOW}$1${END}"
-}
-
-function print_error() {
-    echo -e "[$MY_NAME]: ${RED}$1${END}"
-    exit 1
-}
-
 function binary_checker() {
     if which fetch_artifact &> /dev/null; then
         FETCH_CMD="fetch_artifact"
@@ -41,13 +28,29 @@ function binary_checker() {
     elif [ -f "$DEFAULT_FETCH_ARTIFACT" ]; then
         FETCH_CMD="$DEFAULT_FETCH_ARTIFACT"
     else
-        print_error "\n${RED} fetch_artifact is not found${END}"
-        echo -e "\n${RED} Please see go/fetch_artifact${END} or
-        https://android.googlesource.com/tools/fetch_artifact/+/refs/heads/main"
+        log_error "The fetch_artifact is not found. Please run 'gcert' to make sure your workstation \
+is certified. Please see go/fetch_artifact or \
+https://android.googlesource.com/tools/fetch_artifact/+/refs/heads/main for more information"
         exit 1
     fi
 }
 
+# --- Library Import ---
+SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$( cd "$( dirname "${SCRIPT_PATH}" )" &> /dev/null && pwd -P)"
+LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
+
+if [[ ! -f "$LIB_PATH" ]]; then
+    # Cannot use log_error yet as library isn't sourced
+    echo "FATAL ERROR: Cannot find required library '$LIB_PATH'" >&2
+    exit 1
+fi
+
+# Source the library. Check return code in case sourcing fails (e.g., missing dependency in lib)
+if ! . "$LIB_PATH"; then
+    echo "FATAL ERROR: Failed to source library '$LIB_PATH'. Check common_lib.sh dependencies." >&2
+    exit 1
+fi
 
 binary_checker
 
@@ -70,14 +73,16 @@ for i in "$@"; do
     esac
 done
 if [ -z "$BUILD_INFO" ]; then
-    print_error "$0 didn't come with the expected $BUILD_FORMAT"
+    log_error "$0 didn't come with the expected $BUILD_FORMAT"
 fi
 
 IFS='/' read -ra array <<< "$BUILD_INFO"
 if [ ${#array[@]} -lt 6 ]; then
-    print_error "Invalid build format: $BUILD_INFO. Needs to be: $BUILD_FORMAT"
+    log_error "Invalid build format: $BUILD_INFO. Needs to be: $BUILD_FORMAT"
+    exit 1
 elif [ ${#array[@]} -gt 7 ]; then
-    print_error "Invalid TEST_DIR format: $BUILD_INFO. Needs to be: $BUILD_FORMAT"
+    log_error "Invalid TEST_DIR format: $BUILD_INFO. Needs to be: $BUILD_FORMAT"
+    exit 1
 else
     fetch_cli+=" --branch ${array[2]}"
     fetch_cli+=" --target ${array[3]}"
@@ -90,5 +95,5 @@ else
     fetch_cli+=" '${array[5]}'"
 fi
 
-print_info "Run: $fetch_cli"
+log_info "Running command: $fetch_cli"
 eval "$fetch_cli"
