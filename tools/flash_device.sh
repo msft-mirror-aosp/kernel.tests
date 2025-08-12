@@ -582,9 +582,9 @@ function download_platform_build() {
     fi
     if [ -n "$VENDOR_KERNEL_BUILD" ]; then
         _file_patterns+=("misc_info.txt" "otatools.zip")
-        if [[ "$1" == *git_sc* ]]; then
+        if [[ "$_build_info" == *git_sc* ]]; then
             _file_patterns+=("ramdisk.img")
-        elif [[ "$1" == *user/* ]]; then
+        elif [[ "$_build_info" == *user/* ]]; then
             _file_patterns+=("vendor_ramdisk-debug.img")
         else
             _file_patterns+=("vendor_ramdisk.img")
@@ -684,7 +684,7 @@ function download_vendor_kernel_build() {
     local _build_info="$1"
     local _file_patterns=("Image.lz4" "dtbo.img" "initramfs.img")
 
-    if [[ "$VENDOR_KERNEL_VERSION" == *6.6 ]] || [[ "$VENDOR_KERNEL_VERSION" == *6.12 ]]; then
+    if [[ "$_build_info" == *6.6* ]] || [[ "$_build_info" == *6.12* ]]; then
         _file_patterns+=("*vendor_dev_nodes_fragment.img")
     fi
 
@@ -1126,7 +1126,7 @@ function flash_platform_build() {
     elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
     [ -x "$PLATFORM_REPO_ROOT/vendor/google/tools/flashall" ]; then
         cd "$PLATFORM_REPO_ROOT" || { log_error "Fail to go to $PLATFORM_REPO_ROOT" && exit 1; }
-        log_info "Flashing device by vendor/google/tools/flashall with platform build from $$PLATFORM_BUILD"
+        log_info "Flashing device by vendor/google/tools/flashall with platform build from ${PLATFORM_BUILD}"
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != *"$PRODUCT" ]]; then
             if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                 set_platform_repo "aosp_$PRODUCT"
@@ -1136,7 +1136,7 @@ function flash_platform_build() {
         fi
         _flash_cmd="vendor/google/tools/flashall  --nointeractive -w -s $DEVICE_SERIAL_NUMBER"
     else
-        log_info "Flashing device by local flash station with platform build from $$PLATFORM_BUILD"
+        log_info "Flashing device by local flash station with platform build from ${PLATFORM_BUILD}"
         prepare_to_flash_platform_build_from_local_directory
 
         _flash_cmd="$LOCAL_FLASH_CLI --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $DEVICE_SERIAL_NUMBER"
@@ -1219,7 +1219,7 @@ function flash_system_build() {
 }
 
 function prepare_to_flash_platform_build_from_local_directory () {
-    log_info "Setting up local environment to flash platform build from $$PLATFORM_BUILD"
+    log_info "Setting up local environment to flash platform build from ${PLATFORM_BUILD}"
     if [ ! -f "$PLATFORM_BUILD/android-info.txt" ] || [ ! -f "$PLATFORM_BUILD/boot.img" ]; then
         local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img*.zip)
         if [ -f "$device_image" ]; then
@@ -1273,8 +1273,8 @@ function get_mix_ramdisk_script() {
 }
 
 function mixing_build() {
-    if [ -n "${PLATFORM_REPO_ROOT_PATH}" ] && [ -f "$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME" ]; then
-        mix_kernel_cmd="$PLATFORM_REPO_ROOT_PATH/vendor/google/tools/$MIX_SCRIPT_NAME"
+    if [ -n "${PLATFORM_REPO_ROOT}" ] && [ -f "${PLATFORM_REPO_ROOT}/vendor/google/tools/$MIX_SCRIPT_NAME" ]; then
+        mix_kernel_cmd="${PLATFORM_REPO_ROOT}/vendor/google/tools/${MIX_SCRIPT_NAME}"
     elif [ -f "$DOWNLOAD_PATH/$MIX_SCRIPT_NAME" ]; then
         mix_kernel_cmd="$DOWNLOAD_PATH/$MIX_SCRIPT_NAME"
     else
