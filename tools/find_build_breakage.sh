@@ -10,6 +10,7 @@ readonly DEFAULT_BISECT_BUILDS_FILENAME="bisect_builds.xml"
 readonly DEFAULT_OUTPUT_DIR="out/$(date +%Y%m%d_%H%M%S)"
 readonly DEFAULT_TEST_RETRY=3
 readonly DEFAULT_SETUP_RETRY=3
+readonly DEFAULT_DOWNLOAD_RETRY=3
 
 # --- Global Variables ---
 ACLOUD_OUTPUT_FILE="/tmp/acloud_output.tmp"
@@ -21,6 +22,8 @@ VENDOR_KERNEL_BUILD=""
 SERIAL_NUMBER=""
 TEST_NAME=()
 TEST_DIR=""
+TEST_SUITE_URL=""
+CACHE_DIR=""
 TEST_RETRY=$DEFAULT_TEST_RETRY
 SETUP_RETRY=$DEFAULT_SETUP_RETRY
 OUTPUT_DIR=""
@@ -28,6 +31,7 @@ INPUT_FILE=""
 BISECT_FILE=""
 SKIP_BUILD=false
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
+TEMP_DIRS=()
 CURRENT_INPUT_SERIAL=""
 CURRENT_FASTBOOT_SERIAL=""
 CURRENT_ADB_SERIAL=""
@@ -62,7 +66,7 @@ readonly LAUNCH_CVD_SCRIPT="${SCRIPT_DIR}/launch_cvd.sh"
 readonly FLASH_DEVICE_SCRIPT="${SCRIPT_DIR}/flash_device.sh"
 readonly RUN_TEST_SCRIPT="${SCRIPT_DIR}/run_test_only.sh"
 readonly QUERY_BUILD_SCRIPT="${SCRIPT_DIR}/query_build.sh"
-
+readonly FETCH_ARTIFACT_SCRIPT="${SCRIPT_DIR}/fetch_artifact.sh"
 
 # --- Functions ---
 function print_help() {
@@ -87,10 +91,13 @@ function print_help() {
     echo "                                   A vendor kernel build. To bisect, use a range format."
     echo "  -s,   --serial-number <serial>   The physical device serial. If omitted, uses a Cuttlefish virtual device."
     echo "  -t,   --test <name>              [Required] The test name(s) to run. Can be repeated. (e.g., 'CtsMyModuleTest')"
-    echo "  -td,  --test-dir <path>          [Required] The path to the test artifacts (e.g., android-cts.zip)."
+    echo "  -td, --test-dir, -tb, --test-suite-build <url|path>"
+    echo "                                   [Required] Path to test artifacts or an ab:// URL to download them."
+    echo "                                   URL Format: ab://<branch>/<target>/<id>/<filename.zip>"
     echo "  -tr,  --test-retry <count>       Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] If set, pass '--skip-build' to underlying flash/launch scripts."
+    echo "  -cd,  --cache-dir <path>         [Optional] A persistent directory for downloaded test suites."
     echo "  -od,  --output-dir <path>        Path of Directory to store the bisection state XML file. Default: ${DEFAULT_OUTPUT_DIR}/${DEFAULT_BISECT_FILE}."
     echo "  -o,   --output-file <path>       Path to store the bisection state XML file. Default: ${DEFAULT_BISECT_FILE}."
     echo "  -i,   --input-file <path>        Resume bisection from the given state XML file."
@@ -128,6 +135,7 @@ function parse_args() {
             -od|--output-dir)
                 shift
                 OUTPUT_DIR="$1"
+                has_new_bisect_args=true
                 shift
                 ;;
             -pb|--platform-build)
@@ -158,9 +166,12 @@ function parse_args() {
                 TEST_NAME+=("$1")
                 shift
                 ;;
-            -td|--test-dir)
+            -td|--test-dir|-tb|--test-suite-build)
                 shift
                 TEST_DIR="$1"
+                if [[ "$TEST_DIR" == ab://* ]]; then
+                    TEST_SUITE_URL="$TEST_DIR"
+                fi
                 shift
                 ;;
             -tr|--test-retry)
@@ -177,6 +188,11 @@ function parse_args() {
                 SKIP_BUILD=true
                 shift
                 ;;
+            -cd|--cache-dir)
+                shift
+                CACHE_DIR="$1"
+                shift
+                ;;
             *)
                 log_error "Unsupported flag: $1"
                 print_help
@@ -185,13 +201,12 @@ function parse_args() {
         esac
     done
 
-    if "$has_input_file" && "$has_new_bisect_args"; then
-        fail_error "Cannot specify new bisection options (-pb, -kb, etc.) when resuming with -i."
+    if [[ "$has_input_file" == true && ! -f "$INPUT_FILE" ]]; then
+        fail_error "Input file not found: $INPUT_FILE"
     fi
 
-    # Specify the default output directory in configuration file.
-    if [[ "$has_input_file" == true && -z "${OUTPUT_DIR}" ]]; then
-        OUTPUT_DIR=$(xmlstarlet sel -t -v "/bisect/parameters/@output_dir" "$INPUT_FILE" 2> /dev/null)
+    if "$has_input_file" && "$has_new_bisect_args"; then
+        fail_error "Cannot specify new bisection options (-pb, -kb, etc.) when resuming with -i."
     fi
 
     if ! "$has_input_file"; then
@@ -237,7 +252,6 @@ function parse_build_string() {
         local old_ifs=$IFS; IFS=','
         read -r -a ids_ref <<< "$id_part"
         IFS=$old_ifs
-        # Validate that all elements are numeric
         for id in "${ids_ref[@]}"; do
             if ! [[ "$id" =~ ^[0-9]+$ ]]; then
                 fail_error "Invalid build ID in list. All IDs must be numeric: $id"
@@ -267,6 +281,145 @@ function parse_build_string() {
     return 0
 }
 
+function parse_artifact_url() {
+    local url="$1"
+    local -n branch_ref="$2"
+    local -n target_ref="$3"
+    local -n id_ref="$4"
+    local -n filename_ref="$5"
+
+    if [[ "$url" != ab://* ]]; then
+        fail_error "Invalid test suite URL format. Must start with 'ab://'. Got: $url"
+    fi
+
+    local path_part="${url#ab://}"
+    local -a parts=()
+    local IFS='/'
+    read -r -a parts <<< "$path_part"
+
+    if (( ${#parts[@]} != 4 )); then
+        fail_error "Malformed test suite URL. Expected 4 parts: ab://<branch>/<target>/<id>/<filename>. Got: $url"
+    fi
+
+    branch_ref="${parts[0]}"
+    target_ref="${parts[1]}"
+    id_ref="${parts[2]}"
+    filename_ref="${parts[3]}"
+}
+
+function handle_test_suite_url() {
+    local test_suite_url="$1"
+    log_info "Test suite provided as a URL. Preparing for download..."
+
+    local branch target build_id filename
+    parse_artifact_url "$test_suite_url" branch target build_id filename
+
+    if [[ "${filename##*.}" != "zip" ]]; then
+        fail_error "Test suite filename must be a .zip file. Got: ${filename}"
+    fi
+
+    local base_dir
+    if [[ -n "$CACHE_DIR" ]]; then
+        base_dir=$(realpath "$CACHE_DIR")
+        log_info "Using persistent cache directory: $base_dir"
+    else
+        base_dir="/tmp/bisect_builds"
+        log_info "Using temporary directory: $base_dir"
+    fi
+
+    if [[ "$build_id" == "latest" ]]; then
+        local staging_dir="${base_dir}/staging_$(date +%s%N)"
+        TEMP_DIRS+=("$staging_dir")
+        mkdir -p "$staging_dir" || fail_error "Could not create staging directory: ${staging_dir}"
+
+        log_info "Build ID is 'latest', downloading to staging area to resolve version..."
+
+        pushd "$staging_dir" >/dev/null || fail_error "pushd failed: Could not enter staging directory."
+        local download_success=false
+        for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
+            "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
+            if [[ $? -eq 0 && -f "$filename" ]]; then
+                download_success=true
+                break
+            fi
+            log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
+            sleep 10
+        done
+        popd >/dev/null || fail_error "popd failed: Could not return from staging directory."
+
+        if ! "$download_success"; then
+            fail_error "Failed to download 'latest' test suite."
+        fi
+
+        local zip_file_path="${staging_dir}/${filename}"
+        log_info "unzipping file: ${zip_file_path}..."
+        unzip -q "$zip_file_path" -d "$staging_dir" || fail_error "Failed to unzip staging file."
+
+        local unzipped_root_dir
+        unzipped_root_dir=$(find "$staging_dir" -mindepth 1 -maxdepth 1 -type d)
+
+        local version_file="${unzipped_root_dir}/tools/version.txt"
+        if [[ ! -f "$version_file" ]]; then
+            fail_error "Cannot resolve 'latest' build ID: 'tools/version.txt' not found."
+        fi
+
+        local resolved_build_id
+        resolved_build_id=$(<"$version_file")
+        if ! [[ "$resolved_build_id" =~ ^[0-9]+$ ]]; then
+            fail_error "Invalid build ID found in version.txt: '$resolved_build_id'"
+        fi
+        log_info "Resolved 'latest' build ID to: $resolved_build_id"
+
+        local final_suite_path="${base_dir}/${branch}/${target}/${resolved_build_id}"
+        [[ -d "$final_suite_path" ]] && rm -rf "$final_suite_path"
+        mkdir -p "$final_suite_path"
+
+        mv "$unzipped_root_dir" "$final_suite_path/" || fail_error "Failed to move test suite to final location."
+        TEST_DIR="${final_suite_path}/$(basename "$unzipped_root_dir")"
+
+    else # This branch handles numeric build IDs
+        local suite_path="${base_dir}/${branch}/${target}/${build_id}"
+
+        if [[ -z "$CACHE_DIR" ]]; then
+            TEMP_DIRS+=("$suite_path")
+        fi
+        [[ -d "$suite_path" ]] && rm -rf "$suite_path"
+        mkdir -p "$suite_path" || fail_error "Could not create directory: ${suite_path}"
+
+        pushd "$suite_path" >/dev/null || fail_error "pushd failed: Could not enter suite directory."
+        local download_success=false
+        for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
+            "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
+            if [[ $? -eq 0 && -f "$filename" ]]; then
+                download_success=true
+                break
+            fi
+            log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
+            sleep 10
+        done
+        popd >/dev/null || fail_error "popd failed: Could not return from suite directory."
+
+        if ! "$download_success"; then
+            fail_error "Failed to download test suite '${filename}'."
+        fi
+
+        log_info "unzipping file: ${filename}..."
+        unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip file."
+        rm -f "${suite_path}/${filename}"
+
+        local unzipped_root_dir
+        unzipped_root_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
+        TEST_DIR="$unzipped_root_dir"
+    fi
+
+    if [[ -z "$TEST_DIR" || ! -d "$TEST_DIR" ]]; then
+        fail_error "Test suite directory could not be prepared correctly."
+    fi
+
+    TEST_DIR=$(realpath "$TEST_DIR")
+    log_info "Test suite is ready at: ${TEST_DIR}"
+}
+
 function validate_args() {
     OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
     if [[ ! -d "$OUTPUT_DIR" ]]; then
@@ -275,11 +428,10 @@ function validate_args() {
     OUTPUT_DIR=$(realpath "$OUTPUT_DIR")
     BISECT_FILE="${OUTPUT_DIR}/${DEFAULT_BISECT_BUILDS_FILENAME}"
 
-    if [[ -n "$INPUT_FILE" ]]; then
-        if [[ ! -f "$INPUT_FILE" ]]; then
-            fail_error "Input file not found: $INPUT_FILE"
-        fi
-        return 0
+    if [[ "$TEST_DIR" == ab://* ]]; then
+        handle_test_suite_url "$TEST_DIR"
+    elif [[ ! -d "$TEST_DIR" ]]; then
+        fail_error "Test directory not found: $TEST_DIR"
     fi
 
     # --- New Bisection Validations ---
@@ -438,6 +590,9 @@ function init_bisect_file() {
     # Parameters node
     xml::add_node       xml_edit_cmd "/bisect" "parameters"
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_dir"      "$TEST_DIR"
+    if [[ -n "$TEST_SUITE_URL" ]]; then
+        xml::add_attribute xml_edit_cmd "/bisect/parameters" "test_suite_url" "$TEST_SUITE_URL"
+    fi
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "output_dir"    "$OUTPUT_DIR"
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_retry"    "$TEST_RETRY"
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "setup_retry"   "$SETUP_RETRY"
@@ -494,6 +649,7 @@ function load_state_from_xml() {
 
     # Parameters
     TEST_DIR=$(xml::read_value "/bisect/parameters/@test_dir")
+    TEST_SUITE_URL=$(xml::read_value "/bisect/parameters/@test_suite_url")
     OUTPUT_DIR=$(xml::read_value "/bisect/parameters/@output_dir")
     TEST_RETRY=$(xml::read_value "/bisect/parameters/@test_retry")
     SETUP_RETRY=$(xml::read_value "/bisect/parameters/@setup_retry")
@@ -763,9 +919,12 @@ function determine_default_device_type() {
 }
 
 function cleanup() {
-    log_info "Cleaning up temporary files..."
+    log_info "Cleaning up temporary files and directories..."
     if (( ${#TEMP_FILES[@]} > 0 )); then
         rm -f "${TEMP_FILES[@]}"
+    fi
+    if (( ${#TEMP_DIRS[@]} > 0 )); then
+        rm -rf "${TEMP_DIRS[@]}"
     fi
 }
 
@@ -928,22 +1087,29 @@ function bisect_builds() {
 function main() {
     trap cleanup EXIT
 
-    check_commands_available "xmlstarlet" || fail_error "xmlstarlet is required. Please install it."
+    check_commands_available "xmlstarlet" "unzip" || fail_error "xmlstarlet and unzip are required. Please install them."
 
     parse_args "$@"
-    validate_args
 
     if [[ -n "$INPUT_FILE" ]]; then
         log_info "Resuming bisection from $INPUT_FILE"
-        if [[ "$INPUT_FILE" != "$BISECT_FILE" ]]; then
-            cp "$INPUT_FILE" "$BISECT_FILE"
-            xml::update_xml_node "/bisect/parameters/@output_dir" "$OUTPUT_DIR"
+        BISECT_FILE="$INPUT_FILE"
+        load_state_from_xml
+
+        # --- Restore test suite if resuming and directory is missing ---
+        if [[ -n "$TEST_SUITE_URL" && ! -d "$TEST_DIR" ]]; then
+            log_info "Restoring missing test suite from URL... please wait."
+            log_info "URL: $TEST_SUITE_URL"
+            handle_test_suite_url "$TEST_SUITE_URL"
+            xml::update_xml_node "/bisect/parameters/@test_dir" "$TEST_DIR"
         fi
     else
+        validate_args
         log_info "Starting new bisection..."
         init_bisect_file
+        load_state_from_xml
     fi
-    load_state_from_xml
+
     determine_default_device_type
 
     if [[ "$BISECT_STATUS" == "new" ]]; then
