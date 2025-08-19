@@ -648,7 +648,7 @@ function download_gki_build() {
         kirkwood)
             _file_patterns=( "boot.img" "system_dlkm.flatten.erofs.img" )
             ;;
-        eos | aurora | betty | harriet)
+        eos | aurora)
             _file_patterns=( "boot.img" "system_dlkm.flatten.ext4.img" )
             ;;
         slsi | qcom )
