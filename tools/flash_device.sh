@@ -577,7 +577,7 @@ function download_platform_build() {
     log_info "Downloading $PLATFORM_BUILD to $PWD"
     local _build_info="$PLATFORM_BUILD"
     local _file_patterns=("*$PRODUCT-img-*.zip" "radio.img")
-    if [ "$SKIP_UPDATE_BOOTLOADER" = false ]; then
+    if [ "$SKIP_UPDATE_BOOTLOADER" = false ] || [ -n "$VENDOR_KERNEL_BUILD" ]; then
         _file_patterns+=("bootloader.img")
     fi
     if [ -n "$VENDOR_KERNEL_BUILD" ]; then
@@ -648,7 +648,7 @@ function download_gki_build() {
         kirkwood)
             _file_patterns=( "boot.img" "system_dlkm.flatten.erofs.img" )
             ;;
-        eos | aurora | betty | harriet)
+        eos | aurora)
             _file_patterns=( "boot.img" "system_dlkm.flatten.ext4.img" )
             ;;
         slsi | qcom )
