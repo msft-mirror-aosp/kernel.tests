@@ -11,6 +11,12 @@ readonly DEFAULT_OUTPUT_DIR="out/$(date +%Y%m%d_%H%M%S)"
 readonly DEFAULT_TEST_RETRY=3
 readonly DEFAULT_SETUP_RETRY=3
 readonly DEFAULT_DOWNLOAD_RETRY=3
+readonly -A BUILD_TYPE_MAP=(
+    ["pb"]="PLATFORM_BUILD"
+    ["kb"]="KERNEL_BUILD"
+    ["vkb"]="VENDOR_KERNEL_BUILD"
+    ["tb"]="TEST_SUITE_BUILD"
+)
 
 # --- Global Variables ---
 ACLOUD_OUTPUT_FILE="/tmp/acloud_output.tmp"
@@ -22,7 +28,7 @@ VENDOR_KERNEL_BUILD=""
 SERIAL_NUMBER=""
 TEST_NAME=()
 TEST_DIR=""
-TEST_SUITE_URL=""
+TEST_SUITE_BUILD=""
 CACHE_DIR=""
 TEST_RETRY=$DEFAULT_TEST_RETRY
 SETUP_RETRY=$DEFAULT_SETUP_RETRY
@@ -46,6 +52,7 @@ BISECT_STATUS=""
 BUILDS_TO_TEST=()
 BISECT_BRANCH=""
 BISECT_TARGET=""
+BISECT_FILENAME=""
 
 # --- Library Import ---
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
@@ -78,7 +85,7 @@ function print_help() {
     echo "The build argument with a range defines the target for bisection."
     echo ""
     echo "Modes:"
-    echo "  New Bisection: Provide a build range via -pb, -kb, or -vkb, along with -t, and -td."
+    echo "  New Bisection: Provide a build range via -pb, -kb, -vkb, or -td, along with -t."
     echo "  Resume Bisection: Provide -i to resume a previously started bisection."
     echo ""
     echo "Options:"
@@ -92,7 +99,8 @@ function print_help() {
     echo "  -s,   --serial-number <serial>   The physical device serial. If omitted, uses a Cuttlefish virtual device."
     echo "  -t,   --test <name>              [Required] The test name(s) to run. Can be repeated. (e.g., 'CtsMyModuleTest')"
     echo "  -td, --test-dir, -tb, --test-suite-build <url|path>"
-    echo "                                   [Required] Path to test artifacts or an ab:// URL to download them."
+    echo "                                   [Required] Path to test artifacts or an ab:// URL to download or bisect them."
+    echo "                                   Bisection URL Format: ab://<branch>/<target>/<id-range>/<filename.zip>"
     echo "                                   URL Format: ab://<branch>/<target>/<id>/<filename.zip>"
     echo "  -tr,  --test-retry <count>       Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
@@ -170,8 +178,9 @@ function parse_args() {
                 shift
                 TEST_DIR="$1"
                 if [[ "$TEST_DIR" == ab://* ]]; then
-                    TEST_SUITE_URL="$TEST_DIR"
+                    TEST_SUITE_BUILD="$TEST_DIR"
                 fi
+                has_new_bisect_args=true
                 shift
                 ;;
             -tr|--test-retry)
@@ -222,6 +231,7 @@ function parse_build_string() {
     local -n target_ref="$3"
     local -n ids_ref="$4"
     local -n type_ref="$5" # Will be 'range', 'list', 'single', or 'local'
+    local -n filename_ref="$6"
 
     if [[ "$build_str" != ab://* ]]; then
         if [[ -d "$build_str" ]]; then
@@ -238,14 +248,22 @@ function parse_build_string() {
     local IFS='/'
     read -r -a parts <<< "$path_part"
 
-    if (( ${#parts[@]} < 3 )) || [[ -z "${parts[0]}" || -z "${parts[1]}" || -z "${parts[2]}" ]]; then
-        fail_error "Malformed ab URL. Expected format: ab://<branch>/<target>/<ids>. Got: $build_str"
+    if (( ${#parts[@]} < 3 )); then
+        fail_error "Malformed ab URL. Expected at least 3 parts: ab://<branch>/<target>/<ids>[/<filename>]. Got: ${build_str}"
+    fi
+
+    if [[ -z "${parts[0]}" || -z "${parts[1]}" || -z "${parts[2]}" ]]; then
+        fail_error "The branch, target, or ids cannot be empty string. Got: ${build_str}"
     fi
 
     branch_ref="${parts[0]}"
     target_ref="${parts[1]}"
     local id_part
-    id_part=$(echo "${parts[2]}" | tr -d '[:space:]') # Remove all whitespace
+    id_part=$(echo "${parts[2]}" | tr -d '[:space:]')
+
+    if (( ${#parts[@]} >= 4 )); then
+        filename_ref="${parts[3]}"
+    fi
 
     if [[ "$id_part" == *","* ]]; then
         type_ref="list"
@@ -273,38 +291,13 @@ function parse_build_string() {
         ids_ref=("$id1" "$id2")
     else
         type_ref="single"
-        if ! [[ "$id_part" =~ ^[0-9]+$ ]]; then
-            fail_error "Invalid build ID. Must be numeric for a single build: $id_part"
+        # A single ID can be numeric or "latest"
+        if ! [[ "$id_part" =~ ^[0-9]+$ || "$id_part" == "latest" ]]; then
+            fail_error "Invalid build ID. Must be numeric or 'latest': $id_part"
         fi
         ids_ref=("$id_part")
     fi
     return 0
-}
-
-function parse_artifact_url() {
-    local url="$1"
-    local -n branch_ref="$2"
-    local -n target_ref="$3"
-    local -n id_ref="$4"
-    local -n filename_ref="$5"
-
-    if [[ "$url" != ab://* ]]; then
-        fail_error "Invalid test suite URL format. Must start with 'ab://'. Got: $url"
-    fi
-
-    local path_part="${url#ab://}"
-    local -a parts=()
-    local IFS='/'
-    read -r -a parts <<< "$path_part"
-
-    if (( ${#parts[@]} != 4 )); then
-        fail_error "Malformed test suite URL. Expected 4 parts: ab://<branch>/<target>/<id>/<filename>. Got: $url"
-    fi
-
-    branch_ref="${parts[0]}"
-    target_ref="${parts[1]}"
-    id_ref="${parts[2]}"
-    filename_ref="${parts[3]}"
 }
 
 function handle_test_suite_url() {
@@ -312,7 +305,7 @@ function handle_test_suite_url() {
     log_info "Test suite provided as a URL. Preparing for download..."
 
     local branch target build_id filename
-    parse_artifact_url "$test_suite_url" branch target build_id filename
+    parse_build_string "$test_suite_url" branch target build_id _ filename
 
     if [[ "${filename##*.}" != "zip" ]]; then
         fail_error "Test suite filename must be a .zip file. Got: ${filename}"
@@ -428,35 +421,33 @@ function validate_args() {
     OUTPUT_DIR=$(realpath "$OUTPUT_DIR")
     BISECT_FILE="${OUTPUT_DIR}/${DEFAULT_BISECT_BUILDS_FILENAME}"
 
-    if [[ "$TEST_DIR" == ab://* ]]; then
-        handle_test_suite_url "$TEST_DIR"
-    elif [[ ! -d "$TEST_DIR" ]]; then
-        fail_error "Test directory not found: $TEST_DIR"
+    if [[ -n "$INPUT_FILE" ]]; then
+        return 0
     fi
 
     # --- New Bisection Validations ---
     local bisect_arg_found=false
-    local -A build_type_map=( ["pb"]="PLATFORM_BUILD" ["kb"]="KERNEL_BUILD" ["vkb"]="VENDOR_KERNEL_BUILD" )
-    for type_code in "${!build_type_map[@]}"; do
-        local var_name="${build_type_map[$type_code]}"
+    for type_code in "${!BUILD_TYPE_MAP[@]}"; do
+        local var_name="${BUILD_TYPE_MAP[$type_code]}"
         local build_value="${!var_name}"
         if [[ -z "$build_value" ]]; then
             continue
         fi
 
-        local branch target
+        local branch target filename
         local -a ids=()
         local id_type=""
-        parse_build_string "$build_value" branch target ids id_type
+        parse_build_string "$build_value" branch target ids id_type filename
 
         if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
             if "$bisect_arg_found"; then
-                fail_error "Only one build argument (-pb, -kb, or -vkb) can contain a bisection range."
+                fail_error "Only one build argument may contain a bisection range."
             fi
             bisect_arg_found=true
             BUILD_TYPE="$type_code"
             BISECT_BRANCH="$branch"
             BISECT_TARGET="$target"
+            BISECT_FILENAME="$filename"
 
             if [[ "$id_type" == "range" ]]; then
                 get_build_ids "${ids[0]}" "${ids[1]}"
@@ -471,37 +462,41 @@ function validate_args() {
     done
 
     if ! "$bisect_arg_found"; then
-        fail_error "New bisection requires one build argument (-pb, -kb, -vkb) to have a range (e.g., 1-2) or list (e.g., 1,2,3)."
+        fail_error "New bisection requires one build argument to have a range (e.g., 1-2) or list (e.g., 1,2,3)."
     fi
 
     local fixed_builds_are_all_remote=true
     # Validate that other fixed builds are valid single builds or local paths.
-    for type_code in "${!build_type_map[@]}"; do
+    for type_code in "${!BUILD_TYPE_MAP[@]}"; do
         # Skip the one we are bisecting
         if [[ "$type_code" == "$BUILD_TYPE" ]]; then
             continue
         fi
 
-        local var_name="${build_type_map[$type_code]}"
+        local var_name="${BUILD_TYPE_MAP[$type_code]}"
         local build_value="${!var_name}"
-        if [[ -n "$build_value" ]]; then
-            if [[ "$build_value" != ab://* ]]; then
-                 fixed_builds_are_all_remote=false
-                 # It's a local path, validation already done in parse_build_string
-            else
-                 # It must be a single remote build
-                local branch target; local -a ids; local id_type
-                parse_build_string "$build_value" branch target ids id_type
-                if [[ "$id_type" != "single" ]]; then
-                    fail_error "Fixed build --${type_code}-build must be a single build ID or local path, not a range or list."
-                fi
-            fi
+        if [[ -n "$build_value" && "$build_value" != ab://* ]]; then
+            fixed_builds_are_all_remote=false
         fi
     done
 
     # Warn if --skip-build is used pointlessly.
     if "$SKIP_BUILD" && "$fixed_builds_are_all_remote"; then
         log_warn "--skip-build is specified, but all provided builds are remote 'ab://' URLs. No local building would occur anyway."
+    fi
+
+    if [[ "$BUILD_TYPE" == "tb" ]]; then
+        if [[ -z "$PLATFORM_BUILD" && -z "$KERNEL_BUILD" && -z "$VENDOR_KERNEL_BUILD" ]]; then
+            fail_error "Test suite bisection requires a fixed device build (e.g., -pb, -kb) for the one-time setup."
+        fi
+        if [[ -z "$BISECT_FILENAME" ]]; then
+            fail_error "Test suite bisection URL must include the filename (e.g., .../range/android-cts.zip)."
+        fi
+    fi
+
+    # Handle single test suite URL (non-bisection case)
+    if [[ "$BUILD_TYPE" != "tb" && -n "$TEST_SUITE_BUILD" ]]; then
+        handle_test_suite_url "$TEST_SUITE_BUILD"
     fi
 }
 
@@ -569,12 +564,12 @@ function xml::add_element() {
     local element_value=$4
     cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$element_name" -v "$element_value")
 }
+
 function init_bisect_file() {
     log_info "Initializing new bisection state file: $BISECT_FILE"
 
     local good_build_index=0
     local bad_build_index=$(( ${#BUILDS_TO_TEST[@]} - 1 ))
-    local -A build_type_map=( ["pb"]="PLATFORM_BUILD" ["kb"]="KERNEL_BUILD" ["vkb"]="VENDOR_KERNEL_BUILD" )
 
     # Create base XML structure
     echo '<?xml version="1.0" encoding="UTF-8"?><bisect/>' > "$BISECT_FILE"
@@ -590,9 +585,6 @@ function init_bisect_file() {
     # Parameters node
     xml::add_node       xml_edit_cmd "/bisect" "parameters"
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_dir"      "$TEST_DIR"
-    if [[ -n "$TEST_SUITE_URL" ]]; then
-        xml::add_attribute xml_edit_cmd "/bisect/parameters" "test_suite_url" "$TEST_SUITE_URL"
-    fi
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "output_dir"    "$OUTPUT_DIR"
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_retry"    "$TEST_RETRY"
     xml::add_attribute  xml_edit_cmd "/bisect/parameters" "setup_retry"   "$SETUP_RETRY"
@@ -608,20 +600,27 @@ function init_bisect_file() {
         pb) build_node_name="platform_builds" ;;
         kb) build_node_name="kernel_builds" ;;
         vkb) build_node_name="vendor_kernel_builds" ;;
+        tb) build_node_name="test_suite_builds" ;;
     esac
     xml::add_node       xml_edit_cmd "/bisect" "$build_node_name"
     xml::add_attribute  xml_edit_cmd "/bisect/$build_node_name" "branch" "$BISECT_BRANCH"
     xml::add_attribute  xml_edit_cmd "/bisect/$build_node_name" "target" "$BISECT_TARGET"
+    if [[ "$BUILD_TYPE" == "tb" ]]; then
+        xml::add_attribute xml_edit_cmd "/bisect/$build_node_name" "filename" "$BISECT_FILENAME"
+    fi
     for build_id in "${BUILDS_TO_TEST[@]}"; do
         xml::add_element xml_edit_cmd "/bisect/$build_node_name" "build" "$build_id"
     done
 
     # Fixed builds
-    for type in "platform" "kernel" "vendor_kernel"; do
-        local var_name="${type^^}_BUILD"
-        local build_value="${!var_name}"
-        if [[ -n "$build_value" && "${build_type_map[$BUILD_TYPE]}" != "$var_name" ]]; then
-            xml::add_element xml_edit_cmd "/bisect" "${type}_build" "$build_value"
+    for type_code in "${!BUILD_TYPE_MAP[@]}"; do
+        if [[ "$type_code" != "$BUILD_TYPE" ]]; then
+            local var_name="${BUILD_TYPE_MAP[$type_code]}"
+            local build_value="${!var_name}"
+            if [[ -n "$build_value" ]]; then
+                local tag_name="${var_name,,}"
+                xml::add_element xml_edit_cmd "/bisect" "$tag_name" "$build_value"
+            fi
         fi
     done
 
@@ -639,6 +638,7 @@ function xml::read_values_to_array() {
     local -n array_ref=$2
     mapfile -t array_ref < <(xmlstarlet sel -t -v "$xpath" -n "$BISECT_FILE" 2>/dev/null)
 }
+
 function load_state_from_xml() {
     log_info "Loading state from $BISECT_FILE..."
     # State
@@ -649,7 +649,6 @@ function load_state_from_xml() {
 
     # Parameters
     TEST_DIR=$(xml::read_value "/bisect/parameters/@test_dir")
-    TEST_SUITE_URL=$(xml::read_value "/bisect/parameters/@test_suite_url")
     OUTPUT_DIR=$(xml::read_value "/bisect/parameters/@output_dir")
     TEST_RETRY=$(xml::read_value "/bisect/parameters/@test_retry")
     SETUP_RETRY=$(xml::read_value "/bisect/parameters/@setup_retry")
@@ -663,17 +662,31 @@ function load_state_from_xml() {
         pb) bisect_node_name="platform_builds" ;;
         kb) bisect_node_name="kernel_builds" ;;
         vkb) bisect_node_name="vendor_kernel_builds" ;;
+        tb) bisect_node_name="test_suite_builds" ;;
     esac
     BISECT_BRANCH=$(xml::read_value "/bisect/$bisect_node_name/@branch")
     BISECT_TARGET=$(xml::read_value "/bisect/$bisect_node_name/@target")
+    if [[ "$BUILD_TYPE" == "tb" ]]; then
+        BISECT_FILENAME=$(xml::read_value "/bisect/$bisect_node_name/@filename")
+    fi
     xml::read_values_to_array "/bisect/$bisect_node_name/build" BUILDS_TO_TEST
 
     # Fixed Builds
     PLATFORM_BUILD=$(xml::read_value "/bisect/platform_build")
     KERNEL_BUILD=$(xml::read_value "/bisect/kernel_build")
     VENDOR_KERNEL_BUILD=$(xml::read_value "/bisect/vendor_kernel_build")
+    TEST_SUITE_BUILD=$(xml::read_value "/bisect/test_suite_build")
 
     log_info "State loaded successfully. Good: ${BUILDS_TO_TEST[$GOOD_INDEX]}, Bad: ${BUILDS_TO_TEST[$BAD_INDEX]}. Status: $BISECT_STATUS"
+
+    # Restore missing test suite directory if necessary.
+    # This is a self-correcting side effect to ensure the state is usable.
+    if [[ -n "$TEST_SUITE_BUILD" && ! -d "$TEST_DIR" ]]; then
+        log_info "Restoring missing test suite from URL... please wait."
+        log_info "URL: $TEST_SUITE_BUILD"
+        handle_test_suite_url "$TEST_SUITE_BUILD"
+        xml::update_xml_node "/bisect/parameters/@test_dir" "$TEST_DIR"
+    fi
 }
 
 function xml::update_xml_node() {
@@ -683,41 +696,19 @@ function xml::update_xml_node() {
     xmlstarlet ed -L -u "$xpath_expr" -v "$value" "$BISECT_FILE"
 }
 
-function setup_and_test_build() {
-    local build_id_to_test="$1"
+function perform_device_setup() {
+    local pb="$1" kb="$2" vkb="$3"
+
     local -a setup_cmd_array=()
-    local -a test_cmd=()
-    local current_pb=""
-    local current_kb=""
-    local current_vkb=""
-    local input_serial_to_use="$SERIAL_NUMBER"
-
-    # --- Construct Build Arguments ---
-    case "$BUILD_TYPE" in
-        pb) current_pb="ab://${BISECT_BRANCH}/${BISECT_TARGET}/${build_id_to_test}" ;;
-        kb) current_kb="ab://${BISECT_BRANCH}/${BISECT_TARGET}/${build_id_to_test}" ;;
-        vkb) current_vkb="ab://${BISECT_BRANCH}/${BISECT_TARGET}/${build_id_to_test}" ;;
-    esac
-    # Override with fixed builds if they are provided
-    [[ -n "$PLATFORM_BUILD" ]] && current_pb="$PLATFORM_BUILD"
-    [[ -n "$KERNEL_BUILD" ]] && current_kb="$KERNEL_BUILD"
-    [[ -n "$VENDOR_KERNEL_BUILD" ]] && current_vkb="$VENDOR_KERNEL_BUILD"
-
-    log_info "Preparing to test build ID: $build_id_to_test"
-    log_info "Platform: ${current_pb:-<not set>}"
-    log_info "Kernel: ${current_kb:-<not set>}"
-    log_info "Vendor Kernel: ${current_vkb:-<not set>}"
-
-    # --- Construct Setup Command Array ---
     if [[ "$DEVICE_TYPE" == "PHYSICAL" ]]; then
         setup_cmd_array=("$FLASH_DEVICE_SCRIPT" "-s" "$SERIAL_NUMBER")
-        [[ -n "$current_pb" ]] && setup_cmd_array+=("-pb" "$current_pb")
-        [[ -n "$current_kb" ]] && setup_cmd_array+=("-kb" "$current_kb")
-        [[ -n "$current_vkb" ]] && setup_cmd_array+=("-vkb" "$current_vkb")
+        [[ -n "$pb" ]] && setup_cmd_array+=("-pb" "$pb")
+        [[ -n "$kb" ]] && setup_cmd_array+=("-kb" "$kb")
+        [[ -n "$vkb" ]] && setup_cmd_array+=("-vkb" "$vkb")
     elif [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
         setup_cmd_array=("$LAUNCH_CVD_SCRIPT")
-        [[ -n "$current_pb" ]] && setup_cmd_array+=("-pb" "$current_pb")
-        [[ -n "$current_kb" ]] && setup_cmd_array+=("-kb" "$current_kb")
+        [[ -n "$pb" ]] && setup_cmd_array+=("-pb" "$pb")
+        [[ -n "$kb" ]] && setup_cmd_array+=("-kb" "$kb")
         # launch_cvd does not support vkb
     else
         fail_error "The Device Type Option not supported: ${DEVICE_TYPE}"
@@ -726,14 +717,11 @@ function setup_and_test_build() {
         setup_cmd_array+=("--skip-build")
     fi
 
-    # --- Execute Setup with Retry ---
-    log_info "Executing setup command: ${setup_cmd_array[*]}"
+    log_info "Executing device setup: ${setup_cmd_array[*]}"
     local setup_success=false
-
     for i in $(seq 1 "$SETUP_RETRY"); do
         local setup_status=1
         if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-            # Special handling for teeing output
             unbuffer "${setup_cmd_array[@]}" | tee "$ACLOUD_OUTPUT_FILE"
             setup_status=${PIPESTATUS[0]}
         else
@@ -745,91 +733,123 @@ function setup_and_test_build() {
             setup_success=true
             break
         fi
-        log_warn "Setup failed (Attempt $i/$SETUP_RETRY). Retrying in 10 seconds..."
+        log_warn "Setup failed (Attempt $i/$SETUP_RETRY). Retrying..."
         sleep 10
     done
 
     if ! "$setup_success"; then
-        fail_error "Device setup failed after $SETUP_RETRY attempts. Aborting bisection."
+        fail_error "Device setup failed after $SETUP_RETRY attempts."
     fi
 
     log_info "Device setup successful."
+}
 
-    # If CVD, find the new serial number
+function run_tests_on_device() {
+    local input_serial_to_use="$SERIAL_NUMBER"
     if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        log_info "Waiting for Cuttlefish device to come online..."
-
-        if ! [[ -f "$ACLOUD_OUTPUT_FILE" ]]; then
-            fail_error "Could not find serial for Cuttlefish device after launch."
-        fi
-
         input_serial_to_use=$(grep -oP "ANDROID_SERIAL=\K[\.0-9:]+" "$ACLOUD_OUTPUT_FILE")
-        if [[ -z "$input_serial_to_use" ]]; then
-            fail_error "Could not find ANDROID_SERIAL in launch_cvd output. Cannot proceed."
-        fi
+    fi
 
-        log_info "Found Cuttlefish device serial: $input_serial_to_use. Waiting for boot to complete..."
-        adb -s "$input_serial_to_use" wait-for-device
-        while ! adb -s "$input_serial_to_use" shell pm path com.android.settings > /dev/null 2>&1; do
-            log_info "Waiting for package manager on $input_serial_to_use..."
+    device::set_current "$input_serial_to_use" || return 1
+    if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
+        adb -s "$CURRENT_ADB_SERIAL" wait-for-device
+        while ! adb -s "$CURRENT_ADB_SERIAL" shell pm path com.android.settings > /dev/null 2>&1; do
+            log_info "Waiting for package manager on $CURRENT_ADB_SERIAL..."
             sleep 5
         done
-        log_info "Device $input_serial_to_use is fully online."
-    elif [[ "$DEVICE_TYPE" == "PHYSICAL" ]]; then
-        device::set_current "$input_serial_to_use"
+    else
         unlock_screen "$CURRENT_ADB_SERIAL"
         skip_setup_wizard "$CURRENT_ADB_SERIAL"
     fi
 
-    device::set_current "$input_serial_to_use"
-
-    # --- Construct and Execute Test Command Array ---
-    test_cmd=("$RUN_TEST_SCRIPT")
-    [[ "$CURRENT_MODE_TYPE" == "FASTBOOT" ]] && test_cmd+=("-s" "$CURRENT_FASTBOOT_SERIAL")
+    local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_DIR" "-tl" "$OUTPUT_DIR/test_logs")
+    # [[ "$CURRENT_MODE_TYPE" == "FASTBOOT" ]] && test_cmd+=("-s" "$CURRENT_FASTBOOT_SERIAL")
     [[ "$CURRENT_MODE_TYPE" == "ADB" ]] && test_cmd+=("-s" "$CURRENT_ADB_SERIAL")
-    test_cmd+=("-td" "$TEST_DIR")
-    test_cmd+=("-tl" "$OUTPUT_DIR/test_logs")
     for test in "${TEST_NAME[@]}"; do
         test_cmd+=("-t" "$test")
     done
 
     log_info "Executing test command: ${test_cmd[*]}"
-
-    local test_success=false
     for i in $(seq 1 "$TEST_RETRY"); do
         "${test_cmd[@]}"
         if (( $? == 0 )); then
-            test_success=true
-            break
+            log_info "Test SUCCEEDED."
+            return 0 # GOOD
         fi
         log_warn "Test failed (Attempt $i/$TEST_RETRY). Retrying..."
     done
 
-    if "$test_success"; then
-        log_info "Test SUCCEEDED for build $build_id_to_test."
-        return 0 # GOOD
-    else
-        log_warn "Test FAILED for build $build_id_to_test after $TEST_RETRY attempts."
-        return 1 # BAD
-    fi
+    log_warn "Test FAILED after $TEST_RETRY attempts."
+    return 1 # BAD
 }
 
+function setup_and_test_build() {
+    local build_id_to_test="$1"
+    local current_pb="$PLATFORM_BUILD"
+    local current_kb="$KERNEL_BUILD"
+    local current_vkb="$VENDOR_KERNEL_BUILD"
+
+    case "$BUILD_TYPE" in
+        pb) current_pb="ab://${BISECT_BRANCH}/${BISECT_TARGET}/${build_id_to_test}" ;;
+        kb) current_kb="ab://${BISECT_BRANCH}/${BISECT_TARGET}/${build_id_to_test}" ;;
+        vkb) current_vkb="ab://${BISECT_BRANCH}/${BISECT_TARGET}/${build_id_to_test}" ;;
+    esac
+
+    perform_device_setup "$current_pb" "$current_kb" "$current_vkb"
+    run_tests_on_device
+    return $?
+}
+
+function setup_and_run_test_suite() {
+    local build_id_to_test="$1"
+
+    log_info "Preparing test suite for build ID: $build_id_to_test"
+    local suite_url_to_test="ab://${BISECT_BRANCH}/${BISECT_TARGET}/${build_id_to_test}/${BISECT_FILENAME}"
+
+    handle_test_suite_url "$suite_url_to_test"
+
+    xml::update_xml_node "/bisect/parameters/@test_dir" "$TEST_DIR"
+    # When bisecting test suites, the "fixed" build URL is the one we are currently testing.
+    xml::update_xml_node "/bisect/test_suite_build" "$suite_url_to_test"
+
+    run_tests_on_device
+    return $?
+}
+
+function perform_one_time_device_setup() {
+    log_info "Performing one-time device setup for test suite bisection..."
+    perform_device_setup "$PLATFORM_BUILD" "$KERNEL_BUILD" "$VENDOR_KERNEL_BUILD"
+    log_info "One-time device setup complete."
+}
 
 function validate_initial_bounds() {
     log_info "--- Validating Good Build (${BUILDS_TO_TEST[0]}) ---"
-    setup_and_test_build "${BUILDS_TO_TEST[0]}"
-    if (( $? != 0 )); then
-        fail_error "Validation failed: The first build in the range is FAILING the test. Please check your inputs and test stability."
+    local test_status
+    if [[ "$BUILD_TYPE" == "tb" ]]; then
+        setup_and_run_test_suite "${BUILDS_TO_TEST[0]}"
+        test_status=$?
+    else
+        setup_and_test_build "${BUILDS_TO_TEST[0]}"
+        test_status=$?
+    fi
+    if (( test_status != 0 )); then
+        fail_error "Validation failed: The first build in the range is FAILING the test."
     fi
     log_info "Good Build validation successful."
 
     local last_build_index=$(( ${#BUILDS_TO_TEST[@]} - 1 ))
     log_info "--- Validating Bad Build (${BUILDS_TO_TEST[$last_build_index]}) ---"
-    setup_and_test_build "${BUILDS_TO_TEST[$last_build_index]}"
-    if (( $? == 0 )); then
-        fail_error "Validation failed: The last build in the range is PASSING the test. Please check your inputs."
+    if [[ "$BUILD_TYPE" == "tb" ]]; then
+        setup_and_run_test_suite "${BUILDS_TO_TEST[$last_build_index]}"
+        test_status=$?
+    else
+        setup_and_test_build "${BUILDS_TO_TEST[$last_build_index]}"
+        test_status=$?
     fi
-    log_info "Bad Build validation successful."
+    if (( test_status == 0 )); then
+        fail_error "Validation failed: The last build in the range is PASSING the test."
+    fi
+    log_info "Bounds validation successful."
 }
 
 function skip_setup_wizard() {
@@ -907,7 +927,6 @@ function unlock_screen() {
         fail_error "Can't turn on the screen. Please check the device."
     fi
 }
-
 
 function determine_default_device_type() {
     if [[ -n "$SERIAL_NUMBER" ]]; then
@@ -998,12 +1017,10 @@ function device::set_current() {
 }
 
 function device::find_fastboot_serial_number() {
-    #print_info "Try to find device $DEVICE_SERIAL_NUMBER serial id in fastboot devices" "$LINENO"
     local device_serial="$1"
     local device_ids
     device_ids=$(fastboot devices | awk '{print $1}')
     while IFS= read -r device_id; do
-        # Use fastboot getvar to retrieve serial number
         local _output
         _output=$(fastboot -s "$device_id" getvar serialno 2>&1)
         local target_device_serial
@@ -1053,8 +1070,14 @@ function bisect_builds() {
 
         log_info "--- Testing build at index: $mid_index (ID: $mid_build_id) ---"
 
-        setup_and_test_build "$mid_build_id"
-        local test_status=$?
+        local test_status
+        if [[ "$BUILD_TYPE" == "tb" ]]; then
+            setup_and_run_test_suite "$mid_build_id"
+            test_status=$?
+        else
+            setup_and_test_build "$mid_build_id"
+            test_status=$?
+        fi
 
         if (( test_status == 0 )); then
             log_info "RESULT: Build $mid_build_id is GOOD."
@@ -1094,23 +1117,19 @@ function main() {
     if [[ -n "$INPUT_FILE" ]]; then
         log_info "Resuming bisection from $INPUT_FILE"
         BISECT_FILE="$INPUT_FILE"
-        load_state_from_xml
-
-        # --- Restore test suite if resuming and directory is missing ---
-        if [[ -n "$TEST_SUITE_URL" && ! -d "$TEST_DIR" ]]; then
-            log_info "Restoring missing test suite from URL... please wait."
-            log_info "URL: $TEST_SUITE_URL"
-            handle_test_suite_url "$TEST_SUITE_URL"
-            xml::update_xml_node "/bisect/parameters/@test_dir" "$TEST_DIR"
-        fi
     else
         validate_args
         log_info "Starting new bisection..."
         init_bisect_file
-        load_state_from_xml
     fi
 
+    load_state_from_xml
+
     determine_default_device_type
+
+    if [[ "$BUILD_TYPE" == "tb" ]]; then
+        perform_one_time_device_setup
+    fi
 
     if [[ "$BISECT_STATUS" == "new" ]]; then
         log_info "--- New bisection: Validating initial good and bad build boundaries ---"
