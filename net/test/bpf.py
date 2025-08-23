@@ -46,11 +46,6 @@ __NR_bpf = {  # pylint: disable=invalid-name
     "riscv64-64bit": 280,
 }[os.uname()[4] + "-" + ("64" if sys.maxsize > 0x7FFFFFFF else "32") + "bit"]
 
-# After ACK merge of 5.10.168 is when support for this was backported from
-# upstream Linux 5.14 and was merged into ACK android{12,13}-5.10 branches.
-# Require support to be backported to any 5.10+ kernel.
-HAVE_SO_NETNS_COOKIE = net_test.LINUX_VERSION >= (5, 10, 0)
-
 # Note: This is *not* correct for parisc & sparc architectures
 SO_NETNS_COOKIE = 71
 
