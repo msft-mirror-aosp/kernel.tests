@@ -594,8 +594,7 @@ class RIOTest(multinetwork_base.MultiNetworkBaseTest):
     # return sysctls to default values before each test case
     self.SetAcceptRaRtInfoMinPlen(0)
     self.SetAcceptRaRtInfoMaxPlen(0)
-    if multinetwork_base.HAVE_ACCEPT_RA_MIN_LFT:
-      self.SetAcceptRaMinLft(0)
+    self.SetAcceptRaMinLft(0)
     if multinetwork_base.HAVE_RA_HONOR_PIO_LIFE:
       self.SetRaHonorPioLife(0)
     if multinetwork_base.HAVE_RA_HONOR_PIO_PFLAG:
@@ -825,8 +824,6 @@ class RIOTest(multinetwork_base.MultiNetworkBaseTest):
   # Contextually, testAcceptRa tests do not belong in RIOTest, but as it
   # turns out, RIOTest has all the useful helpers defined for these tests.
   # TODO: Rename test class or merge RIOTest with RATest.
-  @unittest.skipUnless(multinetwork_base.HAVE_ACCEPT_RA_MIN_LFT,
-                       "need support for accept_ra_min_lft")
   def testAcceptRaMinLftReadWrite(self):
     self.SetAcceptRaMinLft(500)
     self.assertEqual(500, self.GetAcceptRaMinLft())
@@ -850,8 +847,6 @@ class RIOTest(multinetwork_base.MultiNetworkBaseTest):
     # Assert that the address was deleted.
     self.assertIsNone(self.MyAddress(6, self.NETID))
 
-  @unittest.skipUnless(multinetwork_base.HAVE_ACCEPT_RA_MIN_LFT,
-                       "need support for accept_ra_min_lft")
   def testAcceptRaMinLftRouterLifetime(self):
     self.SetAcceptRaMinLft(500)
 
@@ -874,8 +869,6 @@ class RIOTest(multinetwork_base.MultiNetworkBaseTest):
     if multinetwork_base.HAVE_AUTOCONF_TABLE:
       self.assertEqual(1, len(self.FindRoutesWithGateway()))
 
-  @unittest.skipUnless(multinetwork_base.HAVE_ACCEPT_RA_MIN_LFT,
-                       "need support for accept_ra_min_lft")
   def testAcceptRaMinLftPIOLifetime(self):
     self.SetAcceptRaMinLft(500)
 
@@ -901,8 +894,6 @@ class RIOTest(multinetwork_base.MultiNetworkBaseTest):
     time.sleep(0.1) # Give the kernel time to notice our RA
     self.assertIsNotNone(self.MyAddress(6, self.NETID))
 
-  @unittest.skipUnless(multinetwork_base.HAVE_ACCEPT_RA_MIN_LFT,
-                       "need support for accept_ra_min_lft")
   def testAcceptRaMinLftRIOLifetime(self):
     PREFIX = "2001:db8:8901:2300::"
     PLEN = 64
