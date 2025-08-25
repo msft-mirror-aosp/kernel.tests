@@ -23,7 +23,6 @@ import itertools
 import struct
 import unittest
 
-from net_test import LINUX_VERSION
 from scapy import all as scapy
 from tun_twister import TunTwister
 import csocket
@@ -39,26 +38,6 @@ _LOOPBACK_IFINDEX = 1
 _TEST_XFRM_IFNAME = "ipsec42"
 _TEST_XFRM_IF_ID = 42
 _TEST_SPI = 0x1234
-
-# Two kernel fixes have been added in 5.17 to allow XFRM_MIGRATE to work correctly
-# when (1) there are multiple tunnels with the same selectors; and (2) addresses
-# are updated to a different IP family. These two fixes were pulled into upstream
-# LTS releases 4.14.273, 4.19.236, 5.4.186, 5.10.107 and 5.15.30, from whence they
-# flowed into the Android Common Kernel (via standard LTS merges).
-#
-# Note 'xfrm: Check if_id in xfrm_migrate' did not end up in 4.14 LTS,
-# and is only present in ACK android-4.14-stable after 4.14.320 LTS merge.
-# See https://android-review.git.corp.google.com/c/kernel/common/+/2640243
-#
-# As such we require 4.14.321+, 4.19.236+, 5.4.186+, 5.10.107+, 5.15.30+ or 5.17+
-# to have these fixes.
-def HasXfrmMigrateFixes():
-    return net_test.KernelAtLeast([(4, 19, 236), (5, 4, 186),
-                                   (5, 10, 107), (5, 15, 30)]) or net_test.NonGXI(4, 14)
-
-
-# Does the kernel support CONFIG_XFRM_MIGRATE and include the kernel fixes?
-SUPPORTS_XFRM_MIGRATE = HasXfrmMigrateFixes()
 
 # Parameters to setup tunnels as special networks
 _TUNNEL_NETID_OFFSET = 0xFC00  # Matches reserved netid range for IpSecService
@@ -1012,8 +991,6 @@ class XfrmInterfaceTest(XfrmTunnelBase):
 # Note: the 'Check if_id in xfrm_migrate' fix did not land in 4.14 LTS,
 # and instead landed in android-4.14-stable after 4.14.320 LTS merge.
 #
-@unittest.skipUnless(SUPPORTS_XFRM_MIGRATE,
-                     "XFRM migration unsupported or fixes not included")
 class XfrmInterfaceMigrateTest(XfrmTunnelBase):
   INTERFACE_CLASS = XfrmInterface
 
