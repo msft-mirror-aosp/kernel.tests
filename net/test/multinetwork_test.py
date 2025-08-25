@@ -237,8 +237,7 @@ class OutgoingTest(multinetwork_base.MultiNetworkBaseTest):
             # Changing SO_BINDTODEVICE always invalidates the dst cache entry.
             return False
           if mode == "mark":
-            # Changing the mark invalidates the dst cache entry in 5.0+.
-            return net_test.LINUX_VERSION < (5, 0, 0)
+            return False
           raise AssertionError("%s must be one of %s" % (mode, modes))
 
         if SocketHasStaleDstCacheEntry():
