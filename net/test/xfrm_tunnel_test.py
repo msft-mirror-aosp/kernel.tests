@@ -58,36 +58,7 @@ def HasXfrmMigrateFixes():
 
 
 # Does the kernel support CONFIG_XFRM_MIGRATE and include the kernel fixes?
-def SupportsXfrmMigrate():
-  if not HasXfrmMigrateFixes():
-    return False
-
-  # 5.10+ must have CONFIG_XFRM_MIGRATE enabled
-  if LINUX_VERSION >= (5, 10, 0):
-    return True
-
-  try:
-    x = xfrm.Xfrm()
-    wildcard_addr = net_test.GetWildcardAddress(6)
-    selector = xfrm.EmptySelector(AF_INET6)
-
-    # Expect migration to fail with EINVAL because it is trying to migrate a
-    # non-existent SA.
-    x.MigrateTunnel(xfrm.XFRM_POLICY_OUT, selector, wildcard_addr, wildcard_addr,
-                    wildcard_addr, wildcard_addr, _TEST_SPI,
-                    None, None, None, None, None, None)
-    print("Migration succeeded unexpectedly, assuming XFRM_MIGRATE is enabled")
-    return True
-  except IOError as err:
-    if err.errno == ENOPROTOOPT:
-      return False
-    elif err.errno == EINVAL:
-      return True
-    else:
-      print("Unexpected error, assuming XFRM_MIGRATE is enabled:", err.errno)
-      return True
-
-SUPPORTS_XFRM_MIGRATE = SupportsXfrmMigrate()
+SUPPORTS_XFRM_MIGRATE = HasXfrmMigrateFixes()
 
 # Parameters to setup tunnels as special networks
 _TUNNEL_NETID_OFFSET = 0xFC00  # Matches reserved netid range for IpSecService
