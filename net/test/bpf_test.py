@@ -435,7 +435,6 @@ class BpfTest(net_test.NetworkTest):
   #   ANDROID: fix ABI by undoing atomic64_t -> u64 type conversion
   #   https://android-review.git.corp.google.com/c/kernel/common/+/2506895
   #
-  @unittest.skipUnless(bpf.HAVE_SO_NETNS_COOKIE, "no SO_NETNS_COOKIE support")
   def testGetNetNsCookie(self):
     sk = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM, 0)
     sizeof_u64 = 8
