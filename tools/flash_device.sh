@@ -1392,7 +1392,7 @@ dialog on your Android device; or (recommended) set ADB_VENDOR_KEYS (go/adb-keys
 then restart adb server with command (adb kill-server, adb start-server) to allow permanent authorization."
 
     if [[ "$output" == *unauthorized* ]]; then
-        log_warn "$_message"
+        log_warn "$message"
         return 1 # Failed.
     fi
     return 0
