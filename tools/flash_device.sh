@@ -652,15 +652,31 @@ function download_gki_build() {
             _file_patterns=( "boot.img" "system_dlkm.flatten.ext4.img" )
             ;;
         slsi | qcom )
-            _file_patterns=( "boot-gz.img" "system_dlkm.img"  )
+            _file_patterns=( "boot-gz.img" )
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
+                _file_patterns+=( "system_dlkm.img" )
+            else
+                _file_patterns+=( "system_dlkm.flatten.ext4.img" )
+            fi
             ;;
         mtk )
-            _file_patterns=( "boot.img" "system_dlkm.img"  )
+            _file_patterns=( "boot.img" )
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
+                _file_patterns+=( "system_dlkm.img" )
+            else
+                _file_patterns+=( "system_dlkm.flatten.ext4.img" )
+            fi
             ;;
         *)
-            _file_patterns=( "boot-lz4.img" "system_dlkm.img" )
+            _file_patterns=( "boot-lz4.img" )
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
+                _file_patterns+=( "system_dlkm.img" )
+            else
+                _file_patterns+=( "system_dlkm.flatten.ext4.img" )
+            fi
             ;;
     esac
+
     for _pattern in "${_file_patterns[@]}"; do
         log_info "Downloading $_build_info/$_pattern"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
@@ -1392,7 +1408,7 @@ dialog on your Android device; or (recommended) set ADB_VENDOR_KEYS (go/adb-keys
 then restart adb server with command (adb kill-server, adb start-server) to allow permanent authorization."
 
     if [[ "$output" == *unauthorized* ]]; then
-        log_warn "$_message"
+        log_warn "$message"
         return 1 # Failed.
     fi
     return 0
