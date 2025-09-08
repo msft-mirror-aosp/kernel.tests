@@ -586,8 +586,6 @@ function download_platform_build() {
             _file_patterns+=("ramdisk.img")
         elif [[ "$_build_info" == *user/* ]]; then
             _file_patterns+=("vendor_ramdisk-debug.img")
-        else
-            _file_patterns+=("vendor_ramdisk.img")
         fi
     fi
 
