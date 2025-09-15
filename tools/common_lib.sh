@@ -244,7 +244,7 @@ function go_to_repo_root() {
     local repo_root
     local cd_status
 
-    log_info "Attempting to find repo root starting from: '${start_dir}'"
+    log_info "Attempting to find repo root from '${start_dir}'"
 
     # Call find_repo_root, capture its output (the path) and exit status
     # Use process substitution or command substitution carefully
@@ -259,17 +259,21 @@ function go_to_repo_root() {
         return 1
     fi
 
-    log_info "Repo root found: '${repo_root}'. Changing directory..."
+    if [[ $(pwd) == "$repo_root" ]]; then
+        log_info "The current directory is already the repo root: $PWD"
+    else
+        # Only log and change directory if we are not already in the repo root
+        log_info "Repo root found: '${repo_root}'. Changing directory..."
 
-    cd -- "$repo_root" &>/dev/null
-    cd_status=$?
-    if (( cd_status != 0 )); then
-        log_error "Failed to change directory to: '${repo_root}'" "$cd_status"
-        return "$cd_status"
+        cd -- "$repo_root" &>/dev/null
+        cd_status=$?
+        if (( cd_status != 0 )); then
+            log_error "Failed to change directory to: '${repo_root}'" "$cd_status"
+            return "$cd_status"
+        fi
+        log_info "Successfully changed directory to repo root: $PWD"
+        return 0
     fi
-
-    log_info "Successfully changed directory to repo root: $PWD"
-    return 0
 }
 
 function is_in_repo_workspace() {
