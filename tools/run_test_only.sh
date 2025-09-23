@@ -69,7 +69,7 @@ function run_test_in_platform_repo() {
     [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]] || \
     [ -z "${TARGET_PRODUCT}" ]; then
         log_warn "Build target product '${TARGET_PRODUCT}' does not match device product '$PRODUCT'. Reset build environment."
-        set_platform_repo
+        set_platform_repo "${PRODUCT}" "${BUILD_TYPE}" "${REPO_ROOT_PATH}"
     fi
     atest_cli=""
     if [ "$USE_RBE" = false ]; then
