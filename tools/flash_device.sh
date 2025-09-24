@@ -639,7 +639,7 @@ function download_gki_build() {
     case "$PRODUCT" in
         oriole | raven | bluejay)
             _file_patterns=( "boot-lz4.img" )
-            if [ -n "$VENDOR_KERNEL_BUILD" ]; then
+            if [ -n "$VENDOR_KERNEL_BUILD" ] && [[ "$_build_info" != *android13* ]]; then
                 _file_patterns+=( "system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers" )
             fi
             ;;
