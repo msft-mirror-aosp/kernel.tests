@@ -303,7 +303,7 @@ if [[ "$TEST_DIR" == ab://* ]]; then
     if [ ! -d "$DOWNLOAD_PATH" ]; then
         mkdir -p "$DOWNLOAD_PATH"
     fi
-    cd "$DOWNLOAD_PATH" || ( log_error "Failed to go to $DOWNLOAD_PATH" && exit 1 )
+    cd "$DOWNLOAD_PATH" || { log_error "Failed to go to $DOWNLOAD_PATH"; exit 1; }
     file_name=${TEST_DIR##*/}
     eval "$FETCH_SCRIPT $TEST_DIR"
     exit_code=$?
@@ -329,7 +329,7 @@ elif [ -n "$TEST_DIR" ]; then
         log_error "$TEST_DIR is neither a directory or file"
         exit 1
     fi
-    cd "$test_file_path" || ( log_error "Failed to go to $test_file_path" && exit 1 )
+    cd "$test_file_path" || { log_error "Failed to go to $test_file_path"; exit 1; }
     TEST_REPO_LIST_OUT=$(repo list 2>&1)
     if [[ "$TEST_REPO_LIST_OUT" == "error"* ]]; then
         log_info "Test path $test_file_path is not in an Android repo. Will use $TEST_DIR directly."
@@ -345,7 +345,7 @@ if [[ "$TRADEFED" == ab://* ]]; then
     if [ ! -d "$DOWNLOAD_PATH" ]; then
         mkdir -p "$DOWNLOAD_PATH"
     fi
-    cd $DOWNLOAD_PATH || ( log_error "Fail to go to $DOWNLOAD_PATH" && exit 1 )
+    cd $DOWNLOAD_PATH || { log_error "Fail to go to $DOWNLOAD_PATH"; exit 1; }
     file_name=${TRADEFED##*/}
     eval "$FETCH_SCRIPT $TRADEFED"
     exit_code=$?
@@ -367,7 +367,7 @@ if [[ "$TRADEFED" == ab://* ]]; then
     if [ -d "$tf_dir" ]; then
         rm -r "$tf_dir"
     fi
-    unzip -oq "$file_name" -d "$tf_dir" || ( log_error "Failed to unzip $file_name to $tf_dir" && exit 1 )
+    unzip -oq "$file_name" -d "$tf_dir" || { log_error "Failed to unzip $file_name to $tf_dir"; exit 1; }
     TRADEFED=$(find "$tf_dir" -type f -name "tradefed.sh" -executable)
     if [ -z "$TRADEFED" ]; then
         log_error "Could not find tradefed.sh in $tf_dir"
@@ -382,7 +382,7 @@ if [[ "$TEST_DIR" == *.zip ]]; then
     if [ -d "$new_test_dir" ]; then
         rm -r "$new_test_dir"
     fi
-    unzip -oq "$TEST_DIR" -d "$new_test_dir" || ( log_error "Failed to unzip $TEST_DIR to $new_test_dir"  && exit 1)
+    unzip -oq "$TEST_DIR" -d "$new_test_dir" || { log_error "Failed to unzip $TEST_DIR to $new_test_dir"; exit 1; }
     case $filename in
         "android-vts.zip" | "android-cts.zip")
         new_test_dir+="/$(echo $filename | sed "s/.zip//g")"
