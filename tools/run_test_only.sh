@@ -64,14 +64,40 @@ function print_help() {
     exit 0
 }
 
-function run_test_in_platform_repo() {
-    if [[ "${TARGET_PRODUCT}" != *"x86"* && "${PRODUCT}" == *"x86"* ]] || \
-    [[ "${TARGET_PRODUCT}" == *"x86"* && "${PRODUCT}" != *"x86"* ]] || \
-    [ -z "${TARGET_PRODUCT}" ]; then
-        log_warn "Build target product '${TARGET_PRODUCT}' does not match device product '$PRODUCT'. Reset build environment."
-        set_platform_repo "${PRODUCT}" "${BUILD_TYPE}" "${REPO_ROOT_PATH}"
+function sync_platform_repo() {
+    local product_to_build="$1"
+    local build_type="$2"
+    local repo_root_path="$3"
+
+    local is_current_product_x86=false
+    if [[ "${TARGET_PRODUCT}" == *"x86"* ]]; then
+        is_current_product_x86=true
     fi
-    atest_cli=""
+
+    local is_new_product_x86=false
+    if [[ "${product_to_build}" == *"x86"* ]]; then
+        is_new_product_x86=true
+    fi
+
+    if [[ -z "${TARGET_PRODUCT}" || "${is_current_product_x86}" != "${is_new_product_x86}" ]]; then
+        log_warn "Build target product ('${TARGET_PRODUCT}') does not match device product ('${product_to_build}'). Resetting build environment."
+        set_platform_repo "${product_to_build}" "${build_type}" "${repo_root_path}"
+    fi
+
+    if [[ -z "$ANDROID_HOST_OUT" || -z "$TARGET_PRODUCT" ]]; then
+        log_error "'lunch' tool failed to configure build variants. Please check."
+        exit 1
+    fi
+}
+
+function run_atest_in_platform_repo() {
+    local product="$1"
+    local build_type="$2"
+    local repo_root_path="$3"
+
+    sync_platform_repo "${product}" "${build_type}" "${repo_root_path}"
+
+    local atest_cli=""
     if [ "$USE_RBE" = false ]; then
         atest_cli+="USE_RBE=false RBE_ENABLED=false "
     fi
@@ -79,7 +105,7 @@ function run_test_in_platform_repo() {
     if $GCOV; then
         atest_cli+="$TRADEFED_GCOV_OPTIONS"
     fi
-    log_info "Running the test with: $atest_cli ${TEST_ARGS[*]}"
+    log_info "Running the test with ATest: $atest_cli ${TEST_ARGS[*]}"
     eval "$atest_cli" "${TEST_ARGS[*]}"
     exit_code=$?
 
@@ -263,8 +289,7 @@ if [ -z "$TEST_DIR" ]; then
     log_warn "Flag -td <test_dir> is not provided. Will use the default test directory"
     if [[ "$REPO_LIST_OUT" == *"build/make"* ]]; then
         # In the platform repo
-        log_info "Run test with atest"
-        run_test_in_platform_repo
+        run_atest_in_platform_repo "${PRODUCT}" "${BUILD_TYPE}" "${REPO_ROOT_PATH}"
     elif [[ "$BOARD" == "cutf"* ]] && [[ "$REPO_LIST_OUT" == *"common-modules/virtual-device"* ]]; then
         # In the android kernel repo
         if [[ "$ABI" == "arm64"* ]]; then
@@ -326,7 +351,7 @@ elif [ -n "$TEST_DIR" ]; then
     elif [ -f "$TEST_DIR" ]; then
         test_file_path=$(dirname "$TEST_DIR")
     else
-        log_error "$TEST_DIR is neither a directory or file"
+        log_error "$TEST_DIR is neither a directory nor a file."
         exit 1
     fi
     cd "$test_file_path" || { log_error "Failed to go to $test_file_path"; exit 1; }
@@ -335,9 +360,9 @@ elif [ -n "$TEST_DIR" ]; then
         log_info "Test path $test_file_path is not in an Android repo. Will use $TEST_DIR directly."
     elif [[ "$TEST_REPO_LIST_OUT" == *"build/make"* ]]; then
         # Test_dir is from the platform repo
-        log_info "Test_dir $TEST_DIR is from Android platform repo. Run test with atest"
+        log_info "Test_dir $TEST_DIR is from Android platform repo. Run test with atest..."
         go_to_repo_root "$PWD"
-        run_test_in_platform_repo
+        run_atest_in_platform_repo "${PRODUCT}" "${BUILD_TYPE}" "${PWD}"
     fi
 fi
 
@@ -395,20 +420,15 @@ fi
 
 log_info "Will run tests with test artifacts in $TEST_DIR"
 
-if [[ -n $(find "$TEST_DIR" -type f -name "vts-tradefed" -executable) && -n $(find "$TEST_DIR" -type d -name "testcases") ]]; then
-    log_info "Will run tests with vts-tradefed from $TEST_DIR"
-    log_info "Many VTS tests need WIFI connection, please make sure WIFI is connected before you run the test."
-    tf_cli=$(find "$TEST_DIR" -type f -name "vts-tradefed" -executable)
-    TEST_DIR=$(dirname $(find "$TEST_DIR" -type d -name "testcases"))
+tf_cli=$(find "$TEST_DIR" -type f -name "[cv]ts-tradefed" -executable)
+testcases_path=$(find "$TEST_DIR" -type d -name "testcases")
+if [[ -n "$tf_cli" && -n "$testcases_path" ]]; then
+    xts=$(basename "$tf_cli" | cut -d'-' -f1)
+    log_info "Will run tests with ${xts}-tradefed from $TEST_DIR"
+    log_info "Many ${xts^^} tests need WIFI connection, please make sure WIFI is connected before you run the test."
+    tf_cli+=" run commandAndExit ${xts} --skip-device-info --log-level-display info"
+    TEST_DIR=$(dirname "$testcases_path")
     unset_android_environment
-    tf_cli+=" run commandAndExit vts --skip-device-info --log-level-display info"
-elif [[ -n $(find "$TEST_DIR" -type f -name "cts-tradefed" -executable) && -n $(find "$TEST_DIR" -type d -name "testcases") ]]; then
-    log_info "Will run tests with cts-tradefed from $TEST_DIR"
-    log_info "Many CTS tests need WIFI connection, please make sure WIFI is connected before you run the test."
-    tf_cli=$(find "$TEST_DIR" -type f -name "cts-tradefed" -executable)
-    TEST_DIR=$(dirname $(find "$TEST_DIR" -type d -name "testcases"))
-    unset_android_environment
-    tf_cli+=" run commandAndExit cts --skip-device-info --log-level-display info"
 else
     if [ -n "$TRADEFED" ]; then
         tf_cli="$TRADEFED run commandAndExit"
