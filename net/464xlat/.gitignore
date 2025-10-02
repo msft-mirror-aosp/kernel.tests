@@ -1,0 +1,7 @@
+clatd.o
+clatutil
+clatutil.clang
+clatutil.g++
+send-udp0
+send-udp0.clang
+send-udp0.gcc
