@@ -577,7 +577,7 @@ function download_platform_build() {
     log_info "Downloading $PLATFORM_BUILD to $PWD"
     local _build_info="$PLATFORM_BUILD"
     local _file_patterns=("*$PRODUCT-img-*.zip" "radio.img")
-    if [ "$SKIP_UPDATE_BOOTLOADER" = false ]; then
+    if [ "$SKIP_UPDATE_BOOTLOADER" = false ] || [ -n "$VENDOR_KERNEL_BUILD" ]; then
         _file_patterns+=("bootloader.img")
     fi
     if [ -n "$VENDOR_KERNEL_BUILD" ]; then
@@ -586,8 +586,6 @@ function download_platform_build() {
             _file_patterns+=("ramdisk.img")
         elif [[ "$_build_info" == *user/* ]]; then
             _file_patterns+=("vendor_ramdisk-debug.img")
-        else
-            _file_patterns+=("vendor_ramdisk.img")
         fi
     fi
 
@@ -641,26 +639,42 @@ function download_gki_build() {
     case "$PRODUCT" in
         oriole | raven | bluejay)
             _file_patterns=( "boot-lz4.img" )
-            if [ -n "$VENDOR_KERNEL_BUILD" ]; then
+            if [ -n "$VENDOR_KERNEL_BUILD" ] && [[ "$_build_info" != *android13* ]]; then
                 _file_patterns+=( "system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers" )
             fi
             ;;
         kirkwood)
             _file_patterns=( "boot.img" "system_dlkm.flatten.erofs.img" )
             ;;
-        eos | aurora | betty | harriet)
+        eos | aurora)
             _file_patterns=( "boot.img" "system_dlkm.flatten.ext4.img" )
             ;;
         slsi | qcom )
-            _file_patterns=( "boot-gz.img" "system_dlkm.img"  )
+            _file_patterns=( "boot-gz.img" )
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
+                _file_patterns+=( "system_dlkm.img" )
+            else
+                _file_patterns+=( "system_dlkm.flatten.ext4.img" )
+            fi
             ;;
         mtk )
-            _file_patterns=( "boot.img" "system_dlkm.img"  )
+            _file_patterns=( "boot.img" )
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
+                _file_patterns+=( "system_dlkm.img" )
+            else
+                _file_patterns+=( "system_dlkm.flatten.ext4.img" )
+            fi
             ;;
         *)
-            _file_patterns=( "boot-lz4.img" "system_dlkm.img" )
+            _file_patterns=( "boot-lz4.img" )
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
+                _file_patterns+=( "system_dlkm.img" )
+            else
+                _file_patterns+=( "system_dlkm.flatten.ext4.img" )
+            fi
             ;;
     esac
+
     for _pattern in "${_file_patterns[@]}"; do
         log_info "Downloading $_build_info/$_pattern"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
@@ -1392,7 +1406,7 @@ dialog on your Android device; or (recommended) set ADB_VENDOR_KEYS (go/adb-keys
 then restart adb server with command (adb kill-server, adb start-server) to allow permanent authorization."
 
     if [[ "$output" == *unauthorized* ]]; then
-        log_warn "$_message"
+        log_warn "$message"
         return 1 # Failed.
     fi
     return 0
