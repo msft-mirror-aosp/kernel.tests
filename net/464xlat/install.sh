@@ -50,7 +50,7 @@ declare -r MTU4=$[MTU6-28]  # ipv6 header size - ipv4 header size = 20,  plus an
 declare -r MAC=$(< "/sys/class/net/${DEV}/address")
 declare -r LOCAL4=192.0.0.1
 declare -r PROXY=$(ip -6 neigh show proxy dev "${DEV}" | cut -d' ' -f1)  # currently configured proxies, if any
-declare -r HINT="$(sudo ./clatutil get enp1s0 192.0.0.1)"
+declare -r HINT="$(sudo ./clatutil get "${DEV}" 192.0.0.1)"
 echo "PFX96[${PFX96}] GW[${GW}] DEV[${DEV}] IFINDEX[${IFINDEX}] SRC[${SRC}] MTU6[${MTU6}] MTU4[${MTU4}] MAC[${MAC}] LOCAL4[${LOCAL4}] PROXY[${PROXY}] HINT[${HINT}]"
 
 # kernel constant, ip prints 'kernel_ra' but fails to parse it...
@@ -58,7 +58,7 @@ declare -r IFAPROT_KERNEL_RA=2
 
 # Seems to work in practice, informational
 echo -n "MAIN ADDR on ${DEV} is "
-ip addr show dev enp1s0 scope global -deprecated mngtmpaddr proto "${IFAPROT_KERNEL_RA}" | sed -rn 's@^    inet6 ([0-9a-f:]+)/64 .*@\1@p' | head -n 1
+ip addr show dev "${DEV}" scope global -deprecated mngtmpaddr proto "${IFAPROT_KERNEL_RA}" | sed -rn 's@^    inet6 ([0-9a-f:]+)/64 .*@\1@p' | head -n 1
 
 # Calculate checksum neutral IPv6 CLAT source address.  Hint will be reused if valid.
 declare -r CLATIP="$(./clatutil generate "${SRC}" "${PFX96}" "${LOCAL4}" "${HINT}")"
