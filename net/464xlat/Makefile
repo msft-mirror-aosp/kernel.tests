@@ -55,7 +55,8 @@ hint: clatutil
 	sudo ./clatutil get $(shell ip -6 route get 2001:4860:3860::8888 | sed -rn 's@^.* dev ([^ ]+) .*@\1@p') 192.0.0.1
 
 macs:
-	sed -rn 's@^4 +enp1s0 +@@p' </proc/net/dev_mcast
+	@DEV_NAME=$$(ip -6 route get 2000:: | sed -rn 's@^.* dev ([^ ]+) .*$$@\1@p'); \
+	sed -rn "s@^[1-9][0-9]* +$${DEV_NAME} +@@p" </proc/net/dev_mcast | sort -k3
 
 install: clatd.o clatutil start diff
 
