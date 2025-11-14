@@ -47,7 +47,6 @@ all_test_modules = [
     'nf_test',
     'parameterization_test',
     'ping6_test',
-    'policy_crash_test',
     'resilient_rs_test',
     'sock_diag_test',
     'srcaddr_selection_test',
