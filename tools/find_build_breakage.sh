@@ -69,6 +69,7 @@ BISECT_STATUS=""
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
+XML_UTIL_PATH="${SCRIPT_DIR}/lib/xml_util.sh"
 
 if [[ ! -f "$LIB_PATH" ]]; then
     echo "FATAL ERROR: Cannot find required library '$LIB_PATH'" >&2
@@ -76,6 +77,15 @@ if [[ ! -f "$LIB_PATH" ]]; then
 fi
 if ! . "$LIB_PATH"; then
     echo "FATAL ERROR: Failed to source library '$LIB_PATH'. Check common_lib.sh dependencies." >&2
+    exit 1
+fi
+
+if [[ ! -f "$XML_UTIL_PATH" ]]; then
+    log_error "FATAL ERROR: Cannot find required library '$XML_UTIL_PATH'"
+    exit 1
+fi
+if ! . "$XML_UTIL_PATH"; then
+    log_error "FATAL ERROR: Failed to source library '$XML_UTIL_PATH'"
     exit 1
 fi
 
@@ -599,51 +609,27 @@ function get_build_ids() {
     log_info "Found ${#result_array_ref[@]} builds to test for ${target}."
 }
 
-function xml::add_node() {
-    local -n cmd_array_ref=$1
-    local parent_xpath=$2
-    local element_name=$3
-    cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$element_name")
-}
-
-function xml::add_attribute() {
-    local -n cmd_array_ref=$1
-    local parent_xpath=$2
-    local attr_name=$3
-    local attr_value=$4
-    cmd_array_ref+=(-i "$parent_xpath" -t attr -n "$attr_name" -v "$attr_value")
-}
-
-function xml::add_element() {
-    local -n cmd_array_ref=$1
-    local parent_xpath=$2
-    local element_name=$3
-    local element_value=$4
-    cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$element_name" -v "$element_value")
-}
-
 function init_bisect_file() {
     log_info "Initializing new bisection state file: $BISECT_CONFIG_FILE"
+    xml_util::init "$BISECT_CONFIG_FILE" "bisect" || fail_error "Failed to initialize XML file: $BISECT_CONFIG_FILE"
 
-    # Create base XML structure
-    echo '<?xml version="1.0" encoding="UTF-8"?><bisect/>' > "$BISECT_CONFIG_FILE"
     local -a xml_edit_cmd=("xmlstarlet" "ed" "-L")
 
     # State node
-    xml::add_node       xml_edit_cmd "/bisect" "state"
-    xml::add_attribute  xml_edit_cmd "/bisect/state" "status" "new"
+    xml_util::add_node       xml_edit_cmd "/bisect" "state"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/state" "status" "new"
 
     # Parameters node
-    xml::add_node       xml_edit_cmd "/bisect" "parameters"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_dir"      "$TEST_DIR"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "output_dir"    "$OUTPUT_DIR"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_retry"    "$TEST_RETRY"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "setup_retry"   "$SETUP_RETRY"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "serial_number" "$SERIAL_NUMBER"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "cache_dir"     "$CACHE_DIR"
+    xml_util::add_node       xml_edit_cmd "/bisect" "parameters"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "test_dir"      "$TEST_DIR"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "output_dir"    "$OUTPUT_DIR"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "test_retry"    "$TEST_RETRY"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "setup_retry"   "$SETUP_RETRY"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "serial_number" "$SERIAL_NUMBER"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "cache_dir"     "$CACHE_DIR"
     for test in "${TEST_NAME[@]}"; do
-        xml::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
+        xml_util::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
     done
 
     # Add nodes for ALL build types provided
@@ -658,56 +644,45 @@ function init_bisect_file() {
         if [[ "${ID_TYPES[$type_code]}" == "list" || "${ID_TYPES[$type_code]}" == "range" ]]; then
             # This is a build type being bisected
             local node_name="${var_name,,}s" # e.g., platform_builds
-            xml::add_node       xml_edit_cmd "/bisect" "$node_name"
-            xml::add_attribute  xml_edit_cmd "/bisect/$node_name" "id_type" "${ID_TYPES[$type_code]}"
-            xml::add_attribute  xml_edit_cmd "/bisect/$node_name" "branch" "${BRANCHES[$type_code]}"
-            xml::add_attribute  xml_edit_cmd "/bisect/$node_name" "target" "${TARGETS[$type_code]}"
+            xml_util::add_node       xml_edit_cmd "/bisect" "$node_name"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "id_type" "${ID_TYPES[$type_code]}"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "branch" "${BRANCHES[$type_code]}"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "target" "${TARGETS[$type_code]}"
             if [[ "$type_code" == "tb" ]]; then
-                xml::add_attribute xml_edit_cmd "/bisect/$node_name" "filename" "${FILENAMES[$type_code]}"
+                xml_util::add_attribute xml_edit_cmd "/bisect/$node_name" "filename" "${FILENAMES[$type_code]}"
             fi
             # Read build IDs from the map string
             local -a build_ids_arr=(${BUILDS_TO_TEST_MAP[$type_code]})
             for build_id in "${build_ids_arr[@]}"; do
-                xml::add_element xml_edit_cmd "/bisect/$node_name" "build" "$build_id"
+                xml_util::add_element xml_edit_cmd "/bisect/$node_name" "build" "$build_id"
             done
         else
             # This is a fixed build (single or local)
             local single_node_name="${var_name,,}" # e.g., platform_build
-            xml::add_node       xml_edit_cmd "/bisect" "$single_node_name"
-            xml::add_attribute  xml_edit_cmd "/bisect/$single_node_name" "id_type" "${ID_TYPES[$type_code]}"
+            xml_util::add_node       xml_edit_cmd "/bisect" "$single_node_name"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$single_node_name" "id_type" "${ID_TYPES[$type_code]}"
             # Set the value of the node
             xml_edit_cmd+=(-u "/bisect/$single_node_name" -v "$build_value")
         fi
     done
 
-    # Execute the command
-    "${xml_edit_cmd[@]}" "$BISECT_CONFIG_FILE"
-}
-
-function xml::read_value() {
-    local xpath=$1
-    xmlstarlet sel -t -v "$xpath" "$BISECT_CONFIG_FILE" 2>/dev/null
-}
-
-function xml::read_values_to_array() {
-    local xpath=$1
-    local -n array_ref=$2
-    mapfile -t array_ref < <(xmlstarlet sel -t -v "$xpath" -n "$BISECT_CONFIG_FILE" 2>/dev/null)
+    # Execute the command with error handling
+    "${xml_edit_cmd[@]}" "$BISECT_CONFIG_FILE" || fail_error "Failed to populate initial bisection XML data."
 }
 
 function load_state_from_xml() {
     log_info "Loading state from ${BISECT_CONFIG_FILE}..."
-    BISECT_STATUS=$(xml::read_value "/bisect/state/@status")
+    BISECT_STATUS=$(xml_util::read_value "/bisect/state/@status")
 
     # Parameters
-    TEST_DIR=$(xml::read_value "/bisect/parameters/@test_dir")
-    OUTPUT_DIR=$(xml::read_value "/bisect/parameters/@output_dir")
-    TEST_RETRY=$(xml::read_value "/bisect/parameters/@test_retry")
-    SETUP_RETRY=$(xml::read_value "/bisect/parameters/@setup_retry")
-    SERIAL_NUMBER=$(xml::read_value "/bisect/parameters/@serial_number")
-    SKIP_BUILD=$(xml::read_value "/bisect/parameters/@skip_build")
-    CACHE_DIR=$(xml::read_value "/bisect/parameters/@cache_dir")
-    xml::read_values_to_array "/bisect/parameters/test" TEST_NAME
+    TEST_DIR=$(xml_util::read_value "/bisect/parameters/@test_dir")
+    OUTPUT_DIR=$(xml_util::read_value "/bisect/parameters/@output_dir")
+    TEST_RETRY=$(xml_util::read_value "/bisect/parameters/@test_retry")
+    SETUP_RETRY=$(xml_util::read_value "/bisect/parameters/@setup_retry")
+    SERIAL_NUMBER=$(xml_util::read_value "/bisect/parameters/@serial_number")
+    SKIP_BUILD=$(xml_util::read_value "/bisect/parameters/@skip_build")
+    CACHE_DIR=$(xml_util::read_value "/bisect/parameters/@cache_dir")
+    xml_util::read_values_to_array "/bisect/parameters/test" TEST_NAME
 
     # Load all build types from XML
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
@@ -716,18 +691,18 @@ function load_state_from_xml() {
         local single_node_name="${var_name,,}" # e.g., platform_build
 
         # Check for a bisection node (plural form) first
-        local id_type=$(xml::read_value "/bisect/$plural_node_name/@id_type")
+        local id_type=$(xml_util::read_value "/bisect/$plural_node_name/@id_type")
         if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
             ID_TYPES[$type_code]="$id_type"
-            BRANCHES[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@branch")
-            TARGETS[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@target")
-            FILENAMES[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@filename")
-            GOOD_INDICES[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@good_index")
-            BAD_INDICES[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@bad_index")
-            IS_BREAKING[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@is_breaking")
+            BRANCHES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@branch")
+            TARGETS[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@target")
+            FILENAMES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@filename")
+            GOOD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@good_index")
+            BAD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@bad_index")
+            IS_BREAKING[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@is_breaking")
 
             local -a builds_arr=()
-            xml::read_values_to_array "/bisect/$plural_node_name/build" builds_arr
+            xml_util::read_values_to_array "/bisect/$plural_node_name/build" builds_arr
             BUILDS_TO_TEST_MAP[$type_code]="${builds_arr[*]}"
 
             if [[ "${IS_BREAKING[$type_code]}" == "true" ]]; then
@@ -735,10 +710,10 @@ function load_state_from_xml() {
             fi
         else
             # Check for a fixed build node (singular form)
-            id_type=$(xml::read_value "/bisect/$single_node_name/@id_type")
+            id_type=$(xml_util::read_value "/bisect/$single_node_name/@id_type")
             if [[ -n "$id_type" ]]; then
                 local build_val
-                build_val=$(xml::read_value "/bisect/$single_node_name")
+                build_val=$(xml_util::read_value "/bisect/$single_node_name")
                 if [[ -n "$build_val" ]]; then
                     ID_TYPES[$type_code]="$id_type"
                     # Dynamically set the global variable (e.g., PLATFORM_BUILD)
@@ -748,25 +723,6 @@ function load_state_from_xml() {
         fi
     done
     log_info "State loaded successfully. Status: $BISECT_STATUS"
-}
-
-function xml::update_xml_node() {
-    local xpath_expr="$1"
-    local value="$2"
-    log_info "Updating XML state in $BISECT_CONFIG_FILE: $xpath_expr -> $value"
-    xmlstarlet ed -L -u "$xpath_expr" -v "$value" "$BISECT_CONFIG_FILE"
-}
-
-function xml::update_xml_attribute() {
-    local xpath_expr="$1"
-    local attr_name="$2"
-    local value="$3"
-    log_info "Updating XML attribute in $BISECT_CONFIG_FILE: $xpath_expr @$attr_name -> $value"
-    # Delete the attribute first to avoid errors if it doesn't exist, then insert it.
-    xmlstarlet ed -L \
-        -d "${xpath_expr}/@${attr_name}" \
-        -i "$xpath_expr" -t "attr" -n "$attr_name" -v "$value" \
-        "$BISECT_CONFIG_FILE"
 }
 
 function resolve_build_locator() {
@@ -817,7 +773,7 @@ function setup_and_test_combination() {
     if ! is_test_suite_fixed "$current_tb_locator"; then
         prepare_test_suite "$current_tb_locator"
         CURRENT_TEST_SUITE_LOCATOR="$required_locator"
-        xml::update_xml_node "/bisect/parameters/@test_dir" "$TEST_DIR"
+        xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
     fi
 
     perform_device_setup "$current_pb" "$current_kb" "$current_vkb"
@@ -994,13 +950,13 @@ function validate_initial_builds() {
             IS_BREAKING[$type_to_check]=true
 
             # Update XML state for this breaking build
-            xml::update_xml_attribute "/bisect/$node_name" "good_index" "0"
-            xml::update_xml_attribute "/bisect/$node_name" "bad_index" "${BAD_INDICES[$type_to_check]}"
-            xml::update_xml_attribute "/bisect/$node_name" "is_breaking" "true"
+            xml_util::update_xml_attribute "/bisect/$node_name" "good_index" "0"
+            xml_util::update_xml_attribute "/bisect/$node_name" "bad_index" "${BAD_INDICES[$type_to_check]}"
+            xml_util::update_xml_attribute "/bisect/$node_name" "is_breaking" "true"
         else
             log_info "RESULT: Build type '${type_to_check}' is NOT identified as breaking."
             IS_BREAKING[$type_to_check]=false
-            xml::update_xml_attribute "/bisect/$node_name" "is_breaking" "false"
+            xml_util::update_xml_attribute "/bisect/$node_name" "is_breaking" "false"
         fi
     done
 
@@ -1267,12 +1223,12 @@ function bisect_single_build_type() {
             log_info "RESULT: Build $mid_build_id ($type_code_to_bisect) is GOOD."
             good_idx=$mid_idx
             GOOD_INDICES[$type_code_to_bisect]=$good_idx
-            xml::update_xml_attribute "/bisect/$node_name" "good_index" "$good_idx"
+            xml_util::update_xml_attribute "/bisect/$node_name" "good_index" "$good_idx"
         else
             log_info "RESULT: Build $mid_build_id ($type_code_to_bisect) is BAD."
             bad_idx=$mid_idx
             BAD_INDICES[$type_code_to_bisect]=$bad_idx
-            xml::update_xml_attribute "/bisect/$node_name" "bad_index" "$bad_idx"
+            xml_util::update_xml_attribute "/bisect/$node_name" "bad_index" "$bad_idx"
         fi
         log_info "New Range for $type_code_to_bisect: Index $good_idx (Good) to $bad_idx (Bad)"
     done
@@ -1289,7 +1245,7 @@ function bisect_all_breaking_builds() {
     log_info "========================================="
     log_info "All Bisections Complete!"
     log_info "========================================="
-    xml::update_xml_node "/bisect/state/@status" "complete"
+    xml_util::update_xml_node "/bisect/state/@status" "complete"
 
     for type_code in "${BISECT_BUILD_TYPES[@]}"; do
         local good_idx=${GOOD_INDICES[$type_code]}
@@ -1320,6 +1276,7 @@ function main() {
     if [[ -n "$INPUT_CONFIG_FILE" ]]; then
         log_info "Resuming bisection from $INPUT_CONFIG_FILE"
         BISECT_CONFIG_FILE="$INPUT_CONFIG_FILE"
+        xml_util::load "$BISECT_CONFIG_FILE" || fail_error "Failed to load XML file: $BISECT_CONFIG_FILE"
     else
         validate_args
         log_info "Starting new bisection..."
@@ -1334,7 +1291,7 @@ function main() {
         log_info "--- New bisection: Validating initial builds to find breaking types ---"
         validate_initial_builds
         log_info "--- Initial validation complete ---"
-        xml::update_xml_node "/bisect/state/@status" "in_progress"
+        xml_util::update_xml_node "/bisect/state/@status" "in_progress"
     elif [[ "$BISECT_STATUS" == "complete" ]]; then
         log_info "Bisection is already complete according to state file. Showing final results."
         bisect_all_breaking_builds
