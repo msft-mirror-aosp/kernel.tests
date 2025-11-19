@@ -40,13 +40,6 @@ BISECT_CONFIG_FILE=""
 SKIP_BUILD=false
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
 TEMP_DIRS=()
-CURRENT_INPUT_SERIAL=""
-CURRENT_FASTBOOT_SERIAL=""
-CURRENT_ADB_SERIAL=""
-CURRENT_DEVICE_SERIAL=""
-CURRENT_MODE_TYPE=""
-CURRENT_DEVICE_TYPE=""
-# Tracks the source of the currently prepared test suite to avoid re-downloads.
 CURRENT_TEST_SUITE_LOCATOR=""
 
 # --- Multi-Bisection State Variables ---
@@ -69,8 +62,7 @@ BISECT_STATUS=""
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
-XML_UTIL_PATH="${SCRIPT_DIR}/lib/xml_util.sh"
-
+# Import common_lib
 if [[ ! -f "$LIB_PATH" ]]; then
     echo "FATAL ERROR: Cannot find required library '$LIB_PATH'" >&2
     exit 1
@@ -80,13 +72,22 @@ if ! . "$LIB_PATH"; then
     exit 1
 fi
 
+# Import xml_util
+XML_UTIL_PATH="${SCRIPT_DIR}/lib/xml_util.sh"
 if [[ ! -f "$XML_UTIL_PATH" ]]; then
-    log_error "FATAL ERROR: Cannot find required library '$XML_UTIL_PATH'"
-    exit 1
+    fail_error "FATAL ERROR: Cannot find required library 'xml_util.sh' in ${SCRIPT_DIR}/lib"
 fi
 if ! . "$XML_UTIL_PATH"; then
-    log_error "FATAL ERROR: Failed to source library '$XML_UTIL_PATH'"
-    exit 1
+    fail_error "FATAL ERROR: Failed to source library '$XML_UTIL_PATH'"
+fi
+
+# Import device_util
+DEVICE_UTIL_PATH="${SCRIPT_DIR}/lib/device_util.sh"
+if [[ ! -f "$DEVICE_UTIL_PATH" ]]; then
+    fail_error "FATAL ERROR: Cannot find required library 'device_util.sh' in ${SCRIPT_DIR}/lib"
+fi
+if ! . "$DEVICE_UTIL_PATH"; then
+    fail_error "FATAL ERROR: Failed to source library '$DEVICE_UTIL_PATH'"
 fi
 
 # --- Scripts ---
@@ -335,7 +336,6 @@ function parse_build_string() {
 }
 
 function get_test_suite_base_dir() {
-    # Centralized logic to determine the correct base directory for test suites.
     if [[ -n "$CACHE_DIR" ]]; then
         echo "$(realpath "$CACHE_DIR")"
     else
@@ -832,24 +832,32 @@ function perform_device_setup() {
 function run_tests_on_device() {
     local input_serial_to_use="$SERIAL_NUMBER"
     if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        input_serial_to_use=$(grep -oP "ANDROID_SERIAL=\K[\.0-9:]+" "$ACLOUD_OUTPUT_FILE")
+        if [[ -f "$ACLOUD_OUTPUT_FILE" ]]; then
+            input_serial_to_use=$(grep -oP "ANDROID_SERIAL=\K[\.0-9:]+" "$ACLOUD_OUTPUT_FILE")
+        fi
+        if [[ -z "$input_serial_to_use" ]]; then
+             log_error "Could not determine virtual device serial from output file."
+             return 1
+        fi
     fi
 
-    device::set_current "$input_serial_to_use" || return 1
-    if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        adb -s "$CURRENT_ADB_SERIAL" wait-for-device
-        while ! adb -s "$CURRENT_ADB_SERIAL" shell pm path com.android.settings > /dev/null 2>&1; do
-            log_info "Waiting for package manager on $CURRENT_ADB_SERIAL..."
-            sleep 5
-        done
-    else
-        unlock_screen "$CURRENT_ADB_SERIAL"
-        skip_setup_wizard "$CURRENT_ADB_SERIAL"
+    if ! device_util::init "$input_serial_to_use"; then
+        return 1
     fi
+    if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
+        device_util::wait_for_boot_complete || return 1
+    else
+        # Physical devices
+        device_util::unlock_screen || return 1
+        device_util::skip_setup_wizard || return 1
+    fi
+
+    local adb_serial
+    adb_serial=$(device_util::get_adb_serial)
 
     local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_DIR" "-tl" "$OUTPUT_DIR/test_logs")
-    # [[ "$CURRENT_MODE_TYPE" == "FASTBOOT" ]] && test_cmd+=("-s" "$CURRENT_FASTBOOT_SERIAL")
-    [[ "$CURRENT_MODE_TYPE" == "ADB" ]] && test_cmd+=("-s" "$CURRENT_ADB_SERIAL")
+    test_cmd+=("-s" "$adb_serial")
+
     for test in "${TEST_NAME[@]}"; do
         test_cmd+=("-t" "$test")
     done
@@ -968,82 +976,6 @@ function validate_initial_builds() {
     log_info "Validation complete. Breaking build types to be bisected: ${BISECT_BUILD_TYPES[*]}"
 }
 
-function skip_setup_wizard() {
-    local android_serial="$1"
-    log_info "Device ${android_serial} is online. Waiting for package manager to be ready..."
-    # Loop until the package manager is queryable, which is a good sign that the core system is up.
-    while ! adb -s "${android_serial}" shell pm path com.android.settings > /dev/null 2>&1; do
-        sleep 2
-    done
-
-    log_info "Core system is up. Disabling Setup Wizard..."
-    # --- Commands to Disable Setup Wizard ---
-    adb -s "${android_serial}" shell settings put global device_provisioned 1
-    adb -s "${android_serial}" shell settings put secure user_setup_complete 1
-
-    # --- Disable the wizard package itself as a fallback ---
-    # Find the package name (it can vary)
-    local SETUP_WIZARD_PKG
-    SETUP_WIZARD_PKG=$(adb -s "${android_serial}" shell pm list packages | grep -i 'setupwizard' | head -n 1 | cut -d':' -f2)
-    if [ -n "$SETUP_WIZARD_PKG" ]; then
-        log_info "Found setup wizard package: $SETUP_WIZARD_PKG. Disabling..."
-        adb -s "${android_serial}" shell pm disable-user --user 0 "$SETUP_WIZARD_PKG"
-    else
-        log_warn "Could not find setup wizard package automatically."
-    fi
-
-    log_info "Setup Wizard skipped. Device should now be at the home screen."
-    echo "------------------------------------------------------------------"
-}
-
-function unlock_screen() {
-    local android_serial="$1"
-    local timeout_seconds=60
-
-    log_info "Waiting for device to come online after reboot..."
-    timeout $timeout_seconds adb -s "$android_serial" wait-for-device
-    if (( $? == 124 )); then
-        fail_error "Timeout reached, the device has no response."
-    fi
-
-    while [ "$(adb -s "${android_serial}" shell getprop sys.boot_completed | tr -d '\r')" != "1" ]; do
-        sleep 5
-    done
-
-    log_info "The device boot complete..."
-
-    local device_idle_status
-    device_idle_status="$(adb -s "${android_serial}" shell dumpsys deviceidle)"
-
-    local is_screen_on
-    is_screen_on=$(echo "${device_idle_status}" | grep "mScreenOn" | cut -d'=' -f2)
-
-    if [[ "${is_screen_on}" == "false" ]]; then
-        log_info "Screen is off. Turning it on..."
-        adb -s "$android_serial" shell input keyevent 26 || fail_error "Failed to turn on the screen."
-        sleep 1
-        # Refresh the status after the action.
-        device_idle_status="$(adb -s "${android_serial}" shell dumpsys deviceidle)"
-        is_screen_on=$(echo "${device_idle_status}" | grep "mScreenOn" | cut -d'=' -f2)
-    fi
-
-    # If the screen is now on, check if it's locked.
-    if [[ "${is_screen_on}" == "true" ]]; then
-        local is_screen_locked
-        is_screen_locked=$(echo "${device_idle_status}" | grep "mScreenLocked" | cut -d'=' -f2)
-
-        if [[ "${is_screen_locked}" == "true" ]]; then
-            log_info "Screen is on and locked. Unlocking..."
-            adb -s "$android_serial" shell input keyevent 82 || fail_error "Failed to unlock the screen."
-            log_info "Screen unlocked successfully."
-        else
-            log_info "Screen is already on and unlocked."
-        fi
-    else
-        fail_error "Can't turn on the screen. Please check the device."
-    fi
-}
-
 function determine_default_device_type() {
     if [[ -n "$SERIAL_NUMBER" ]]; then
         DEVICE_TYPE="PHYSICAL"
@@ -1061,116 +993,6 @@ function cleanup() {
     if (( ${#TEMP_DIRS[@]} > 0 )); then
         rm -rf "${TEMP_DIRS[@]}"
     fi
-}
-
-function device::set_current() {
-    local serial="$1"
-    local found_device=false
-
-    CURRENT_INPUT_SERIAL=""
-    CURRENT_FASTBOOT_SERIAL=""
-    CURRENT_ADB_SERIAL=""
-    CURRENT_DEVICE_SERIAL=""
-    CURRENT_MODE_TYPE=""
-    CURRENT_DEVICE_TYPE=""
-
-    if adb devices | grep -q "$serial"; then
-        CURRENT_MODE_TYPE="ADB"
-        CURRENT_ADB_SERIAL="$serial"
-        CURRENT_DEVICE_SERIAL=$(adb -s "$CURRENT_ADB_SERIAL" shell getprop ro.serialno)
-        found_device=true
-    fi
-
-    if fastboot devices | grep -q "$serial"; then
-        CURRENT_MODE_TYPE="FASTBOOT"
-        CURRENT_FASTBOOT_SERIAL="$serial"
-        local serial_info
-        serial_info=$(fastboot -s "$CURRENT_FASTBOOT_SERIAL" getvar serialno 2>&1)
-        CURRENT_DEVICE_SERIAL=$(echo "$serial_info" | grep -Po "serialno: \K[A-Z0-9]+")
-        found_device=true
-    fi
-
-    if [[ -x "$(command -v pontis)" && "$found_device" == false ]]; then
-        local pontis_info
-        pontis_info=$(pontis devices | grep "$serial")
-        if [[ "$pontis_info" == *Fastboot* ]]; then
-            CURRENT_MODE_TYPE="FASTBOOT"
-            CURRENT_DEVICE_SERIAL="$serial"
-            found_device=true
-            log_info "Device $serial is connected through pontis in fastboot"
-            device::find_fastboot_serial_number "$CURRENT_DEVICE_SERIAL"
-        elif [[ "$pontis_info" == *ADB* ]]; then
-            CURRENT_MODE_TYPE="ADB"
-            CURRENT_DEVICE_SERIAL="$serial"
-            found_device=true
-            log_info "Device $serial is connected through pontis in adb"
-            device::find_adb_serial_number "$CURRENT_DEVICE_SERIAL"
-        fi
-    fi
-
-    if ! $found_device; then
-        log_warn "Cannot find out the device ${serial}. Please check the device connection."
-        return 1
-    fi
-
-    if [[ "$CURRENT_MODE_TYPE" == "ADB"  ]]; then
-        local product
-        product=$(adb -s "$CURRENT_ADB_SERIAL" shell getprop ro.product.board)
-        if [[ "$product" == "cutf" ]]; then
-            CURRENT_DEVICE_TYPE="VIRTUAL"
-        else
-            CURRENT_DEVICE_TYPE="PHYSICAL"
-        fi
-    else
-        CURRENT_DEVICE_TYPE="PHYSICAL"
-    fi
-
-    [[ "$CURRENT_DEVICE_TYPE" == "$DEVICE_TYPE" ]] || log_error "The Current Device Type \
-    ${CURRENT_DEVICE_TYPE} is inconsistent with Default Type ${DEVICE_TYPE}"
-
-    CURRENT_INPUT_SERIAL="$serial"
-    return 0
-}
-
-function device::find_fastboot_serial_number() {
-    local device_serial="$1"
-    local device_ids
-    device_ids=$(fastboot devices | awk '{print $1}')
-    while IFS= read -r device_id; do
-        local _output
-        _output=$(fastboot -s "$device_id" getvar serialno 2>&1)
-        local target_device_serial
-        target_device_serial=$(echo "$_output" | grep -Po "serialno: \K[A-Z0-9]+")
-        if [[ "$target_device_serial" == "$device_serial" ]]; then
-            CURRENT_FASTBOOT_SERIAL="$device_id"
-            log_info "Device $device_serial shows up as $CURRENT_FASTBOOT_SERIAL in fastboot"
-            return 0
-        fi
-    done <<< "$device_ids"
-    fail_error "Can not find device in fastboot has device serial number $device_serial"
-}
-
-function device::find_adb_serial_number() {
-    local device_serial="$1"
-    log_info "Try to find device $device_serial serial id in adb devices"
-    local _device_ids
-    _device_ids=$(adb devices | awk '$2 == "device" {print $1}')
-    local devices=()
-    while IFS= read -r device_id; do
-        devices+=("$device_id")
-    done <<< "$_device_ids"
-
-    for device_id in "${devices[@]}"; do
-        local target_device_serial
-        target_device_serial=$(adb -s "$device_id" shell getprop ro.serialno)
-        if [[ "$target_device_serial" == "$device_serial" ]]; then
-            CURRENT_ADB_SERIAL="$device_id"
-            log_info "Device $device_serial shows up as $CURRENT_ADB_SERIAL in adb"
-            return 0
-        fi
-    done
-    fail_error "Can not find device in adb has device serial number $device_serial. \
-    Check if the device is connected with adb authentication"
 }
 
 function bisect_single_build_type() {
