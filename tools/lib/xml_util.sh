@@ -135,9 +135,14 @@ function xml_util::read_attributes_to_array() {
     local -n _dest_array_ref="$2"
     local file="${3:-$_XML_UTIL_DEFAULT_FILE}"
 
+    if [[ "$xpath" != *"@"* ]]; then
+        log_error "Invalid XPath '$xpath'. Attribute XPath must contain '@'."
+        return 1
+    fi
+
     _xml_util::check_file "$file" || return 1
 
-    mapfile -t _dest_array_ref < <(xmlstarlet sel -t -v "$xpath" "$file" 2>/dev/null)
+    mapfile -t _dest_array_ref < <(xmlstarlet sel -t -v "$xpath" -n "$file" 2>/dev/null)
 }
 
 function xml_util::update_xml_node() {
@@ -193,8 +198,9 @@ function xml_util::add_element() {
     _cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$element_name" -v "$element_value")
 }
 
+# NOTE: use '__cmd_array_ref' to avoid "circular reference" if the caller passes a variable '_cmd_array_ref'.
 function xml_util::add_element_with_attr() {
-    local -n _cmd_array_ref="$1"
+    local -n __cmd_array_ref="$1"
     local parent_xpath="$2"
     local el_name="$3"
     local el_val="$4"
@@ -202,7 +208,7 @@ function xml_util::add_element_with_attr() {
     local attr_val="$6"
 
     # Add the element
-    _cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$el_name" -v "$el_val")
+    xml_util::add_element __cmd_array_ref "$parent_xpath" "$el_name" "$el_val"
     # Add the attribute to the newly created element (using last() to target it)
-    _cmd_array_ref+=(-i "${parent_xpath}/${el_name}[last()]" -t attr -n "$attr_name" -v "$attr_val")
+    xml_util::add_attribute __cmd_array_ref "${parent_xpath}/${el_name}[last()]" "$attr_name" "$attr_val"
 }
