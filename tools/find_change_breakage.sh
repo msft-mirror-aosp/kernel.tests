@@ -43,12 +43,6 @@ NON_INTERACTIVE=false
 WITH_SETUP_SCRIPT=""
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
 TEMP_DIRS=()
-CURRENT_INPUT_SERIAL=""
-CURRENT_FASTBOOT_SERIAL=""
-CURRENT_ADB_SERIAL=""
-CURRENT_DEVICE_SERIAL=""
-CURRENT_MODE_TYPE=""
-CURRENT_DEVICE_TYPE=""
 # Tracks the source of the currently prepared test suite to avoid re-downloads.
 CURRENT_TEST_SUITE_LOCATOR=""
 
@@ -74,7 +68,6 @@ IS_BISECT_MODE=true # Default to bisection mode
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
-
 if [[ ! -f "$LIB_PATH" ]]; then
     echo "FATAL ERROR: Cannot find required library '$LIB_PATH'" >&2
     exit 1
@@ -82,6 +75,24 @@ fi
 if ! . "$LIB_PATH"; then
     echo "FATAL ERROR: Failed to source library '$LIB_PATH'. Check common_lib.sh dependencies." >&2
     exit 1
+fi
+
+# Import xml_util
+XML_UTIL_PATH="${SCRIPT_DIR}/lib/xml_util.sh"
+if [[ ! -f "$XML_UTIL_PATH" ]]; then
+    fail_error "FATAL ERROR: Cannot find required library 'xml_util.sh' in ${SCRIPT_DIR}/lib"
+fi
+if ! . "$XML_UTIL_PATH"; then
+    fail_error "FATAL ERROR: Failed to source library '$XML_UTIL_PATH'"
+fi
+
+# Import device_util
+DEVICE_UTIL_PATH="${SCRIPT_DIR}/lib/device_util.sh"
+if [[ ! -f "$DEVICE_UTIL_PATH" ]]; then
+    fail_error "FATAL ERROR: Cannot find required library 'device_util.sh' in ${SCRIPT_DIR}/lib"
+fi
+if ! . "$DEVICE_UTIL_PATH"; then
+    fail_error "FATAL ERROR: Failed to source library '$DEVICE_UTIL_PATH'"
 fi
 
 # --- Scripts ---
@@ -159,193 +170,6 @@ function print_help() {
     echo ""
     echo "  # Resume an interrupted bisection"
     echo "  $0 -i out/20250910_153000/bisect_changes.xml"
-}
-
-function device::set_current() {
-    local serial="$1"
-    local found_device=false
-
-    CURRENT_INPUT_SERIAL=""
-    CURRENT_FASTBOOT_SERIAL=""
-    CURRENT_ADB_SERIAL=""
-    CURRENT_DEVICE_SERIAL=""
-    CURRENT_MODE_TYPE=""
-    CURRENT_DEVICE_TYPE=""
-
-    if adb devices | grep -q "$serial"; then
-        CURRENT_MODE_TYPE="ADB"
-        CURRENT_ADB_SERIAL="$serial"
-        CURRENT_DEVICE_SERIAL=$(adb -s "$CURRENT_ADB_SERIAL" shell getprop ro.serialno)
-        found_device=true
-    fi
-
-    if fastboot devices | grep -q "$serial"; then
-        CURRENT_MODE_TYPE="FASTBOOT"
-        CURRENT_FASTBOOT_SERIAL="$serial"
-        local serial_info
-        serial_info=$(fastboot -s "$CURRENT_FASTBOOT_SERIAL" getvar serialno 2>&1)
-        CURRENT_DEVICE_SERIAL=$(echo "$serial_info" | grep -Po "serialno: \K[A-Z0-9]+")
-        found_device=true
-    fi
-
-    if [[ -x "$(command -v pontis)" && "$found_device" == false ]]; then
-        local pontis_info
-        pontis_info=$(pontis devices | grep "$serial")
-        if [[ "$pontis_info" == *Fastboot* ]]; then
-            CURRENT_MODE_TYPE="FASTBOOT"
-            CURRENT_DEVICE_SERIAL="$serial"
-            found_device=true
-            log_info "Device $serial is connected through pontis in fastboot"
-            device::find_fastboot_serial_number "$CURRENT_DEVICE_SERIAL"
-        elif [[ "$pontis_info" == *ADB* ]]; then
-            CURRENT_MODE_TYPE="ADB"
-            CURRENT_DEVICE_SERIAL="$serial"
-            found_device=true
-            log_info "Device $serial is connected through pontis in adb"
-            device::find_adb_serial_number "$CURRENT_DEVICE_SERIAL"
-        fi
-    fi
-
-    if ! $found_device; then
-        log_warn "Cannot find out the device ${serial}. Please check the device connection."
-        return 1
-    fi
-
-    if [[ "$CURRENT_MODE_TYPE" == "ADB"  ]]; then
-        local product
-        product=$(adb -s "$CURRENT_ADB_SERIAL" shell getprop ro.product.board)
-        if [[ "$product" == "cutf" ]]; then
-            CURRENT_DEVICE_TYPE="VIRTUAL"
-        else
-            CURRENT_DEVICE_TYPE="PHYSICAL"
-        fi
-    else
-        CURRENT_DEVICE_TYPE="PHYSICAL"
-    fi
-
-    if [[ "$CURRENT_DEVICE_TYPE" != "$DEVICE_TYPE" ]]; then
-        log_error "The Current Device Type ${CURRENT_DEVICE_TYPE} is inconsistent with Default Type ${DEVICE_TYPE}"
-    fi
-
-    CURRENT_INPUT_SERIAL="$serial"
-    return 0
-}
-
-function device::find_fastboot_serial_number() {
-    local device_serial="$1"
-    local device_ids
-    device_ids=$(fastboot devices | awk '{print $1}')
-    while IFS= read -r device_id; do
-        local _output
-        _output=$(fastboot -s "$device_id" getvar serialno 2>&1)
-        local target_device_serial
-        target_device_serial=$(echo "$_output" | grep -Po "serialno: \K[A-Z0-9]+")
-        if [[ "$target_device_serial" == "$device_serial" ]]; then
-            CURRENT_FASTBOOT_SERIAL="$device_id"
-            log_info "Device $device_serial shows up as $CURRENT_FASTBOOT_SERIAL in fastboot"
-            return 0
-        fi
-    done <<< "$device_ids"
-    fail_error "Can not find device in fastboot has device serial number $device_serial"
-}
-
-function device::find_adb_serial_number() {
-    local device_serial="$1"
-    log_info "Try to find device $device_serial serial id in adb devices"
-    local _device_ids
-    _device_ids=$(adb devices | awk '$2 == "device" {print $1}')
-    local devices=()
-    while IFS= read -r device_id; do
-        devices+=("$device_id")
-    done <<< "$_device_ids"
-
-    for device_id in "${devices[@]}"; do
-        local target_device_serial
-        target_device_serial=$(adb -s "$device_id" shell getprop ro.serialno)
-        if [[ "$target_device_serial" == "$device_serial" ]]; then
-            CURRENT_ADB_SERIAL="$device_id"
-            log_info "Device $device_serial shows up as $CURRENT_ADB_SERIAL in adb"
-            return 0
-        fi
-    done
-    fail_error "Can not find device in adb has device serial number $device_serial. \
-    Check if the device is connected with adb authentication"
-}
-
-function skip_setup_wizard() {
-    local android_serial="$1"
-    log_info "Device ${android_serial} is online. Waiting for package manager to be ready..."
-    # Loop until the package manager is queryable, which is a good sign that the core system is up.
-    while ! adb -s "${android_serial}" shell pm path com.android.settings > /dev/null 2>&1; do
-        sleep 2
-    done
-
-    log_info "Core system is up. Disabling Setup Wizard..."
-    # --- Commands to Disable Setup Wizard ---
-    adb -s "${android_serial}" shell settings put global device_provisioned 1
-    adb -s "${android_serial}" shell settings put secure user_setup_complete 1
-
-    # --- Disable the wizard package itself as a fallback ---
-    # Find the package name (it can vary)
-    local SETUP_WIZARD_PKG
-    SETUP_WIZARD_PKG=$(adb -s "${android_serial}" shell pm list packages | grep -i 'setupwizard' | head -n 1 | cut -d':' -f2)
-    if [ -n "$SETUP_WIZARD_PKG" ]; then
-        log_info "Found setup wizard package: $SETUP_WIZARD_PKG. Disabling..."
-        adb -s "${android_serial}" shell pm disable-user --user 0 "$SETUP_WIZARD_PKG"
-    else
-        log_warn "Could not find setup wizard package automatically."
-    fi
-
-    log_info "Setup Wizard skipped. Device should now be at the home screen."
-    echo "------------------------------------------------------------------"
-}
-
-function unlock_screen() {
-    local android_serial="$1"
-    local timeout_seconds=60
-
-    log_info "Waiting for device to come online after reboot..."
-    timeout $timeout_seconds adb -s "$android_serial" wait-for-device
-    if (( $? == 124 )); then
-        fail_error "Timeout reached, the device has no response."
-    fi
-
-    while [ "$(adb -s "${android_serial}" shell getprop sys.boot_completed | tr -d '\r')" != "1" ]; do
-        sleep 5
-    done
-
-    log_info "The device boot complete..."
-
-    local device_idle_status
-    device_idle_status="$(adb -s "${android_serial}" shell dumpsys deviceidle)"
-
-    local is_screen_on
-    is_screen_on=$(echo "${device_idle_status}" | grep "mScreenOn" | cut -d'=' -f2)
-
-    if [[ "${is_screen_on}" == "false" ]]; then
-        log_info "Screen is off. Turning it on..."
-        adb -s "$android_serial" shell input keyevent 26 || fail_error "Failed to turn on the screen."
-        sleep 1
-        # Refresh the status after the action.
-        device_idle_status="$(adb -s "${android_serial}" shell dumpsys deviceidle)"
-        is_screen_on=$(echo "${device_idle_status}" | grep "mScreenOn" | cut -d'=' -f2)
-    fi
-
-    # If the screen is now on, check if it's locked.
-    if [[ "${is_screen_on}" == "true" ]]; then
-        local is_screen_locked
-        is_screen_locked=$(echo "${device_idle_status}" | grep "mScreenLocked" | cut -d'=' -f2)
-
-        if [[ "${is_screen_locked}" == "true" ]]; then
-            log_info "Screen is on and locked. Unlocking..."
-            adb -s "$android_serial" shell input keyevent 82 || fail_error "Failed to unlock the screen."
-            log_info "Screen unlocked successfully."
-        else
-            log_info "Screen is already on and unlocked."
-        fi
-    else
-        fail_error "Can't turn on the screen. Please check the device."
-    fi
 }
 
 function fail_error() {
@@ -707,50 +531,27 @@ function restore_all_git_states() {
     done
 }
 
-# --- XML Functions (Adapted from find_build_breakage.sh) ---
-function xml::add_node() {
-    local -n cmd_array_ref=$1; local parent_xpath=$2; local element_name=$3
-    cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$element_name")
-}
-
-function xml::add_attribute() {
-    local -n cmd_array_ref=$1; local parent_xpath=$2; local attr_name=$3; local attr_value=$4
-    cmd_array_ref+=(-i "$parent_xpath" -t attr -n "$attr_name" -v "$attr_value")
-}
-
-function xml::add_element() {
-    local -n cmd_array_ref=$1; local parent_xpath=$2; local element_name=$3; local element_value=$4
-    cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$element_name" -v "$element_value")
-}
-
-function xml::add_element_with_attr() {
-    local -n cmd_array_ref=$1; local parent_xpath=$2; local el_name=$3; local el_val=$4; local attr_name=$5; local attr_val=$6
-    local new_node_xpath="${parent_xpath}/${el_name}[.='${el_val}']"
-    # Use subnode to add the element, then another command to add the attribute to it
-    cmd_array_ref+=(-s "$parent_xpath" -t elem -n "$el_name" -v "$el_val")
-    cmd_array_ref+=(-i "${parent_xpath}/${el_name}[last()]" -t attr -n "$attr_name" -v "$attr_val")
-}
-
+# --- XML Functions ---
 function init_bisect_file() {
     log_info "Initializing new bisection state file: $BISECT_CONFIG_FILE"
-    echo '<?xml version="1.0" encoding="UTF-8"?><bisect/>' > "$BISECT_CONFIG_FILE"
+    xml_util::init "$BISECT_CONFIG_FILE" "bisect" || fail_error "Failed to initialize XML file: $BISECT_CONFIG_FILE"
+
     local -a xml_edit_cmd=("xmlstarlet" "ed" "-L")
+    xml_util::add_node       xml_edit_cmd "/bisect" "state"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/state" "status" "new"
 
-    xml::add_node       xml_edit_cmd "/bisect" "state"
-    xml::add_attribute  xml_edit_cmd "/bisect/state" "status" "new"
-
-    xml::add_node       xml_edit_cmd "/bisect" "parameters"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_dir"      "$TEST_DIR"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "output_dir"    "$OUTPUT_DIR"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "test_retry"    "$TEST_RETRY"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "setup_retry"   "$SETUP_RETRY"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "serial_number" "$SERIAL_NUMBER"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "non_interactive" "$NON_INTERACTIVE"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "with_setup_script" "$WITH_SETUP_SCRIPT"
-    xml::add_attribute  xml_edit_cmd "/bisect/parameters" "cache_dir"     "$CACHE_DIR"
+    xml_util::add_node       xml_edit_cmd "/bisect" "parameters"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "test_dir"      "$TEST_DIR"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "output_dir"    "$OUTPUT_DIR"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "test_retry"    "$TEST_RETRY"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "setup_retry"   "$SETUP_RETRY"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "serial_number" "$SERIAL_NUMBER"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "non_interactive" "$NON_INTERACTIVE"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "with_setup_script" "$WITH_SETUP_SCRIPT"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "cache_dir"     "$CACHE_DIR"
     for test in "${TEST_NAME[@]}"; do
-        xml::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
+        xml_util::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
     done
 
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
@@ -762,75 +563,63 @@ function init_bisect_file() {
 
         if [[ "${ID_TYPES[$type_code]}" == "list" || "${ID_TYPES[$type_code]}" == "range" ]]; then
             local node_name="${var_name,,}s" # e.g., platform_builds
-            xml::add_node       xml_edit_cmd "/bisect" "$node_name"
-            xml::add_attribute  xml_edit_cmd "/bisect/$node_name" "id_type" "${ID_TYPES[$type_code]}"
-            xml::add_attribute  xml_edit_cmd "/bisect/$node_name" "path" "${TREE_PATHS[$type_code]}"
-            xml::add_attribute  xml_edit_cmd "/bisect/$node_name" "project" "${PROJECTS[$type_code]}"
+            xml_util::add_node       xml_edit_cmd "/bisect" "$node_name"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "id_type" "${ID_TYPES[$type_code]}"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "path" "${TREE_PATHS[$type_code]}"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "project" "${PROJECTS[$type_code]}"
 
             local -a commits_arr=(${COMMITS_TO_TEST_MAP[$type_code]})
             for commit in "${commits_arr[@]}"; do
                 # Add change with default "unknown" status
-                xml::add_element_with_attr xml_edit_cmd "/bisect/$node_name" "change" "$commit" "status" "unknown"
+                xml_util::add_element_with_attr xml_edit_cmd "/bisect/$node_name" "change" "$commit" "status" "unknown"
             done
         else
             # This handles "ab", "local", and "fixed_commit" types
             local single_node_name="${var_name,,}" # e.g., platform_build
-            xml::add_node       xml_edit_cmd "/bisect" "$single_node_name"
-            xml::add_attribute  xml_edit_cmd "/bisect/$single_node_name" "id_type" "${ID_TYPES[$type_code]}"
+            xml_util::add_node       xml_edit_cmd "/bisect" "$single_node_name"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$single_node_name" "id_type" "${ID_TYPES[$type_code]}"
             xml_edit_cmd+=(-u "/bisect/$single_node_name" -v "$build_value")
         fi
     done
-    "${xml_edit_cmd[@]}" "$BISECT_CONFIG_FILE"
-}
-
-function xml::read_value() {
-    xmlstarlet sel -t -v "$1" "$BISECT_CONFIG_FILE" 2>/dev/null
-}
-
-function xml::read_values_to_array() {
-    mapfile -t "$2" < <(xmlstarlet sel -t -v "$1" -n "$BISECT_CONFIG_FILE" 2>/dev/null)
-}
-
-function xml::read_attributes_to_array() {
-    mapfile -t "$2" < <(xmlstarlet sel -t -v "$1" "$BISECT_CONFIG_FILE" 2>/dev/null)
+    "${xml_edit_cmd[@]}" "$BISECT_CONFIG_FILE" || fail_error "Failed to populate initial bisection XML data."
 }
 
 function load_state_from_xml() {
     log_info "Loading state from ${BISECT_CONFIG_FILE}..."
-    BISECT_STATUS=$(xml::read_value "/bisect/state/@status")
+    BISECT_STATUS=$(xml_util::read_value "/bisect/state/@status")
     IS_BISECT_MODE=false # Assume single run unless a bisection node is found
 
     # Parameters
-    TEST_DIR=$(xml::read_value "/bisect/parameters/@test_dir")
-    OUTPUT_DIR=$(xml::read_value "/bisect/parameters/@output_dir")
-    TEST_RETRY=$(xml::read_value "/bisect/parameters/@test_retry")
-    SETUP_RETRY=$(xml::read_value "/bisect/parameters/@setup_retry")
-    SERIAL_NUMBER=$(xml::read_value "/bisect/parameters/@serial_number")
-    SKIP_BUILD=$(xml::read_value "/bisect/parameters/@skip_build")
-    NON_INTERACTIVE=$(xml::read_value "/bisect/parameters/@non_interactive")
-    WITH_SETUP_SCRIPT=$(xml::read_value "/bisect/parameters/@with_setup_script")
-    CACHE_DIR=$(xml::read_value "/bisect/parameters/@cache_dir")
-    xml::read_values_to_array "/bisect/parameters/test" TEST_NAME
+    TEST_DIR=$(xml_util::read_value "/bisect/parameters/@test_dir")
+    OUTPUT_DIR=$(xml_util::read_value "/bisect/parameters/@output_dir")
+    TEST_RETRY=$(xml_util::read_value "/bisect/parameters/@test_retry")
+    SETUP_RETRY=$(xml_util::read_value "/bisect/parameters/@setup_retry")
+    SERIAL_NUMBER=$(xml_util::read_value "/bisect/parameters/@serial_number")
+    SKIP_BUILD=$(xml_util::read_value "/bisect/parameters/@skip_build")
+    NON_INTERACTIVE=$(xml_util::read_value "/bisect/parameters/@non_interactive")
+    WITH_SETUP_SCRIPT=$(xml_util::read_value "/bisect/parameters/@with_setup_script")
+    CACHE_DIR=$(xml_util::read_value "/bisect/parameters/@cache_dir")
+    xml_util::read_values_to_array "/bisect/parameters/test" TEST_NAME
 
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
         local var_name="${BUILD_TYPE_MAP[$type_code]}"
         local plural_node_name="${var_name,,}s"
         local single_node_name="${var_name,,}"
 
-        local id_type=$(xml::read_value "/bisect/$plural_node_name/@id_type")
+        local id_type=$(xml_util::read_value "/bisect/$plural_node_name/@id_type")
         if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
             IS_BISECT_MODE=true # Found a bisection node
             ID_TYPES[$type_code]="$id_type"
-            TREE_PATHS[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@path")
-            PROJECTS[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@project")
-            GOOD_INDICES[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@good_index")
-            BAD_INDICES[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@bad_index")
-            IS_BREAKING[$type_code]=$(xml::read_value "/bisect/$plural_node_name/@is_breaking")
+            TREE_PATHS[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@path")
+            PROJECTS[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@project")
+            GOOD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@good_index")
+            BAD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@bad_index")
+            IS_BREAKING[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@is_breaking")
 
             local -a commits_arr=()
             local -a statuses_arr=()
-            xml::read_values_to_array "/bisect/$plural_node_name/change" commits_arr
-            xml::read_attributes_to_array "/bisect/$plural_node_name/change/@status" statuses_arr
+            xml_util::read_values_to_array "/bisect/$plural_node_name/change" commits_arr
+            xml_util::read_attributes_to_array "/bisect/$plural_node_name/change/@status" statuses_arr
             COMMITS_TO_TEST_MAP[$type_code]="${commits_arr[*]}"
 
             # Load commit statuses
@@ -846,11 +635,11 @@ function load_state_from_xml() {
             # Must save the initial state for cleanup on resume
             save_initial_git_state "$type_code"
         else
-            id_type=$(xml::read_value "/bisect/$single_node_name/@id_type")
+            id_type=$(xml_util::read_value "/bisect/$single_node_name/@id_type")
             if [[ -n "$id_type" ]]; then
                 ID_TYPES[$type_code]="$id_type"
                 local build_val
-                build_val=$(xml::read_value "/bisect/$single_node_name")
+                build_val=$(xml_util::read_value "/bisect/$single_node_name")
                 printf -v "$var_name" "%s" "$build_val" # e.g., PLATFORM_BUILD="~/main/fw/base:abc1234"
 
                 if [[ "$id_type" == "fixed_commit" ]]; then
@@ -878,15 +667,7 @@ function load_state_from_xml() {
     log_info "State loaded successfully. Status: $BISECT_STATUS. Bisection Mode: $IS_BISECT_MODE"
 }
 
-function xml::update_xml_node() {
-    xmlstarlet ed -L -u "$1" -v "$2" "$BISECT_CONFIG_FILE"
-}
-
-function xml::update_xml_attribute() {
-    xmlstarlet ed -L -d "$1/@$2" -i "$1" -t "attr" -n "$2" -v "$3" "$BISECT_CONFIG_FILE"
-}
-
-function xml::update_change_status_by_index() {
+function xml_util::update_change_status_by_index() {
     local type_code="$1"
     local commit_index="$2" # This is the 0-based index
     local status="$3"
@@ -896,9 +677,7 @@ function xml::update_change_status_by_index() {
     # XML is 1-based, so add 1
     local change_xpath="/bisect/$node_name/change[$((commit_index + 1))]"
 
-    xmlstarlet ed -L \
-        -u "${change_xpath}/@status" -v "$status" \
-        "$BISECT_CONFIG_FILE"
+    xml_util::update_xml_attribute "${change_xpath}" "status" "$status"
 }
 
 # --- Test Suite Caching ---
@@ -1046,7 +825,7 @@ function prepare_test_suite() {
                 TEST_DIR="$unzipped_dir"
                 CURRENT_TEST_SUITE_LOCATOR="$locator"
                 if [[ -f "$BISECT_CONFIG_FILE" ]]; then
-                    xml::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
+                    xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
                 fi
                 return 0
             fi
@@ -1068,7 +847,7 @@ function prepare_test_suite() {
     # TODO
     CURRENT_TEST_SUITE_LOCATOR="$locator"
     if [[ -f "$BISECT_CONFIG_FILE" ]]; then
-        xml::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
+        xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
     fi
 }
 
@@ -1337,33 +1116,36 @@ function setup_and_test_combination() {
 }
 
 function run_tests_on_device() {
-    local device_serial="$SERIAL_NUMBER"
+    local input_serial_to_use="$SERIAL_NUMBER"
+
     if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        device_serial=$(grep -oP "ANDROID_SERIAL=\K[\.0-9:]+" "$ACLOUD_OUTPUT_FILE")
+        if [[ -f "$ACLOUD_OUTPUT_FILE" ]]; then
+            input_serial_to_use=$(grep -oP "ANDROID_SERIAL=\K[\.0-9:]+" "$ACLOUD_OUTPUT_FILE")
+        fi
+        if [[ -z "$input_serial_to_use" ]]; then
+             log_error "Could not determine virtual device serial from output file."
+             return 1
+        fi
     fi
-    if ! device::set_current "$device_serial"; then
+
+    if ! device_util::init "$input_serial_to_use"; then
         return 1
     fi
 
     if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        adb -s "$CURRENT_ADB_SERIAL" wait-for-device
-        while ! adb -s "$CURRENT_ADB_SERIAL" shell pm path com.android.settings > /dev/null 2>&1; do
-            log_info "Waiting for package manager on $CURRENT_ADB_SERIAL..."
-            sleep 5
-        done
+        device_util::wait_for_boot_complete || return 1
     else
-        if [[ -n "$CURRENT_ADB_SERIAL" ]]; then
-            unlock_screen "$CURRENT_ADB_SERIAL"
-            skip_setup_wizard "$CURRENT_ADB_SERIAL"
-        else
-            log_warn "Could not find device in ADB mode to unlock. Proceeding..."
-        fi
+        # Physical devices
+        device_util::unlock_screen || return 1
+        device_util::skip_setup_wizard || return 1
     fi
 
+    local adb_serial
+    adb_serial=$(device_util::get_adb_serial)
+
     local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_DIR" "-tl" "$OUTPUT_DIR/test_logs")
-    if [[ "$CURRENT_MODE_TYPE" == "ADB" ]]; then
-        test_cmd+=("-s" "$CURRENT_ADB_SERIAL")
-    fi
+    test_cmd+=("-s" "$adb_serial")
+
     for test in "${TEST_NAME[@]}"; do
         test_cmd+=("-t" "$test")
     done
@@ -1410,17 +1192,17 @@ function run_single_test() {
     echo ""
     if (( test_status == 0 )); then
         log_info "${GREEN}--- Test PASSED ---${END}"
-        xml::update_xml_node "/bisect/state/@status" "complete_pass"
+        xml_util::update_xml_node "/bisect/state/@status" "complete_pass"
     elif (( test_status == 125 )); then
         log_warn "${ORANGE}--- Test SKIPPED ---${END}"
-        xml::update_xml_node "/bisect/state/@status" "complete_skip"
+        xml_util::update_xml_node "/bisect/state/@status" "complete_skip"
     elif (( test_status > 0 && test_status < 128 )); then
         log_error "${RED}--- Test FAILED (Status: $test_status) ---${END}"
-        xml::update_xml_node "/bisect/state/@status" "complete_fail"
+        xml_util::update_xml_node "/bisect/state/@status" "complete_fail"
     else # 128+
         # This case should be handled by fail_error inside the setup functions
         log_error "${RED}--- Test ABORTED (Status: $test_status) ---${END}"
-        xml::update_xml_node "/bisect/state/@status" "complete_abort"
+        xml_util::update_xml_node "/bisect/state/@status" "complete_abort"
     fi
     return "$test_status"
 }
@@ -1455,7 +1237,7 @@ function validate_and_identify_breakage() {
     for type_code in "${ranged_build_types[@]}"; do
         local var_name="${BUILD_TYPE_MAP[$type_code]}"
         local node_name="${var_name,,}s"
-        xml::update_xml_attribute "/bisect/$node_name/change[1]" "status" "good"
+        xml_util::update_xml_attribute "/bisect/$node_name/change[1]" "status" "good"
     done
 
 
@@ -1498,17 +1280,17 @@ function validate_and_identify_breakage() {
             BAD_INDICES[$type_to_check]=$last_commit_index
             IS_BREAKING[$type_to_check]=true
 
-            xml::update_xml_attribute "/bisect/$node_name" "good_index" "0"
-            xml::update_xml_attribute "/bisect/$node_name" "bad_index" "$last_commit_index"
-            xml::update_xml_attribute "/bisect/$node_name" "is_breaking" "true"
+            xml_util::update_xml_attribute "/bisect/$node_name" "good_index" "0"
+            xml_util::update_xml_attribute "/bisect/$node_name" "bad_index" "$last_commit_index"
+            xml_util::update_xml_attribute "/bisect/$node_name" "is_breaking" "true"
             # Mark last commit as 'bad' in XML
-            xml::update_xml_attribute "/bisect/$node_name/change[last()]" "status" "bad"
+            xml_util::update_xml_attribute "/bisect/$node_name/change[last()]" "status" "bad"
         else
             log_info "RESULT: Project '${type_to_check}' is NOT identified as breaking."
             IS_BREAKING[$type_to_check]=false
-            xml::update_xml_attribute "/bisect/$node_name" "is_breaking" "false"
+            xml_util::update_xml_attribute "/bisect/$node_name" "is_breaking" "false"
             # Mark last commit as 'good' in XML
-            xml::update_xml_attribute "/bisect/$node_name/change[last()]" "status" "good"
+            xml_util::update_xml_attribute "/bisect/$node_name/change[last()]" "status" "good"
         fi
     done
 
@@ -1587,32 +1369,32 @@ function bisect_single_project() {
             log_info "RESULT: Commit ${mid_commit:0:12} ($type_code_to_bisect) is GOOD."
             good_idx=$mid_idx
             GOOD_INDICES[$type_code_to_bisect]=$good_idx
-            xml::update_xml_attribute "/bisect/$node_name" "good_index" "$good_idx"
-            xml::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "good"
+            xml_util::update_xml_attribute "/bisect/$node_name" "good_index" "$good_idx"
+            xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "good"
             COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="good"
         elif (( test_status == 125 )); then # SKIP
             log_warn "RESULT: Commit ${mid_commit:0:12} ($type_code_to_bisect) is SKIPPED."
             # Add to our in-memory list of skipped indices
             skipped_indices_string+=" $mid_idx"
             COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="skipped"
-            xml::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "skipped"
+            xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "skipped"
             # DO NOT update good_idx or bad_idx, let the loop try again
         elif (( test_status > 0 && test_status < 128 )); then # BAD (1-124, including 1 for test fail)
             log_info "RESULT: Commit ${mid_commit:0:12} ($type_code_to_bisect) is BAD/BROKEN."
             bad_idx=$mid_idx
             BAD_INDICES[$type_code_to_bisect]=$bad_idx
-            xml::update_xml_attribute "/bisect/$node_name" "bad_index" "$bad_idx"
+            xml_util::update_xml_attribute "/bisect/$node_name" "bad_index" "$bad_idx"
             if (( test_status == 1 )); then
-                 xml::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "bad" # Test failed
+                 xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "bad" # Test failed
                  COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="bad"
             else
-                 xml::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "broken" # User marked bad/broken
+                 xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "broken" # User marked bad/broken
                  COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="broken"
             fi
         else # ABORT (128+)
             log_error "Bisection aborted by user (exit code $test_status)!"
-            xml::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "abort"
-            xml::update_xml_node "/bisect/state/@status" "aborted"
+            xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "abort"
+            xml_util::update_xml_node "/bisect/state/@status" "aborted"
             exit "$test_status"
         fi
         log_info "New Range for $type_code_to_bisect: Index $good_idx (Good) to $bad_idx (Bad)"
@@ -1629,7 +1411,7 @@ function bisect_all_breaking_projects() {
     log_info "========================================="
     log_info "All Bisections Complete!"
     log_info "========================================="
-    xml::update_xml_node "/bisect/state/@status" "complete"
+    xml_util::update_xml_node "/bisect/state/@status" "complete"
 
     for type_code in "${BISECT_BUILD_TYPES[@]}"; do
         local good_idx=${GOOD_INDICES[$type_code]}
@@ -1661,6 +1443,7 @@ function main() {
     if [[ -n "$INPUT_CONFIG_FILE" ]]; then
         log_info "Resuming run from $INPUT_CONFIG_FILE"
         BISECT_CONFIG_FILE="$INPUT_CONFIG_FILE"
+        xml_util::load "$BISECT_CONFIG_FILE" || fail_error "Failed to load XML file: $BISECT_CONFIG_FILE"
     else
         validate_and_process_args
         log_info "Starting new run (Bisection Mode: $IS_BISECT_MODE)..."
@@ -1701,7 +1484,7 @@ function main() {
     if [[ "$BISECT_STATUS" == "new" ]]; then
         log_info "--- New bisection: Validating boundaries to find breaking projects ---"
         validate_and_identify_breakage
-        xml::update_xml_node "/bisect/state/@status" "in_progress"
+        xml_util::update_xml_node "/bisect/state/@status" "in_progress"
     elif [[ "$BISECT_STATUS" == "complete" ]]; then
         log_info "Bisection is already complete according to state file. Rerunning final report."
         bisect_all_breaking_projects # Re-run report
