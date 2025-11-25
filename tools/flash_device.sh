@@ -1120,18 +1120,13 @@ function flash_platform_build() {
         fi
 
         if [ -n "${_build_target}" ]; then
-            local _build_type="${_build_target#*-}"
-            if [[ "${_branch}" == git_main* ]] && [[ "$_build_type" == user* ]]; then
-                log_info "Build variant is not provided, using trunk_staging build"
-                _build_type="trunk_staging-$_build_type"
-            fi
-            _flash_cmd+=" -t $_build_type"
-            if [[ "$_build_type" == *user ]] && [ -n "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then
+            _flash_cmd+=" -t $_build_target"
+            if [[ "$_build_target" == *user ]] && [ -n "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then
                 log_info "Need to flash GKI after flashing platform build, hence enabling --force_debuggable in user build flashing"
                 _flash_cmd+=" --force_debuggable"
             fi
         fi
-        log_info "Flash $SERIAL_NUMBER by flash station with platform build $PLATFORM_BUILD..."
+        log_info "Flashing $SERIAL_NUMBER by flash station with platform build $PLATFORM_BUILD..."
         if [ -n "${_build_id}" ] && [[ "${_build_id}" != latest* ]]; then
             _flash_cmd+=" --bid ${_build_id}"
         else
