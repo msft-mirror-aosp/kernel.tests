@@ -23,6 +23,7 @@ SKIP_BUILD=false
 GCOV=false
 DEBUG=false
 KASAN=false
+DISABLE_VERIFICATION=false
 EXTRA_OPTIONS=()
 DEVICE_VARIANT="userdebug"
 
@@ -62,6 +63,8 @@ function print_help() {
     echo "  --gcov                [Optional] Build gcov enabled kernel"
     echo "  --debug               [Optional] Build debug enabled kernel"
     echo "  --kasan               [Optional] Build kasan enabled kernel"
+    echo "  --disable-verification"
+    echo "                        [Optional] Disable verification"
     echo "  -pb <platform_build>, --platform-build=<platform_build>"
     echo "                        [Optional] The platform build path. Can be a local path or a remote build"
     echo "                        as ab://<branch>/<build_target>/<build_id>."
@@ -218,6 +221,10 @@ function parse_arg() {
                 ;;
             --kasan)
                 KASAN=true
+                shift
+                ;;
+            --disable-verification)
+                DISABLE_VERIFICATION=true
                 shift
                 ;;
             *)
@@ -521,6 +528,10 @@ function format_ab_vendor_kernel_build_string() {
                 if [ -z "$_build_target" ]; then
                     _build_target="kernel_raviole_kleaf"
                 fi
+                if [ "$DISABLE_VERIFICATION" == "false" ]; then
+                    log_info "Disable verification as android13-5.15 can only be integrated with older platform branch."
+                    DISABLE_VERIFICATION=true
+                fi
             else
                 log_error "There is no vendor kernel branch $_branch for $PRODUCT device"
                 exit 1
@@ -531,6 +542,10 @@ function format_ab_vendor_kernel_build_string() {
                 _branch="kernel-android13-gs-pixel-5.10"
                 if [ -z "$_build_target" ]; then
                     _build_target="slider_gki"
+                fi
+                if [ "$DISABLE_VERIFICATION" == "false" ]; then
+                    log_info "Disable verification as android13-5.10 can only be integrated with older platform branch."
+                    DISABLE_VERIFICATION=true
                 fi
             elif [[ "$PRODUCT" == "felix" ]] || [[ "$PRODUCT" == "lynx" ]] || [[ "$PRODUCT" == "tangorpro" ]]; then
                 _branch="kernel-android13-gs-pixel-5.10"
@@ -796,8 +811,10 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     log_info "Flash GKI kernel from $KERNEL_BUILD"
     log_info "Wiping the device"
     fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
-    log_info "Disabling oem verification"
-    fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem disable-verification
+    if [ "$DISABLE_VERIFICATION" == "true" ]; then
+        log_info "Disabling oem verification"
+        fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem disable-verification
+    fi
     local _flash_cmd
     if [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
         _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-lz4.img"
@@ -873,8 +890,10 @@ function flash_vendor_kernel_build() {
     reboot_device_into_bootloader
     log_info "Wiping the device"
     fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
-    log_info "Disabling oem verification"
-    fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem disable-verification
+    if [ "$DISABLE_VERIFICATION" == "true" ]; then
+        log_info "Disabling oem verification"
+        fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem disable-verification
+    fi
     log_info "Flashing boot image"
     fastboot -s "$FASTBOOT_SERIAL_NUMBER" flash boot "$VENDOR_KERNEL_BUILD"/boot.img
     log_info "Flashing dtb.img & initramfs.img"
@@ -1109,7 +1128,11 @@ function flash_platform_build() {
 
     local _flash_cmd
     if [[ "$PLATFORM_BUILD" == ab://* ]]; then
-        _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions --disable_verity -w -s $DEVICE_SERIAL_NUMBER "
+        _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions -w -s $DEVICE_SERIAL_NUMBER "
+
+        if [ "$DISABLE_VERIFICATION" == "true" ]; then
+            _flash_cmd+=" --disable_verity --disable_verification"
+        fi
 
         local _branch
         local _build_target
@@ -1148,7 +1171,10 @@ function flash_platform_build() {
         log_info "Flashing device by local flash station with platform build from ${PLATFORM_BUILD}"
         prepare_to_flash_platform_build_from_local_directory
 
-        _flash_cmd="$LOCAL_FLASH_CLI --nointeractive --force_flash_partitions --disable_verity --disable_verification  -w -s $DEVICE_SERIAL_NUMBER"
+        _flash_cmd="$LOCAL_FLASH_CLI --nointeractive --force_flash_partitions -w -s $DEVICE_SERIAL_NUMBER"
+        if [ "$DISABLE_VERIFICATION" == "true" ]; then
+            _flash_cmd+=" --disable_verity --disable_verification"
+        fi
     fi
 
     log_info "Flashing device with: $_flash_cmd"
