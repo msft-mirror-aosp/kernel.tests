@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0
 
 #
-# A simple script to run test with Tradefed.
+# A simple script to run test in the local Android development environment.
 #
 
-KERNEL_TF_PREBUILT=prebuilts/tradefed/filegroups/tradefed/tradefed.sh
 PLATFORM_TF_PREBUILT=tools/tradefederation/prebuilts/filegroups/tradefed/tradefed.sh
 DEFAULT_LOG_DIR=$PWD/out/test_logs/$(date +%Y%m%d_%H%M%S)
 DOWNLOAD_PATH="/tmp/downloaded_tests"
@@ -431,19 +430,25 @@ if [[ -n "$tf_cli" && -n "$testcases_path" ]]; then
     unset_android_environment
 else
     if [ -n "$TRADEFED" ]; then
-        tf_cli="$TRADEFED run commandAndExit"
+        if [[ "$REPO_LIST_OUT" == *"kernel/common"* ]]; then
+            # In Android kernel tree
+            tf_cli="JAVA_HOME=$KERNEL_JDK_PATH PATH=$KERNEL_JDK_PATH/bin:$PATH $TRADEFED run commandAndExit"
+        elif [[ "$REPO_LIST_OUT" == *"build/make"* ]]; then
+            # In Android platform tree
+            tf_cli="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $TRADEFED run commandAndExit"
+        else
+            tf_cli="$TRADEFED run commandAndExit"
+        fi
     elif [ -f "${ANDROID_HOST_OUT}/bin/tradefed.sh" ] ; then
         TRADEFED="${ANDROID_HOST_OUT}/bin/tradefed.sh"
         tf_cli="$TRADEFED run commandAndExit"
     elif [ -f "$PLATFORM_TF_PREBUILT" ]; then
         TRADEFED="$PLATFORM_TF_PREBUILT"
         tf_cli="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $TRADEFED run commandAndExit"
-    elif [ -f "$KERNEL_TF_PREBUILT" ]; then
-        TRADEFED="$KERNEL_TF_PREBUILT"
-        tf_cli="JAVA_HOME=$KERNEL_JDK_PATH PATH=$KERNEL_JDK_PATH/bin:$PATH  $TRADEFED run commandAndExit"
     # No Tradefed found
     else
-        log_error "Can not find Tradefed binary. Please use flag -tf to specify the binary path."
+        log_error "Can not find Tradefed binary. Please use flag -tf to specify the binary path. \
+For example -tf ab://tradefed/tradefed/latest/tradefed.zip"
         exit 1
     fi
     log_info "Use Tradefed from $TRADEFED"
@@ -464,7 +469,7 @@ exit_code=$?
 
 if $GCOV; then
     create_tracefile_cli="$CREATE_TRACEFILE_SCRIPT -t $LOG_DIR -o $LOG_DIR/cov.info"
-    if [ -f $KERNEL_TF_PREBUILT ]; then
+    if [[ "$REPO_LIST_OUT" == *"kernel/common"* ]]; then
         log_info "Create tracefile with $create_tracefile_cli"
         $create_tracefile_cli && \
         log_info "Created tracefile at $LOG_DIR/cov.info"
