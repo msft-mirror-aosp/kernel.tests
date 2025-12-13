@@ -16,11 +16,27 @@ readonly FETCH_SCRIPT_PATH_IN_REPO="kernel/tests/tools/fetch_artifact.sh"
 readonly KERNEL_JDK_PATH="prebuilts/jdk/jdk11/linux-x86"
 readonly LOCAL_JDK_PATH="/usr/local/buildtools/java/jdk11"
 readonly PLATFORM_JDK_PATH="prebuilts/jdk/jdk21/linux-x86"
+readonly DEFAULT_BUILD_CHECKER=/google/data/ro/projects/android/ab
 
 # --- BinFS ---
 readonly COMMON_LIB_CL_FLASH_CLI="/google/bin/releases/android/flashstation/cl_flashstation"
 readonly COMMON_LIB_LOCAL_FLASH_CLI="/google/bin/releases/android/flashstation/local_flashstation"
 
+# --- Download Path ---
+if [ -d "/tmp" ]; then
+    readonly DOWNLOAD_PATH="/tmp/kernel_tests_downloads"
+elif [ -d "$HOME/Downloads" ]; then
+    readonly DOWNLOAD_PATH="$HOME/Downloads/kernel_tests_downloads"
+else
+    readonly DOWNLOAD_PATH="$PWD/out/kernel_tests_downloads"
+fi
+
+# --- Device artifacts ----
+readonly DEVICE_DIR="$DOWNLOAD_PATH/device_dir"
+readonly VENDOR_KERNEL_DIR="$DOWNLOAD_PATH/vendor_kernel_dir"
+readonly KERNEL_DIR="$DOWNLOAD_PATH/kernel_dir"
+readonly GSI_DIR="$DOWNLOAD_PATH/gsi_dir"
+readonly TRADEFED_DIR="$DOWNLOAD_PATH/tradefed_dir"
 
 # --- Internal State Flags ---
 __COMMON_LIB_NO_TPUT__="" # Flag set if tput is unavailable
@@ -122,14 +138,14 @@ function _print_log() {
     local full_message_suffix=""
 
     # Append exit code context for errors if provided and non-zero
-    if [[ "$log_level" == "ERROR" && -n "$exit_code" && "$exit_code" -ne 0 ]]; then
+    if [[ "$log_level" = "ERROR" && -n "$exit_code" && "$exit_code" -ne 0 ]]; then
         # Append color codes carefully around the exit code part
         full_message_suffix=" (${BOLD}Exit Code ${exit_code}${END}${color_code})${END}"
     fi
 
     # Determine output stream (stderr for WARN/ERROR)
     local output_stream="/dev/stderr"
-    if [[ "$log_level" == "INFO" ]]; then
+    if [[ "$log_level" = "INFO" ]]; then
         output_stream="/dev/stdout"
     fi
 
@@ -259,7 +275,7 @@ function go_to_repo_root() {
         return 1
     fi
 
-    if [[ $(pwd) == "$repo_root" ]]; then
+    if [[ $(pwd) = "$repo_root" ]]; then
         log_info "The current directory is already the repo root: $PWD"
     else
         # Only log and change directory if we are not already in the repo root
@@ -460,6 +476,77 @@ function set_platform_repo() {
     return 0
 }
 
+# Function to create softlink
+function create_soft_link() {
+    local original_file_name="$1"
+    local soft_link_name="$2"
+    ln -s "$original_file_name" "$soft_link_name"
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        log_info "Linked $original_file_name to $soft_link_name"
+    else
+        log_error "Failed to link $original_file_name to $soft_link_name"
+        return 1
+    fi
+}
+
+# Function to convert/normalize an 'ab://' string
+function convert_ab_string() {
+    local original_ab_string="$1"
+    local __result_var="$2"  # The name of the variable to hold the output
+    local ab_string_format="ab://<branch>/<build_target>/<build_id> or ab://<branch>/<build_target>/<build_id>/<file_name>"
+    local ab_string_error_message="Invalid build string: '$original_ab_string'. Needs to be: $ab_string_format"
+
+    if [[ "$original_ab_string" != ab://* ]]; then
+        log_error "$ab_string_error_message"
+        return 1
+    fi
+
+    local path_string="${original_ab_string#ab://}"
+    IFS='/' read -ra array <<< "$path_string"
+    # The expected array length is 3 (branch/target/id) or 4 (branch/target/id/file)
+    local array_len="${#array[@]}"
+    if [ "$array_len" -lt 3 ] || [ "$array_len" -gt 4 ]; then
+        log_error "$ab_string_error_message"
+        return 1
+    fi
+
+    local branch="${array[0]}"
+    local build_target="${array[1]}"
+    local build_id=""
+    local rest_string=""
+    if [ "$array_len" -eq 3 ]; then
+        build_id="${array[2]}"
+        if [ -z "$build_id" ]; then
+            build_id="latest"
+        fi
+    elif [ "$array_len" -eq 4 ]; then
+        build_id="${array[2]}"
+        rest_string="/${array[3]}"
+    fi
+
+    if [[ "$build_id" = "latest" || "$build_id" = "lkgb" ]]; then
+        if [ -f "$DEFAULT_BUILD_CHECKER" ]; then
+            local output
+            local check_build_cmd="$DEFAULT_BUILD_CHECKER lkgb --branch $branch --target $build_target"
+            output=$("$DEFAULT_BUILD_CHECKER" lkgb --branch "$branch" --target "$build_target")
+            if [[ "$output" != *"$branch"* ]]; then
+                log_error "Command $DEFAULT_BUILD_CHECKER lkgb --branch $branch --target $build_target \
+returned: '$output'. Build target $branch/$build_target doesn't exist in go/ab"
+                return 1
+            fi
+            build_id=$(echo "$output" | awk '{print $3}')
+        fi
+    fi
+
+    local final_string="ab://$branch/$build_target/$build_id$rest_string"
+    if [[ "$original_ab_string" != "$final_string" ]]; then
+        log_info "Input: $original_ab_string -> Converted: $final_string"
+    fi
+    printf -v "$__result_var" "%s" "$final_string"
+    return 0
+}
+
 function parse_ab_url() {
     local url="$1"
     local branch_var="$2"
@@ -510,7 +597,7 @@ function run_command() {
 
     "${command_to_run[@]}"
     status_code=$?
-    if (( status_code == 0 )); then
+    if (( status_code = 0 )); then
         log_info "Succeeded."
     else
         log_error "Failed." "$status_code"

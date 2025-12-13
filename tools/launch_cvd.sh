@@ -56,8 +56,8 @@ function print_help() {
     echo "                        as ab://<branch>/<build_target>/<build_id>."
     echo "                        If not specified, it will use the platform build in the local"
     echo "                        repo, or the default compatible platform build for the kernel."
-    echo "  -sb <system_build>, --system-build=<system_build>"
-    echo "                        The system build path for GSI testing. Can be a local path or"
+    echo "  -gsi <gsi_build>, --gsi-build=<gsi_build>"
+    echo "                        The GSI build path for GSI testing. Can be a local path or"
     echo "                        remote build as ab://<branch>/<build_target>/<build_id>."
     echo "                        If not specified, no system build will be used."
     echo "  -kb <kernel_build>, --kernel-build=<kernel_build>"
@@ -120,17 +120,30 @@ function parse_args() {
                 PLATFORM_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
+            -gsi)
+                shift
+                if test $# -gt 0; then
+                    GSI_BUILD="$1"
+                else
+                    fail_error "system build is not specified"
+                fi
+                shift
+                ;;
+            --gsi-build=*)
+                GSI_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
+                shift
+                ;;
             -sb)
                 shift
                 if test $# -gt 0; then
-                    SYSTEM_BUILD="$1"
+                    GSI_BUILD="$1"
                 else
                     fail_error "system build is not specified"
                 fi
                 shift
                 ;;
             --system-build=*)
-                SYSTEM_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
+                GSI_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             -kb)
@@ -199,11 +212,11 @@ function create_kernel_build_cmd() {
         fi
         build_cmd+=" //common-modules/virtual-device:virtual_device_x86_64_dist"
     elif [ -f "$cf_kernel_repo_root/build/build.sh" ]; then
-        if [[ "$android_version" == "12" ]]; then
+        if [[ "$android_version" = "12" ]]; then
             build_cmd+="BUILD_CONFIG=common/build.config.gki.x86_64 build/build.sh"
             build_cmd+=" && "
             build_cmd+="BUILD_CONFIG=common-modules/virtual-device/build.config.virtual_device.x86_64 build/build.sh"
-        elif [[ "$android_version" == "11" ]] || [[ "$android_version" == "4.19" ]]; then
+        elif [[ "$android_version" = "11" ]] || [[ "$android_version" = "4.19" ]]; then
             build_cmd+="BUILD_CONFIG=common/build.config.gki.x86_64 build/build.sh"
             build_cmd+=" && "
             build_cmd+="BUILD_CONFIG=common-modules/virtual-device/build.config.cuttlefish.x86_64 build/build.sh"
@@ -228,7 +241,7 @@ function create_kernel_build_path() {
     if [ "$android_version" = "mainline" ] || greater_than_or_equal_to "$android_version" "14"; then
         # support android-mainline, android16, android15, android14
         echo "out/virtual_device_x86_64/dist"
-    elif greater_than_or_equal_to "$android_version" "11" || [[ "$android_version" == "4.19" ]]; then
+    elif greater_than_or_equal_to "$android_version" "11" || [[ "$android_version" = "4.19" ]]; then
         # support android13, android12, android11, android-4.19-stable
         echo "out/$cf_kernel_version/dist"
     else
@@ -274,7 +287,7 @@ function find_repo() {
             log_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION"
             ;;
         *kernel/superproject*)
-            if [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
+            if [[ "$manifest_output" = *common-modules/virtual-device* ]]; then
                 CF_KERNEL_REPO_ROOT="$PWD"
                 CF_KERNEL_VERSION=$(grep -e "common-modules/virtual-device" \
                 .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
@@ -299,7 +312,7 @@ function rebuild_platform() {
     # Execute the build command
     run_command "${build_cmd_parts[@]}"
     build_status=$?
-    if (( build_status == 0 )); then
+    if (( build_status = 0 )); then
         if [[ -f "${ANDROID_PRODUCT_OUT}/system.img" ]]; then
             log_info "Platform build command succeeded."
             return 0
@@ -332,7 +345,7 @@ function rebuild_kernel() {
     # Using eval here is risky. Refactor if build_cmd structure allows.
     eval "$build_cmd"
     build_status=$?
-    if (( build_status == 0 )); then
+    if (( build_status = 0 )); then
         log_info "Kernel build command succeeded."
     else
         fail_error "Kernel build command failed" build "$build_status"
@@ -397,7 +410,7 @@ if [[ -n "$PLATFORM_BUILD" && "$PLATFORM_BUILD" != ab://* ]]; then
             log_info "Build environment already set for TARGET_PRODUCT=${TARGET_PRODUCT}."
         fi
 
-        if [[ "$SKIP_BUILD" == false ]]; then
+        if [[ "$SKIP_BUILD" = false ]]; then
             rebuild_platform
         else
             log_info "--skip-build specified, skipping platform rebuild."
@@ -410,7 +423,7 @@ if [[ -n "$PLATFORM_BUILD" && "$PLATFORM_BUILD" != ab://* ]]; then
             fail_error "ANDROID_PRODUCT_OUT ('${ANDROID_PRODUCT_OUT:-}') is not set or not a directory after lunch/build attempt." 1
         fi
     else
-        if [[ "$SKIP_BUILD" == false ]]; then
+        if [[ "$SKIP_BUILD" = false ]]; then
             log_warn "Local platform build path provided ('${PLATFORM_BUILD}'). --skip-build was not used, but automatic rebuilding is only done when running from within the platform repo source directory."
         else
             log_info "Current path $PWD is not a valid Android platform repo, please ensure it contains the platform image."
@@ -419,18 +432,18 @@ if [[ -n "$PLATFORM_BUILD" && "$PLATFORM_BUILD" != ab://* ]]; then
 fi
 
 # 5. Handle System Build/Path
-if [ "$SKIP_BUILD" = false ] && [ -n "$SYSTEM_BUILD" ] && [[ "$SYSTEM_BUILD" != ab://* ]] \
-&& [ -d "$SYSTEM_BUILD" ]; then
+if [ "$SKIP_BUILD" = false ] && [ -n "$GSI_BUILD" ] && [[ "$GSI_BUILD" != ab://* ]] \
+&& [ -d "$GSI_BUILD" ]; then
     # Get GSI build
-    cd "$SYSTEM_BUILD" || fail_error "Failed to cd to $SYSTEM_BUILD"
-    SYSTEM_REPO_LIST_OUT=$(repo list 2>&1)
-    if [[ "$SYSTEM_REPO_LIST_OUT" != "error"* ]]; then
+    cd "$GSI_BUILD" || fail_error "Failed to cd to $GSI_BUILD"
+    GSI_REPO_LIST_OUT=$(repo list 2>&1)
+    if [[ "$GSI_REPO_LIST_OUT" != "error"* ]]; then
         go_to_repo_root "$PWD"
         if [ -z "${TARGET_PRODUCT}" ] || [[ "${TARGET_PRODUCT}" != "${DEFAULT_GSI_PRODUCT}" ]]; then
             log_warn "Build target product '${TARGET_PRODUCT}' does not match expected '${DEFAULT_GSI_PRODUCT}'. Reset build environment."
             set_platform_repo "${DEFAULT_GSI_PRODUCT}"
             rebuild_platform
-            SYSTEM_BUILD="${ANDROID_PRODUCT_OUT}/system.img"
+            GSI_BUILD="${ANDROID_PRODUCT_OUT}/system.img"
         fi
     fi
 fi
@@ -458,7 +471,7 @@ if  [[ -n "$KERNEL_BUILD" && "$KERNEL_BUILD" != ab://* ]]; then
         log_info "target_kernel_repo_root=$target_kernel_repo_root, target_cf_kernel_version=$target_cf_kernel_version"
 
         # Rebuild if not skipped
-        if [[ "$SKIP_BUILD" == false ]]; then
+        if [[ "$SKIP_BUILD" = false ]]; then
             rebuild_kernel "$target_kernel_repo_root" "$target_cf_kernel_version" # Assumes PWD is kernel root
         else
             log_info "--skip-build specified, skipping kernel rebuild."
@@ -477,13 +490,13 @@ if  [[ -n "$KERNEL_BUILD" && "$KERNEL_BUILD" != ab://* ]]; then
             KERNEL_BUILD="$full_kernel_path"
         else
             err_msg="Expected kernel build output directory '${full_kernel_path}' not found."
-            if [[ "$SKIP_BUILD" == true ]]; then
+            if [[ "$SKIP_BUILD" = true ]]; then
                 err_msg+="Don't skip re-building the kernel image."
             fi
             fail_error "$err_msg" 1
         fi
     else
-        if [[ "$SKIP_BUILD" == false ]]; then
+        if [[ "$SKIP_BUILD" = false ]]; then
             log_warn "Local kernel build path provided ('${KERNEL_BUILD}'). --skip-build was not used, but automatic rebuilding is only done when running from within the kernel repo source directory."
         else
             log_info  "Current path $PWD is not a valid Android repo, please ensure it contains the kernel image."
@@ -529,7 +542,7 @@ EXTRA_OPTIONS+=("$OPT_SKIP_PRERUNCHECK")
 if [ -z "$PLATFORM_BUILD" ]; then
     log_warn "Platform build was not specified, and could not be determined from local repo. Will use the latest git_main build."
     acloud_cmd_parts+=("--branch" "git_main")
-elif [[ "$PLATFORM_BUILD" == ab://* ]]; then
+elif [[ "$PLATFORM_BUILD" = ab://* ]]; then
     ab_branch="" ab_target="" ab_id=""
     parse_ab_url "$PLATFORM_BUILD" ab_branch ab_target ab_id
     if [[ $? -ne 0 ]]; then
@@ -546,7 +559,7 @@ fi
 
 if [ -z "$KERNEL_BUILD" ]; then
     log_warn "Flag --kernel-build is not set, will not launch Cuttlefish with different kernel."
-elif [[ "$KERNEL_BUILD" == ab://* ]]; then
+elif [[ "$KERNEL_BUILD" = ab://* ]]; then
     ab_branch="" ab_target="" ab_id=""
     parse_ab_url "$KERNEL_BUILD" ab_branch ab_target ab_id
     if [[ $? -ne 0 ]]; then
@@ -562,13 +575,13 @@ else
     acloud_cmd_parts+=("--local-kernel-image" "$KERNEL_BUILD")
 fi
 
-if [ -z "$SYSTEM_BUILD" ]; then
+if [ -z "$GSI_BUILD" ]; then
     log_warn "System build is not specified, will not launch Cuttlefish with GSI mixed build."
-elif [[ "$SYSTEM_BUILD" == ab://* ]]; then
+elif [[ "$GSI_BUILD" = ab://* ]]; then
     ab_branch="" ab_target="" ab_id=""
-    parse_ab_url "$SYSTEM_BUILD" ab_branch ab_target ab_id
+    parse_ab_url "$GSI_BUILD" ab_branch ab_target ab_id
     if [[ $? -ne 0 ]]; then
-        fail_error "System Build URL $SYSTEM_BUILD parsing failed" 1
+        fail_error "System Build URL $GSI_BUILD parsing failed" 1
     fi
     acloud_cmd_parts+=("--system-branch" "${ab_branch}")
     acloud_cmd_parts+=("--system-build-target" "${ab_target}")
@@ -576,7 +589,7 @@ elif [[ "$SYSTEM_BUILD" == ab://* ]]; then
         acloud_cmd_parts+=("--system-build-id" "${ab_id}")
     fi
 else
-    acloud_cmd_parts+=("--local-system-image" "$SYSTEM_BUILD")
+    acloud_cmd_parts+=("--local-system-image" "$GSI_BUILD")
 fi
 
 # 9. Execute acloud Command
