@@ -81,9 +81,23 @@ if [ ${#array[@]} -lt 6 ]; then
     log_error "Invalid build format: $BUILD_INFO. Needs to be: $BUILD_FORMAT"
     exit 1
 elif [ ${#array[@]} -gt 7 ]; then
-    log_error "Invalid TEST_DIR format: $BUILD_INFO. Needs to be: $BUILD_FORMAT"
+    log_error "Invalid build format: $BUILD_INFO. Needs to be: $BUILD_FORMAT"
     exit 1
+fi
+
+branch="${array[2]}"
+build_target="${array[3]}"
+build_id="${array[4]}"
+
+file_path="$DOWNLOAD_PATH/$branch/$build_target/$build_id"
+existing_file_name=$(find "$file_path" -maxdepth 1 -type f -name "${array[5]}")
+file_name="$file_path/${array[5]}"
+if [ -f "$existing_file_name" ]; then
+    log_info "Use the existing $existing_file_name. Skipping download."
 else
+    if [ ! -d "$file_path" ]; then
+        mkdir -p "$file_path"
+    fi
     fetch_cli+=" --branch ${array[2]}"
     fetch_cli+=" --target ${array[3]}"
     if [[ "${array[4]}" != latest* ]]; then
@@ -93,7 +107,8 @@ else
     fi
     fetch_cli+="$EXTRA_OPTIONS"
     fetch_cli+=" '${array[5]}'"
+    cd "$file_path"  || { log_error "Failed to go to $file_path"; exit 1; }
+    log_info "Downloading ${array[5]} to $file_path with command: $fetch_cli"
+    eval "$fetch_cli"
 fi
 
-log_info "Running command: $fetch_cli"
-eval "$fetch_cli"
