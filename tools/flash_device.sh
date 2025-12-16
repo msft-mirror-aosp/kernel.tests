@@ -1112,9 +1112,11 @@ will fail to connect autimatically, please try killing adb server (adb kill-serv
         return 1 # Failure
     fi
     if ! is_device_adb_authorized; then
+        log_warn "Device '$device_target' is not autheroized"
         return 1 # Failed
     fi
-    if is_device_ready_for_adb_command; then
+    if ! is_device_ready_for_adb_command; then
+        log_warn "Device '$device_target' is not ready for adb command"
         return 1 # Failed
     fi
     log_info "Device '$device_target' is connected, authorized, and ready."
