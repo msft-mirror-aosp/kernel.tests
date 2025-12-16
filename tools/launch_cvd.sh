@@ -60,7 +60,7 @@ function print_help() {
     echo "                        The GSI build path for GSI testing. Can be a local path or"
     echo "                        remote build as ab://<branch>/<build_target>/<build_id>."
     echo "                        If not specified, no system build will be used."
-    echo "  -kb <kernel_build>, --kernel-build=<kernel_build>"
+    echo "  -kb <kernel_build>, --kernel-build=<kernel_build>, -gki <gki_build>, --gki-build=<gki_build>"
     echo "                        The kernel build path. Can be a local path or a remote build"
     echo "                        as ab://<branch>/<build_target>/<build_id>."
     echo "                        If not specified, it will use the kernel in the local repo."
@@ -144,6 +144,19 @@ function parse_args() {
                 ;;
             --system-build=*)
                 GSI_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
+                shift
+                ;;
+            -gki)
+                shift
+                if test $# -gt 0; then
+                    KERNEL_BUILD="$1"
+                else
+                    fail_error "GKI build path is not specified"
+                fi
+                shift
+                ;;
+            --gki-build=*)
+                KERNEL_BUILD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             -kb)
