@@ -19,6 +19,9 @@ python_test {
     test_suites: [
         "vts",
         "general-tests",
+        // See test/dts/README.md for triage instructions for bugs from the dts suite.
+        // Bugs should not be filed on the core networking team.
+        "dts",
     ],
 }
 
