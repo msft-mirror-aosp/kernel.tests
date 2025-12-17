@@ -317,7 +317,7 @@ function build_platform() {
         log_warn "--skip-build is set. Do not rebuild platform build"
         return
     fi
-    build_cmd="m -j12 ; make otatools -j12 ; make dist -j12"
+    build_cmd="m -j18 droid otatools-package dist"
     log_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
     eval $build_cmd
     exit_code=$?
@@ -325,12 +325,6 @@ function build_platform() {
         log_warn "$build_cmd returned exit_code $exit_code"
         log_error "$build_cmd failed"
         exit 1
-    else
-        if [ -f "${ANDROID_PRODUCT_OUT}/system.img" ]; then
-            log_info "${ANDROID_PRODUCT_OUT}/system.img exist"
-        else
-            log_error "${ANDROID_PRODUCT_OUT}/system.img doesn't exist"
-        fi
     fi
 }
 
@@ -925,10 +919,9 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     reboot_device_into_bootloader
     log_info "Flash GKI kernel from $KERNEL_BUILD"
     log_info "Wiping the device"
-    fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
+    local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5 && "
     if [ "$DISABLE_VERIFICATION" = "true" ]; then
-        log_info "Disabling oem verification"
-        fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem disable-verification
+        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification && "
     fi
     local _flash_cmd
     if [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
@@ -996,7 +989,7 @@ function flash_vendor_kernel_build() {
     reboot_device_into_bootloader
     local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5 && "
     if [ "$DISABLE_VERIFICATION" = "true" ]; then
-        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification &&"
+        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification && "
     fi
     _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $VENDOR_KERNEL_BUILD/boot.img && "
     if [ -f "$VENDOR_KERNEL_BUILD/dtb.img" ] && [ -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]; then
@@ -1119,10 +1112,12 @@ will fail to connect autimatically, please try killing adb server (adb kill-serv
         return 1 # Failure
     fi
     if ! is_device_adb_authorized; then
-        return 0 # Failed
+        log_warn "Device '$device_target' is not autheroized"
+        return 1 # Failed
     fi
-    if is_device_ready_for_adb_command; then
-        return 0 # Failed
+    if ! is_device_ready_for_adb_command; then
+        log_warn "Device '$device_target' is not ready for adb command"
+        return 1 # Failed
     fi
     log_info "Device '$device_target' is connected, authorized, and ready."
     get_device_info_from_adb
@@ -1358,7 +1353,7 @@ function flash_gsi_build() {
 function prepare_to_flash_platform_build_from_local_directory () {
     log_info "Setting up local environment to flash platform build from ${PLATFORM_BUILD}"
     if [ ! -f "$PLATFORM_BUILD/android-info.txt" ] || [ ! -f "$PLATFORM_BUILD/boot.img" ]; then
-        local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img*.zip)
+        local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -name *-img*.zip)
         if [ -f "$device_image" ]; then
             unzip -j "$device_image" -d "$PLATFORM_BUILD"
             if [ ! -f "$PLATFORM_BUILD/android-info.txt" ] || [ ! -f "$PLATFORM_BUILD/boot.img" ]; then
@@ -1703,8 +1698,6 @@ log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KER
 [[ "${KERNEL_BUILD,,}" = "none" ]] && KERNEL_BUILD=""
 [[ "${VENDOR_KERNEL_BUILD,,}" = "none" ]] && VENDOR_KERNEL_BUILD=""
 
-log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KERNEL_BUILD=$VENDOR_KERNEL_BUILD"
-
 # --- Platform Build Processing ---
 if [[ "$PLATFORM_BUILD" = ab://* ]]; then
     format_ab_platform_build_string
@@ -1739,15 +1732,18 @@ elif [ -n "$PLATFORM_BUILD" ] && [ -d "$PLATFORM_BUILD" ]; then
                 exit 1
             fi
         fi
-        if [ -d "${PLATFORM_REPO_ROOT}" ] && [ -f "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT/otatools.zip" ]; then
-            PLATFORM_BUILD=$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT
+        if [ -d "${PLATFORM_REPO_ROOT}" ] && [ -f "$PLATFORM_REPO_ROOT/out/dist/otatools.zip" ]; then
+            PLATFORM_BUILD=$PLATFORM_REPO_ROOT/out/dist
         elif [ -d "${ANDROID_PRODUCT_OUT}" ] && [ -f "${ANDROID_PRODUCT_OUT}/otatools.zip" ]; then
             PLATFORM_BUILD="${ANDROID_PRODUCT_OUT}"
         else
-            PLATFORM_BUILD=
+            log_error "Can't find valid image in $PLATFORM_REPO_ROOT"
+            exit
         fi
     fi
 fi
+
+log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KERNEL_BUILD=$VENDOR_KERNEL_BUILD"
 
 find_flashstation_binary
 
