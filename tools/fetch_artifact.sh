@@ -90,7 +90,11 @@ build_target="${array[3]}"
 build_id="${array[4]}"
 
 file_path="$DOWNLOAD_PATH/$branch/$build_target/$build_id"
-existing_file_name=$(find "$file_path" -maxdepth 1 -type f -name "${array[5]}")
+if [ ! -d "$file_path" ]; then
+    existing_file_name=""
+else
+    existing_file_name=$(find "$file_path" -maxdepth 1 -type f -name "${array[5]}")
+fi
 file_name="$file_path/${array[5]}"
 if [ -f "$existing_file_name" ]; then
     log_info "Use the existing $existing_file_name. Skipping download."
