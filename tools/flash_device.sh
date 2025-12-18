@@ -31,6 +31,8 @@ CL_FLASH_CLI=
 SYSTEM_DLKM_INFO=
 readonly REQUIRED_COMMANDS=("adb" "dirname" "fastboot")
 THROUGH_PONTIS=false
+USE_DSU=false
+FORCE_DEBUGGABLE=true
 
 SERIAL_NUMBER=
 FASTBOOT_SERIAL_NUMBER=
@@ -56,8 +58,11 @@ function print_help() {
     echo "  --gcov                [Optional] Build gcov enabled kernel"
     echo "  --debug               [Optional] Build debug enabled kernel"
     echo "  --kasan               [Optional] Build kasan enabled kernel"
+    echo "  --use-dsu             [Optional] Whether to use DSU to install GSI image"
     echo "  --no-disable-verification"
     echo "                        [Optional] Do not disable verification"
+    echo "  --no-force-debuggable"
+    echo "                        [Optional] Do not force debuggable on user build"
     echo "  -pb <platform_build>, --platform-build=<platform_build>"
     echo "                        [Optional] The platform build path. Can be a local path or a remote build"
     echo "                        as ab://<branch>/<build_target>/<build_id>."
@@ -103,14 +108,14 @@ function print_help() {
 }
 
 function parse_arg() {
-    while test $# -gt 0; do
+    while (( $# > 0 )); do
         case "$1" in
             -h|--help)
                 print_help
                 ;;
             -s)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     SERIAL_NUMBER=$1
                 else
                     log_error "device serial is not specified"
@@ -128,7 +133,7 @@ function parse_arg() {
                 ;;
             -pb)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     PLATFORM_BUILD=$1
                 else
                     log_error "platform build is not specified"
@@ -142,7 +147,7 @@ function parse_arg() {
                 ;;
             -gsi)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     GSI_BUILD=$1
                 else
                     log_error "GSI build is not specified"
@@ -156,7 +161,7 @@ function parse_arg() {
                 ;;
             -sb)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     GSI_BUILD=$1
                 else
                     log_error "GSI build is not specified"
@@ -170,7 +175,7 @@ function parse_arg() {
                 ;;
             -kb)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     KERNEL_BUILD=$1
                 else
                     log_error "gki kernel build path is not specified"
@@ -184,7 +189,7 @@ function parse_arg() {
                 ;;
             -gki)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     KERNEL_BUILD=$1
                 else
                     log_error "GKI kernel build is not specified"
@@ -198,7 +203,7 @@ function parse_arg() {
                 ;;
             -vkb)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     VENDOR_KERNEL_BUILD=$1
                 else
                     log_error "vendor kernel build path is not specified"
@@ -212,7 +217,7 @@ function parse_arg() {
                 ;;
             -vkbt)
                 shift
-                if test $# -gt 0; then
+                if (( $# > 0 )); then
                     VENDOR_KERNEL_BUILD_TARGET=$1
                 else
                     log_error "vendor kernel build target is not specified"
@@ -244,8 +249,16 @@ function parse_arg() {
                 KASAN=true
                 shift
                 ;;
+            --dsu)
+                USE_DSU=true
+                shift
+                ;;
             --no-disable-verification)
                 DISABLE_VERIFICATION=false
+                shift
+                ;;
+            --no-force-debuggable)
+                FALSE_DEBUGGABLE=true
                 shift
                 ;;
             *)
@@ -260,7 +273,7 @@ function set_platform_repo() {
     log_warn "Build environment target product '${TARGET_PRODUCT:-}' does not match expected $1. \
     Reset build environment"
     local lunch_cli="source build/envsetup.sh && lunch $1"
-    if [ -f "build/release/release_configs/trunk_staging.textproto" ]; then
+    if [[ -f "build/release/release_configs/trunk_staging.textproto" ]]; then
         lunch_cli+="-trunk_staging-$DEVICE_VARIANT"
     else
         lunch_cli+="-$DEVICE_VARIANT"
@@ -268,7 +281,7 @@ function set_platform_repo() {
     log_info "Setup build environment with: $lunch_cli"
     eval "$lunch_cli"
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
+    if (( exit_code == 0 )); then
         log_info "$lunch_cli succeeded"
     else
         log_error "$lunch_cli failed"
@@ -279,29 +292,29 @@ function set_platform_repo() {
 function find_repo() {
     manifest_output=$(grep -e "platform/system/core" -e "gs-pixel" -e "kernel/common" \
      -e "common-modules/virtual-device" -e "private/google-modules/soc/gs" .repo/manifests/default.xml)
-    if [ -d "system/core" ] && [[ "$manifest_output" = *platform/system/core* ]]; then
+    if [[ -d "system/core" ]] && [[ "$manifest_output" == *platform/system/core* ]]; then
         log_info "I am in an Android platform tree"
         PLATFORM_REPO_ROOT="$PWD"
-        if [ -z "$PLATFORM_BUILD" ]; then
+        if [[ -z "$PLATFORM_BUILD" ]]; then
             PLATFORM_VERSION=$(sed -n 's/^export BUILD_ID=\(.*\)/\1/p' build/make/core/build_id.mk)
             log_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION"
             PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
         fi
-    elif [ -d "private/google-modules/soc" ] && [[ "$manifest_output" = *private/google-modules/soc* ]]; then
+    elif [[ -d "private/google-modules/soc" ]] && [[ "$manifest_output" == *private/google-modules/soc* ]]; then
         VENDOR_KERNEL_REPO_ROOT="$PWD"
         log_info "I am in an Android vendor kernel tree"
-        if [ -z "$VENDOR_KERNEL_BUILD" ]; then
+        if [[ -z "$VENDOR_KERNEL_BUILD" ]]; then
             VENDOR_KERNEL_VERSION=$(grep -e "default revision" .repo/manifests/default.xml | \
             grep -oP 'revision="\K[^"]*')
             log_info "VENDOR_KERNEL_REPO_ROOT=$VENDOR_KERNEL_REPO_ROOT"
             log_info "VENDOR_KERNEL_VERSION=$VENDOR_KERNEL_VERSION"
             VENDOR_KERNEL_BUILD="$VENDOR_KERNEL_REPO_ROOT"
         fi
-    elif [ -d "common/kernel/" ] && [ -d "common-modules/virtual-device" ] && \
-    [[ "$manifest_output" = *kernel/common* ]] && [[ "$manifest_output" = *common-modules/virtual-device* ]]; then
+    elif [[ -d "common/kernel/" ]] && [[ -d "common-modules/virtual-device" ]] && \
+    [[ "$manifest_output" == *kernel/common* ]] && [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
         log_info "I am in an Android Common Kernel tree"
         KERNEL_REPO_ROOT="$PWD"
-        if [ -z "$KERNEL_BUILD" ]; then
+        if [[ -z "$KERNEL_BUILD" ]]; then
             KERNEL_VERSION=$(grep -e "kernel/superproject" \
             .repo/manifests/default.xml | grep -oP 'revision="common-\K[^"]*')
             log_info "KERNEL_REPO_ROOT=$KERNEL_REPO_ROOT, KERNEL_VERSION=$KERNEL_VERSION"
@@ -313,15 +326,19 @@ function find_repo() {
 }
 
 function build_platform() {
-    if [[ "$SKIP_BUILD" = "true" ]]; then
+    if [[ "$SKIP_BUILD" == "true" ]]; then
         log_warn "--skip-build is set. Do not rebuild platform build"
         return
     fi
-    build_cmd="m -j18 droid otatools-package dist"
+    build_cmd="m -j18 droid"
+    if [[ "${TARGET_PRODUCT:-}" != "gsi_arm64" ]]; then
+        build_cmd+=" otatools-packege"
+    fi
+    build_cmd+=" dist"
     log_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
     eval $build_cmd
     exit_code=$?
-    if [ $exit_code -eq 1 ]; then
+    if (( exit_code == 1 )); then
         log_warn "$build_cmd returned exit_code $exit_code"
         log_error "$build_cmd failed"
         exit 1
@@ -329,25 +346,25 @@ function build_platform() {
 }
 
 function build_ack() {
-    if [[ "$SKIP_BUILD" = "true" ]]; then
+    if [[ "$SKIP_BUILD" == "true" ]]; then
         log_warn "--skip-build is set. Do not rebuild kernel"
         return
     fi
     build_cmd="tools/bazel run --config=fast"
-    if [ "$GCOV" = "true" ]; then
+    if [[ "$GCOV" == "true" ]]; then
         build_cmd+=" --gcov"
     fi
-    if [ "$DEBUG" = "true" ]; then
+    if [[ "$DEBUG" == "true" ]]; then
         build_cmd+=" --debug"
     fi
-    if [ "$KASAN" = "true" ]; then
+    if [[ "$KASAN" == "true" ]]; then
         build_cmd+=" --kasan"
     fi
     build_cmd+=" //common:kernel_aarch64_dist"
     log_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
     eval $build_cmd
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
+    if (( exit_code == 0 )); then
         log_info "$build_cmd succeeded"
     else
         log_error "$build_cmd failed"
@@ -360,8 +377,8 @@ function format_ab_platform_build_string() {
         log_error "Please provide the platform build in the form of ab:// with flag -pb"
         exit 1
     fi
-    if [[ "$PLATFORM_BUILD" = "ab://" ]]; then
-        if [ -n "$PRODUCT" ]; then
+    if [[ "$PLATFORM_BUILD" == ab:// ]]; then
+        if [[ -n "$PRODUCT" ]]; then
             PLATFORM_BUILD+="git_main/$PRODUCT-trunk_staging-userdebug/latest"
             log_info "No explicit platform_build info is provided. Use $PLATFORM_BUILD by default"
         else
@@ -374,9 +391,9 @@ function format_ab_platform_build_string() {
         local path_string="${PLATFORM_BUILD#ab://}"
         IFS='/' read -ra array <<< "$path_string"
         local array_len="${#array[@]}"
-        if [ "$array_len" -eq 1 ]; then
-            if [ -n "$PRODUCT" ]; then
-                if [[ ${array[0]} = git_main* ]]; then
+        if (( array_len == 1 )); then
+            if [[ -n "$PRODUCT" ]]; then
+                if [[ ${array[0]} == git_main* ]]; then
                     PLATFORM_BUILD+="$PRODUCT-trunk_staging-userdebug/latest"
                     log_info "No explicit build target is provided in platform_build string. Use $PLATFORM_BUILD by default"
                 else
@@ -389,7 +406,7 @@ function format_ab_platform_build_string() {
                 ab://<branch>/<build_target>/<build_id>"
                 exit 1
             fi
-        elif [ "$array_len" -eq 2 ]; then
+        elif (( array_len == 2 )); then
             PLATFORM_BUILD+="/latest"
         fi
     fi
@@ -407,21 +424,27 @@ function format_ab_gsi_build_string() {
         log_error "Please provide the GSI build in the form of ab:// with flag -sb"
         exit 1
     fi
-    if [[ "$GSI_BUILD" = "ab://" ]]; then
+    if [[ "$GSI_BUILD" == ab:// ]]; then
+        log_info "No explicit GSI build info is provided. Use git_main GSI build by default"
         GSI_BUILD+="git_main/gsi_arm64-trunk_staging-userdebug/latest"
-        log_info "No explicit platform_build info is provided. Use $GSI_BUILD by default"
     else
-        local path_string="${PLATFORM_BUILD#ab://}"
+        local path_string="${GSI_BUILD#ab://}"
         IFS='/' read -ra array <<< "$path_string"
         local array_len="${#array[@]}"
-        if [ "$array_len" -eq 1 ]; then
-            if [[ ${array[0]} = git_main* ]]; then
-                PLATFORM_BUILD+="gsi_arm64-trunk_staging-userdebug/latest"
+        if (( array_len == 1 )); then
+            if [[ "${array[0]}" == git_main* ]]; then
+                GSI_BUILD+="/gsi_arm64-trunk_staging-userdebug/latest"
             else
-                PLATFORM_BUILD+="gsi_arm64-userdebug/latest"
+                GSI_BUILD+="/gsi_arm64-userdebug/latest"
             fi
-        elif [ "$array_len" -eq 2 ]; then
-            PLATFORM_BUILD+="/latest"
+        elif (( array_len == 2 )) && [[ -z "${array[1]}" ]]; then
+            if [[ "${array[0]}" == git_main* ]]; then
+                GSI_BUILD+="gsi_arm64-trunk_staging-userdebug/latest"
+            else
+                GSI_BUILD+="gsi_arm64-userdebug/latest"
+            fi
+        elif (( "$array_len" == 2 )); then
+            GSI_BUILD+="/latest"
         fi
     fi
     updated_ab_string=""
@@ -442,9 +465,9 @@ function format_ab_kernel_build_string() {
     local _branch="${array[2]}"
     local _build_target="${array[3]}"
     local _build_id="${array[4]}"
-    if [ -z "$_branch" ]; then
+    if [[ -z "$_branch" ]]; then
         log_info "$KERNEL_BUILD provided in -kb doesn't have branch info. Will use the kernel version from device"
-        if [ -z "$DEVICE_KERNEL_VERSION" ]; then
+        if [[ -z "$DEVICE_KERNEL_VERSION" ]]; then
             log_error "The kernel version can not be retrieved from device to decide kernel build"
             exit 1
         fi
@@ -452,27 +475,27 @@ function format_ab_kernel_build_string() {
         _branch="$DEVICE_KERNEL_VERSION"
         KERNEL_VERSION="$DEVICE_KERNEL_VERSION"
     else
-        if [[ "$_branch" = *mainline* ]]; then
+        if [[ "$_branch" == *mainline* ]]; then
             KERNEL_VERSION="android-mainline"
-        elif [[ "$KERNEL_BUILD" = ab://git_sc-gsi-release/gsi_arm64-user* ]]; then
+        elif [[ "$KERNEL_BUILD" == ab://git_sc-gsi-release/gsi_arm64-user* ]]; then
             KERNEL_VERSION="android12-5.10"
         else
             local _android_version=$(echo "$_branch" | grep -oE 'android[0-9]+')
             local _kernel_version=$(echo "$_branch" | grep -oE '[0-9]+\.[0-9]+')
-            if [ -z "$_android_version" ] || [ -z "$_kernel_version" ]; then
+            if [[ -z "$_android_version" ]] || [[ -z "$_kernel_version" ]]; then
                 log_warn "Unable to get kernel version from $KERNEL_BUILD"
             else
                 KERNEL_VERSION="$_android_version-$_kernel_version"
             fi
         fi
     fi
-    if [[ "$_branch" = "android"* ]]; then
+    if [[ "$_branch" == android* ]]; then
         _branch="aosp_kernel-common-$_branch"
     fi
-    if [ -z "$_build_target" ]; then
+    if [[ -z "$_build_target" ]]; then
         _build_target="kernel_aarch64"
     fi
-    if [ -z "$_build_id" ]; then
+    if [[ -z "$_build_id" ]]; then
         _build_id="latest"
     fi
     updated_ab_string=""
@@ -493,8 +516,8 @@ function format_ab_vendor_kernel_build_string() {
     local _branch="${array[2]}"
     local _build_target="${array[3]}"
     local _build_id="${array[4]}"
-    if [ -z "$_branch" ]; then
-        if [ -z "$DEVICE_KERNEL_VERSION" ]; then
+    if [[ -z "$_branch" ]]; then
+        if [[ -z "$DEVICE_KERNEL_VERSION" ]]; then
             log_error "Branch is not provided in vendor kernel build $VENDOR_KERNEL_BUILD. \
             The kernel version can not be retrieved from device to decide vendor kernel build"
             exit 1
@@ -504,9 +527,9 @@ function format_ab_vendor_kernel_build_string() {
     fi
     case "$_branch" in
         android-mainline )
-            if [[ "$PRODUCT" = "raven" ]] || [[ "$PRODUCT" = "oriole" ]]; then
+            if [[ "$PRODUCT" == "raven" || "$PRODUCT" == "oriole" ]]; then
                 _branch="kernel-android-gs-pixel-mainline"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="kernel_raviole_kleaf"
                 fi
             else
@@ -515,9 +538,9 @@ function format_ab_vendor_kernel_build_string() {
             fi
             ;;
         android16-6.12 )
-            if [[ "$PRODUCT" = "raven" ]] || [[ "$PRODUCT" = "oriole" ]]; then
+            if [[ "$PRODUCT" == "raven" || "$PRODUCT" == "oriole" ]]; then
                 _branch="kernel-android16-6.12-gs101"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="kernel_raviole"
                 fi
             else
@@ -526,9 +549,9 @@ function format_ab_vendor_kernel_build_string() {
             fi
             ;;
         android15-6.6 )
-            if [[ "$PRODUCT" = "raven" ]] || [[ "$PRODUCT" = "oriole" ]]; then
+            if [[ "$PRODUCT" == "raven" || "$PRODUCT" == "oriole" ]]; then
                 _branch="kernel-android15-gs-pixel-6.6"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="kernel_raviole"
                 fi
             else
@@ -539,14 +562,14 @@ function format_ab_vendor_kernel_build_string() {
             _branch="kernel-android14-gs-pixel-6.1"
             ;;
         android14-5.15 )
-            if [[ "$PRODUCT" = "husky" ]] || [[ "$PRODUCT" = "shiba" ]]; then
+            if [[ "$PRODUCT" == "husky" || "$PRODUCT" == "shiba" ]]; then
                 _branch="kernel-android14-gs-pixel-5.15"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="shusky"
                 fi
-            elif [[ "$PRODUCT" = "akita" ]]; then
+            elif [[ "$PRODUCT" == "akita" ]]; then
                 _branch="kernel-android14-gs-pixel-5.15"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="akita"
                 fi
             else
@@ -555,12 +578,12 @@ function format_ab_vendor_kernel_build_string() {
             fi
             ;;
         android13-5.15 )
-            if [[ "$PRODUCT" = "raven" ]] || [[ "$PRODUCT" = "oriole" ]]; then
+            if [[ "$PRODUCT" == "raven" || "$PRODUCT" == "oriole" ]]; then
                 _branch="kernel-android13-gs-pixel-5.15-gs101"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="kernel_raviole_kleaf"
                 fi
-                if [ "$DISABLE_VERIFICATION" = "false" ]; then
+                if [[ "$DISABLE_VERIFICATION" == "false" ]]; then
                     log_info "Disable verification as android13-5.15 can only be integrated with older platform branch."
                     DISABLE_VERIFICATION=true
                 fi
@@ -570,18 +593,18 @@ function format_ab_vendor_kernel_build_string() {
             fi
             ;;
         android13-5.10 )
-            if [[ "$PRODUCT" = "raven" ]] || [[ "$PRODUCT" = "oriole" ]]; then
+            if [[ "$PRODUCT" == "raven" || "$PRODUCT" == "oriole" ]]; then
                 _branch="kernel-android13-gs-pixel-5.10"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="slider_gki"
                 fi
-                if [ "$DISABLE_VERIFICATION" = "false" ]; then
+                if [[ "$DISABLE_VERIFICATION" == "false" ]]; then
                     log_info "Disable verification as android13-5.10 can only be integrated with older platform branch."
                     DISABLE_VERIFICATION=true
                 fi
-            elif [[ "$PRODUCT" = "felix" ]] || [[ "$PRODUCT" = "lynx" ]] || [[ "$PRODUCT" = "tangorpro" ]]; then
+            elif [[ "$PRODUCT" == "felix" || "$PRODUCT" == "lynx" || "$PRODUCT" == "tangorpro" ]]; then
                 _branch="kernel-android13-gs-pixel-5.10"
-                if [ -z "$_build_target" ]; then
+                if [[ -z "$_build_target" ]]; then
                     _build_target="$PRODUCT"
                 fi
             else
@@ -594,7 +617,7 @@ function format_ab_vendor_kernel_build_string() {
             exit 1
             ;;
     esac
-    if [ -z "$_build_target" ]; then
+    if [[ -z "$_build_target" ]]; then
         case "$PRODUCT" in
             caiman | komodo | tokay )
                 _build_target="caimito"
@@ -613,7 +636,7 @@ function format_ab_vendor_kernel_build_string() {
                 ;;
         esac
     fi
-    if [ -z "$_build_id" ]; then
+    if [[ -z "$_build_id" ]]; then
         _build_id="latest"
     fi
     updated_ab_string=""
@@ -629,24 +652,24 @@ function download_platform_build() {
     log_info "Downloading $PLATFORM_BUILD"
     local _device_dir="$DEVICE_DIR/$DEVICE_SERIAL_NUMBER"
     # Clean up pre-existing device directory
-    if [ -d "$_device_dir" ]; then
+    if [[ -d "$_device_dir" ]]; then
         rm -rf "$_device_dir" || { log_error "Failed to clean up $_device_dir" && exit 1; }
     fi
     mkdir -p "$_device_dir" || { log_error "Failed to create $_device_dir folder" && exit 1; }
     local _build_info="$PLATFORM_BUILD"
     local _file_patterns=( "*$PRODUCT-img-*.zip" "radio.img" )
-    if [ "$SKIP_UPDATE_BOOTLOADER" = false ] || [ -n "$VENDOR_KERNEL_BUILD" ]; then
+    if [[ "$SKIP_UPDATE_BOOTLOADER" == "false" ]] || [[ -n "$VENDOR_KERNEL_BUILD" ]]; then
         _file_patterns+=("bootloader.img")
     fi
-    if [ -n "$VENDOR_KERNEL_BUILD" ]; then
+    if [[ -n "$VENDOR_KERNEL_BUILD" ]]; then
         _file_patterns+=( "misc_info.txt" "otatools.zip" )
-        if [[ "$_build_info" = *git_sc* ]]; then
+        if [[ "$_build_info" == *git_sc* ]]; then
             _file_patterns+=( "ramdisk.img" )
-        elif [[ "$_build_info" = *user/* ]]; then
+        elif [[ "$_build_info" == *user/* ]] && [[ "$FORCE_DEBUGGABLE" == "true" ]]; then
             _file_patterns+=( "vendor_ramdisk-debug.img" )
         fi
     fi
-    if [ -n "$KERNEL_BUILD" ] && [[ "$_build_info" = *git_sc* ]]; then
+    if [[ -n "$KERNEL_BUILD" ]] && [[ "$_build_info" == *git_sc* ]]; then
         _file_patterns+=( "ramdisk.img" )
     fi
 
@@ -656,7 +679,7 @@ function download_platform_build() {
         log_info "Downloading $_build_info/$_pattern"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
         exit_code=$?
-        if [ $exit_code -eq 0 ]; then
+        if (( exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern"
         else
             log_error "Fail to download $_build_info/$_pattern"
@@ -665,7 +688,7 @@ function download_platform_build() {
         local _full_file_name=$(find "$_full_file_path" -maxdepth 1 -type f -name "$_pattern")
         local _file_name="${_full_file_name##*/}"
         local _new_file_name="$_file_name"
-        if [[ "$_file_name" = "vendor_ramdisk-debug.img" ]]; then
+        if [[ "$_file_name" == "vendor_ramdisk-debug.img" ]]; then
             _new_file_name="vendor_ramdisk.img"
         fi
         if ! create_soft_link "$_full_file_name" "$_device_dir/$_new_file_name"; then
@@ -682,29 +705,37 @@ function download_gsi_build() {
     local _file_pattern="*_arm64-img-*.zip"
     local _file_path="${_build_info/ab:\/\//}"
     local _full_file_path="$DOWNLOAD_PATH/$_file_path"
-    if [ ! -d "$_full_file_path" ]; then
+    local _gsi_dir="$GSI_DIR/$DEVICE_SERIAL_NUMBER"
+    # Clean up gsi directory
+    if [[ -d "$_gsi_dir" ]]; then
+        rm -rf "$_gsi_dir" || { log_error "Failed to clean up $_gsi_dir" && exit 1; }
+    fi
+    mkdir -p "$_gsi_dir" || { log_error "Failed to create $_gsi_dir folder" && exit 1; }
+
+    if [[ ! -d "$_full_file_path" ]]; then
         mkdir -p "$_full_file_path" || { log_error "Failed to create folder $_full_file_path" && exit 1; }
     fi
     log_info "Downloading $_build_info/$_file_pattern"
-    eval "$FETCH_SCRIPT $_build_info/$_pattern"
+    eval "$FETCH_SCRIPT $_build_info/$_file_pattern"
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
-        log_info "Downloading $_build_info/$_pattern succeeded"
+    if (( $exit_code == 0 )); then
+        log_info "Downloading $_build_info/$_file_pattern succeeded"
     else
-        log_error "Downloading $_build_info/$_pattern failed"
+        log_error "Downloading $_build_info/$_file_pattern failed"
         exit 1
     fi
-    local _gsi_image=$(find "$_full_file_path" -maxdepth 1 -type f -name *-img*.zip)
-    if [ -f "$_gsi_image" ]; then
-            unzip -j "$_gsi_image" -d "$GSI_DIR"
-            if [ ! -f "$GSI_DIR/system.img" ]; then
-                log_error "There is no system.img in $_gsi_image"
-                exit 1
-            fi
-        else
-            log_error "$GSI_BUILD doesn't have a valid GSI system image"
+    local _gsi_image=$(find "$_full_file_path" -maxdepth 1 -type f -name "$_file_pattern")
+    if [[ -f "$_gsi_image" ]]; then
+        unzip -j "$_gsi_image" -d "$_gsi_dir"
+        if [[ ! -f "$_gsi_dir/system.img" ]]; then
+            log_error "There is no system.img in $_gsi_image"
             exit 1
         fi
+    else
+        log_error "$GSI_BUILD doesn't have a valid GSI system image"
+        exit 1
+    fi
+    GSI_BUILD="$_gsi_dir"
     echo ""
 }
 
@@ -713,7 +744,7 @@ function download_kernel_build() {
     local _kernel_dir="$KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
 
     # Clean up the pre-existing directory
-    if [ -d "$_kernel_dir" ]; then
+    if [[ -d "$_kernel_dir" ]]; then
         rm -rf "$_kernel_dir" || { log_error "Failed to clean up $_kernel_dir" && exit 1; }
     fi
     mkdir -p "$_kernel_dir" || { log_error "Failed to create $_kernel_dir folder" && exit 1; }
@@ -725,12 +756,12 @@ function download_kernel_build() {
     case "$PRODUCT" in
         oriole | raven | bluejay)
             _file_patterns=( "boot-lz4.img" )
-            if [[ "$KERNEL_BUILD" = *android12-5.10* ]]; then
+            if [[ "$KERNEL_BUILD" == *android12-5.10* ]]; then
                 _file_patterns=( "Image.lz4" )
-            elif [[ "$KERNEL_BUILD" = *git_sc-gsi-release/gsi_arm64-user* ]]; then
+            elif [[ "$KERNEL_BUILD" == *git_sc-gsi-release/gsi_arm64-user* ]]; then
                 _file_patterns=( "gsi_arm64-img-*.zip" )
             fi
-            if [ -n "$VENDOR_KERNEL_BUILD" ] && [[ "$_build_info" != *android13* ]]; then
+            if [[ -n "$VENDOR_KERNEL_BUILD" ]] && [[ "$_build_info" != *android13* ]]; then
                 _file_patterns+=( "system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers" )
             fi
             ;;
@@ -742,7 +773,7 @@ function download_kernel_build() {
             ;;
         slsi | qcom )
             _file_patterns=( "boot-gz.img" )
-            if [[ "$KERNEL_BUILD" = *android13-5* ]]; then
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
                 _file_patterns+=( "system_dlkm.img" )
             else
                 _file_patterns+=( "system_dlkm.flatten.ext4.img" )
@@ -750,7 +781,7 @@ function download_kernel_build() {
             ;;
         mtk )
             _file_patterns=( "boot.img" )
-            if [[ "$KERNEL_BUILD" = *android13-5* ]]; then
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
                 _file_patterns+=( "system_dlkm.img" )
             else
                 _file_patterns+=( "system_dlkm.flatten.ext4.img" )
@@ -758,7 +789,7 @@ function download_kernel_build() {
             ;;
         *)
             _file_patterns=( "boot-lz4.img" )
-            if [[ "$KERNEL_BUILD" = *android13-5* ]]; then
+            if [[ "$KERNEL_BUILD" == *android13-5* ]]; then
                 _file_patterns+=( "system_dlkm.img" )
             else
                 _file_patterns+=( "system_dlkm.flatten.ext4.img" )
@@ -773,7 +804,7 @@ function download_kernel_build() {
         log_info "Downloading $_build_info/$_pattern"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
         exit_code=$?
-        if [ $exit_code -eq 0 ]; then
+        if (( $exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern"
         else
             log_error "Failed to download $_build_info/$_pattern"
@@ -781,12 +812,12 @@ function download_kernel_build() {
         fi
         local _full_file_name="$_full_file_path/$_pattern"
         local _new_file_name="$_pattern"
-        if [[ "$_pattern" = "boot-lz4.img" ]]; then
+        if [[ "$_pattern" == "boot-lz4.img" ]]; then
             _new_file_name="boot.img"
-        elif [[ "$_pattern" = system_dlkm* ]]; then
+        elif [[ "$_pattern" == system_dlkm* ]]; then
             _new_file_name="system_dlkm.img"
         fi
-        if [[ "$_pattern" = "gsi_arm64-img-*.zip" ]]; then
+        if [[ "$_pattern" == "gsi_arm64-img-*.zip" ]]; then
             eval "unzip -j $_full_file_path/gsi_arm64-img-*.zip boot-5.10-lz4.img" -d "$_kernel_dir/mkbootimg"
         else
             if ! create_soft_link "$_full_file_name" "$_kernel_dir/$_new_file_name"; then
@@ -806,27 +837,26 @@ function download_vendor_kernel_build() {
     local _vendor_kernel_dir="$VENDOR_KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
 
     # Clean up vendor kernel directory
-    if [ -d "$_vendor_kernel_dir" ]; then
+    if [[ -d "$_vendor_kernel_dir" ]]; then
         rm -rf "$_vendor_kernel_dir" || { log_error "Failed to clean up $_vendor_kernel_dir" && exit 1; }
     fi
     mkdir -p "$_vendor_kernel_dir" || { log_error "Failed to create $_vendor_kernel_dir folder" && exit 1; }
 
-    #if [[ "$_build_info" = *6.6* ]] || [[ "$_build_info" = *6.12* ]]; then
-    if [[ "$_build_info" = *6.6* ]]; then
+    if [[ "$_build_info" == *6.6* ]]; then
         _file_patterns+=("*vendor_dev_nodes_fragment.img")
     fi
 
     case "$PRODUCT" in
         oriole | raven | bluejay)
             _file_patterns+=( "gs101-a0.dtb" "gs101-b0.dtb" )
-            if [[ "$_build_info" = *android13* ]] || [ -z "$KERNEL_BUILD" ]; then
+            if [[ "$_build_info" == *android13* ]] || [[ -z "$KERNEL_BUILD" ]]; then
                 _file_patterns+=("vendor_dlkm.img")
             else
                 _file_patterns+=("vendor_dlkm_staging_archive.tar.gz" "vendor_dlkm.props" "vendor_dlkm_file_contexts" \
                 "kernel_aarch64_Module.symvers" "abi_gki_aarch64_pixel")
-                if [[ "$_build_info" = *android15* ]] && [[ "$_build_info" = *6.6* ]]; then
+                if [[ "$_build_info" == *android15* ]] && [[ "$_build_info" == *6.6* ]]; then
                     _file_patterns+=("vendor_dev_nodes_fragment.img" 'vendor-bootconfig.img')
-                elif [[ "$_build_info" = *pixel-mainline* ]]; then
+                elif [[ "$_build_info" == *pixel-mainline* ]]; then
                     _file_patterns+=("vendor-bootconfig.img")
                 fi
             fi
@@ -853,7 +883,7 @@ function download_vendor_kernel_build() {
         log_info "Downloading $_build_info/$_pattern"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
         exit_code=$?
-        if [ $exit_code -eq 0 ]; then
+        if (( exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern"
         else
             log_error "Failed to download $_build_info/$_pattern"
@@ -861,9 +891,9 @@ function download_vendor_kernel_build() {
         fi
         local _full_file_name="$_full_file_path/$_pattern"
         local _new_file_name="$_pattern"
-        if [[ "$_pattern" = "vendor_dev_nodes_fragment.img" ]]; then
+        if [[ "$_pattern" == "vendor_dev_nodes_fragment.img" ]]; then
             _new_file_name="vendor_ramdisk_fragment_extra.img"
-        elif [[ "$_pattern" = "abi_gki_aarch64_pixel" ]]; then
+        elif [[ "$_pattern" == "abi_gki_aarch64_pixel" ]]; then
             _new_file_name="abi_gki_aarch64_pixel extracted_symbols"
         fi
         create_soft_link "$_full_file_name" "$_vendor_kernel_dir/$_new_file_name"
@@ -877,14 +907,14 @@ function download_vendor_kernel_for_direct_flash() {
     local _vendor_kernel_dir="$VENDOR_KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
     local _image_patterns=("${VENDOR_KERNEL_IMGS[@]}")
 
-    if [[ "$_build_info" = *kernel-pixel-android16-gs-pixel-6.12* ]]; then
+    if [[ "$_build_info" == *kernel-pixel-android16-gs-pixel-6.12* ]]; then
         _image_patterns=("${VENDOR_KERNEL_IMGS_SPECIAL[@]}")
     fi
 
     log_info "Downloading vendor kernel artifacts ${_image_patterns[*]} from $VENDOR_KERNEL_BUILD"
 
     # Clean up vendor kernel directory
-    if [ -d "$_vendor_kernel_dir" ]; then
+    if [[ -d "$_vendor_kernel_dir" ]]; then
         rm -rf "$_vendor_kernel_dir" || { log_error "Failed to clean up $_vendor_kernel_dir" && exit 1; }
     fi
     mkdir -p "$_vendor_kernel_dir" || { log_error "Failed to create $_vendor_kernel_dir folder" && exit 1; }
@@ -895,7 +925,7 @@ function download_vendor_kernel_for_direct_flash() {
         log_info "Downloading $_build_info/$_pattern"
         eval "$FETCH_SCRIPT $_build_info/$_pattern"
         exit_code=$?
-        if [ $exit_code -eq 0 ]; then
+        if (( exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern succeeded"
         else
             log_error "Failed to download $_build_info/$_pattern"
@@ -910,10 +940,10 @@ function download_vendor_kernel_for_direct_flash() {
 }
 
 function reboot_device_into_bootloader() {
-    if [ -n "$ADB_SERIAL_NUMBER" ] && (( $(adb devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
+    if [[ -n "$ADB_SERIAL_NUMBER" ]] && (( $(adb devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
         log_info "Reboot $ADB_SERIAL_NUMBER into bootloader"
         adb -s "$ADB_SERIAL_NUMBER" reboot bootloader
-    elif [ -n "$FASTBOOT_SERIAL_NUMBER" ] && (( $(fastboot devices | grep "$FASTBOOT_SERIAL_NUMBER" | wc -l) > 0 )); then
+    elif [[ -n "$FASTBOOT_SERIAL_NUMBER" ]] && (( $(fastboot devices | grep "$FASTBOOT_SERIAL_NUMBER" | wc -l) > 0 )); then
         log_info "Reboot $FASTBOOT_SERIAL_NUMBER into bootloader"
         fastboot -s "$FASTBOOT_SERIAL_NUMBER" reboot bootloader
     fi
@@ -922,7 +952,7 @@ function reboot_device_into_bootloader() {
 
 function flash_kernel_build() {
     log_info "The boot image in $KERNEL_BUILD has kernel verson: $KERNEL_VERSION"
-    if [ -n "$DEVICE_KERNEL_VERSION" ] && [[ "$KERNEL_VERSION" != "$DEVICE_KERNEL_VERSION"* ]]; then
+    if [[ -n "$DEVICE_KERNEL_VERSION" ]] && [[ "$KERNEL_VERSION" != "$DEVICE_KERNEL_VERSION"* ]]; then
         log_warn "Device $PRODUCT $SERIAL_NUMBER comes with $DEVICE_KERNEL_VERSION kernel. \
 Can't flash $KERNEL_VERSION GKI kernel directly. Please use a platform build with the $KERNEL_VERSION kernel \
 or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel-*.*"
@@ -934,21 +964,21 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     log_info "Flash GKI kernel from $KERNEL_BUILD"
     log_info "Wiping the device"
     local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5"
-    if [ "$DISABLE_VERIFICATION" = "true" ]; then
+    if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification"
     fi
-    if [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
+    if [[ -f "$KERNEL_BUILD/boot-lz4.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-lz4.img"
-    elif [ -f "$KERNEL_BUILD/boot-gz.img" ]; then
+    elif [[ -f "$KERNEL_BUILD/boot-gz.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-gz.img"
-    elif [ -f "$KERNEL_BUILD/boot.img" ]; then
+    elif [[ -f "$KERNEL_BUILD/boot.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot.img"
     fi
-    if [ -f "$KERNEL_BUILD/system_dlkm.img" ]; then
+    if [[ -f "$KERNEL_BUILD/system_dlkm.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $KERNEL_BUILD/system_dlkm.img"
-    elif [ -f "$KERNEL_BUILD/system_dlkm.flatten.ext4.img" ]; then
+    elif [[ -f "$KERNEL_BUILD/system_dlkm.flatten.ext4.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $KERNEL_BUILD/system_dlkm.flatten.ext4.img"
-    elif [ -f "$KERNEL_BUILD/system_dlkm.flatten.erofs.img" ]; then
+    elif [[ -f "$KERNEL_BUILD/system_dlkm.flatten.erofs.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $KERNEL_BUILD/system_dlkm.flatten.erofs.img"
     fi
     _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
@@ -956,7 +986,7 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     log_info "Flashing GKI kernel with: $_flash_cmd"
     eval "$_flash_cmd"
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
+    if (( $exit_code == 0 )); then
         echo "Flash GKI kernel succeeded"
         wait_for_device_in_adb
         return
@@ -980,7 +1010,7 @@ function check_fastboot_version() {
         # Use $FETCH_SCRIPT and $_download_file_name correctly
         eval "$FETCH_SCRIPT $_download_file_name"
         exit_code=$?
-        if [ $exit_code -eq 0 ]; then
+        if (( exit_code == 0 )); then
             log_info "Downloading $_download_file_name succeeded"
         else
             log_error "Downloading $_download_file_name failed"
@@ -1001,19 +1031,19 @@ function flash_vendor_kernel_build() {
     log_info "Rebooting device into bootload and flashing vendor kernel from $VENDOR_KERNEL_BUILD"
     reboot_device_into_bootloader
     local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5"
-    if [ "$DISABLE_VERIFICATION" = "true" ]; then
+    if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification"
     fi
     _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $VENDOR_KERNEL_BUILD/boot.img"
-    if [ -f "$VENDOR_KERNEL_BUILD/dtb.img" ] && [ -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]; then
+    if [[ -f "$VENDOR_KERNEL_BUILD/dtb.img" ]] && [[ -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash --dtb $VENDOR_KERNEL_BUILD/dtb.img vendor_boot:dlkm $VENDOR_KERNEL_BUILD/initramfs.img"
     fi
-    if [ -f "$VENDOR_KERNEL_BUILD/vendor_kernel_boot.img" ]; then
+    if [[ -f "$VENDOR_KERNEL_BUILD/vendor_kernel_boot.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash vendor_kernel_boot $VENDOR_KERNEL_BUILD/vendor_kernel_boot.img"
     fi
     _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash dtbo $VENDOR_KERNEL_BUILD/dtbo.img"
     _flash_cmd+=" && sleep 2 && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && sleep 2"
-    if [ -f "$VENDOR_KERNEL_BUILD/system_dlkm.img" ]; then
+    if [[ -f "$VENDOR_KERNEL_BUILD/system_dlkm.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $VENDOR_KERNEL_BUILD/system_dlkm.img"
     fi
     _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash vendor_dlkm $VENDOR_KERNEL_BUILD/vendor_dlkm.img"
@@ -1021,7 +1051,7 @@ function flash_vendor_kernel_build() {
     log_info "Executing vendor kernel flash command: $_flash_cmd"
     eval "$_flash_cmd"
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
+    if (( exit_code == 0 )); then
         echo "Finished flashing vendor kernel images. Rebooting device"
     else
         echo "Flashing vendor kernel failed with exit code $exit_code"
@@ -1035,28 +1065,28 @@ function is_device_in_adb() {
     local adb_serials
     adb_serials=($(adb devices | grep -v -w "offline" | tail -n +2 | awk '{print $1}'))
 
-    if [ ${#adb_serials[@]} -eq 0 ]; then
+    if (( ${#adb_serials[@]} == 0 )); then
         log_info "No devices found in adb mode."
         return 1
     fi
 
     local target_serial="${ADB_SERIAL_NUMBER:-${DEVICE_SERIAL_NUMBER:-$SERIAL_NUMBER}}"
     for adb_serial in "${adb_serials[@]}"; do
-        if [[ "$adb_serial" = "$target_serial" ]]; then
+        if [[ "$adb_serial" == "$target_serial" ]]; then
             ADB_SERIAL_NUMBER="${ADB_SERIAL_NUMBER:-$adb_serial}"
             log_info "Success: Device '$target_serial' is connected in adb."
             return 0 # Succeed. Device is in adb
         fi
-        if [ -z "$ADB_SERIAL_NUMBER" ]; then
+        if [[ -z "$ADB_SERIAL_NUMBER" ]]; then
             local hw_serial
             hw_serial=$(adb -s "$adb_serial" shell getprop ro.serialno | tr -d '[:space:]')
-            if [[ -n "$hw_serial" && "$hw_serial" = "$target_serial" ]]; then
+            if [[ -n "$hw_serial" ]] && [[ "$hw_serial" == "$target_serial" ]]; then
                 DEVICE_SERIAL_NUMBER="$hw_serial"
                 ADB_SERIAL_NUMBER="$adb_serial"
                 log_info "Success: Device '$target_serial' found in adb as '$adb_serial'."
                 return 0 # Succeed. Device is in adb
             fi
-            if [[ -n "$hw_serial" ]] && [[ "$hw_serial" = "$DEVICE_SERIAL_NUMBER" ]]; then
+            if [[ -n "$hw_serial" ]] && [[ "$hw_serial" == "$DEVICE_SERIAL_NUMBER" ]]; then
                 ADB_SERIAL_NUMBER="$adb_serial"
                 log_info "Success: Device '$target_serial' found in adb as '$adb_serial'."
                 return 0 # Succeed. Device is in fastboot
@@ -1070,7 +1100,7 @@ function is_device_in_fastboot() {
     local fastboot_serials
     fastboot_serials=($(fastboot devices | awk '{print $1}'))
 
-    if [ ${#fastboot_serials[@]} -eq 0 ]; then
+    if (( ${#fastboot_serials[@]} == 0 )); then
         log_info "No devices found in fastboot mode."
         return 1
     fi
@@ -1078,21 +1108,21 @@ function is_device_in_fastboot() {
     local target_serial="${FASTBOOT_SERIAL_NUMBER:-${DEVICE_SERIAL_NUMBER:-$SERIAL_NUMBER}}"
 
     for fastboot_serial in "${fastboot_serials[@]}"; do
-        if [[ "$fastboot_serial" = "$target_serial" ]]; then
+        if [[ "$fastboot_serial" == "$target_serial" ]]; then
             FASTBOOT_SERIAL_NUMBER="$fastboot_serial"
             log_info "Success: Device '$target_serial' found in fastboot mode."
             return 0 # Succeed. Device is in fastboot
         fi
-        if [ -z "$FASTBOOT_SERIAL_NUMBER" ]; then
+        if [[ -z "$FASTBOOT_SERIAL_NUMBER" ]]; then
             local hw_serial
             hw_serial=$(_parse_fastboot_var "$(fastboot -s "$fastboot_serial" getvar serialno 2>&1)")
-            if [[ -n "$hw_serial" ]] && [[ "$hw_serial" = "$target_serial" ]]; then
+            if [[ -n "$hw_serial" ]] && [[ "$hw_serial" == "$target_serial" ]]; then
                 DEVICE_SERIAL_NUMBER="$hw_serial"
                 FASTBOOT_SERIAL_NUMBER="$fastboot_serial"
                 log_info "Success: Device '$target_serial' found in fastboot as '$fastboot_serial'."
                 return 0 # Succeed. Device is in fastboot
             fi
-            if [[ -n "$hw_serial" ]] && [[ "$hw_serial" = "$DEVICE_SERIAL_NUMBER" ]]; then
+            if [[ -n "$hw_serial" ]] && [[ "$hw_serial" == "$DEVICE_SERIAL_NUMBER" ]]; then
                 FASTBOOT_SERIAL_NUMBER="$fastboot_serial"
                 log_info "Success: Device '$target_serial' found in fastboot as '$fastboot_serial'."
                 return 0 # Succeed. Device is in fastboot
@@ -1108,9 +1138,9 @@ function check_adb_status() {
     local device_target
     device_target="${ADB_SERIAL_NUMBER:-${DEVICE_SERIAL_NUMBER:-$SERIAL_NUMBER}}"
     if ! is_device_in_adb; then
-        if [[ "$log_level" -gt 0 ]]; then
+        if (( log_level > 0 )); then
             log_warn "Device '$device_target' not found in adb. Waiting for it to connect..."
-            if [[ "$THROUGH_PONTIS" = "true" ]] && ! pontis devices | grep -q "$DEVICE_SERIAL_NUMBER.*ADB"; then
+            if [[ "$THROUGH_PONTIS" == "true" ]] && ! pontis devices | grep -q "$DEVICE_SERIAL_NUMBER.*ADB"; then
                 log_warn "Device $DEVICE_SERIAL_NUMBER is not connected in adb through \
 pontis yet. If device booted up already, please visit https://pontis.corp.google.com/ on the host \
 where the device is attached to physically and make sure adb through pontis is connected. Please \
@@ -1182,7 +1212,7 @@ function wait_for_device_in_fastboot() {
             return 0  # Success
         fi
         message="Device '$device_target' not found in fastboot. Waiting for it to connect..."
-        if [ "$THROUGH_PONTIS" = "true" ]; then
+        if [[ "$THROUGH_PONTIS" == "true" ]]; then
             if ! pontis devices | grep -q "$DEVICE_SERIAL_NUMBER.*Fastboot"; then
                 message="Device $DEVICE_SERIAL_NUMBER is not connected in fastboot through \
 pontis yet. If device is in bootloader already, please visit https://pontis.corp.google.com/ on the host \
@@ -1238,15 +1268,15 @@ function find_flashstation_binary() {
 }
 
 function flash_platform_build() {
-    if [ "$SKIP_UPDATE_BOOTLOADER" = "true" ] && [[ "$PLATFORM_BUILD" = ab://* ]] || [ -z "$CL_FLASH_CLI" ]; then
+    if [[ "$SKIP_UPDATE_BOOTLOADER" == "true" ]] && [[ "$PLATFORM_BUILD" == ab://* ]] || [[ -z "$CL_FLASH_CLI" ]]; then
         download_platform_build
     fi
 
     local _flash_cmd
-    if [[ "$PLATFORM_BUILD" = ab://* ]]; then
+    if [[ "$PLATFORM_BUILD" == ab://* ]]; then
         _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions -w -s $DEVICE_SERIAL_NUMBER "
 
-        if [ "$DISABLE_VERIFICATION" = "true" ]; then
+        if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
             _flash_cmd+=" --disable_verity --disable_verification"
         fi
 
@@ -1258,25 +1288,30 @@ function flash_platform_build() {
             exit 1
         fi
 
-        if [ -n "${_build_target}" ]; then
+        if [[ -n "${_build_target}" ]]; then
             _flash_cmd+=" -t $_build_target"
-            if [[ "$_build_target" = *user ]] && [ -n "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then
-                log_info "Need to flash GKI kernel after flashing platform build, hence enabling --force_debuggable in user build flashing"
-                _flash_cmd+=" --force_debuggable"
+            if [[ "$_build_target" == *user ]]; then
+                if [[ "$FALSE_DEBUGGABLE" == "true" ]]; then
+                    log_info "Flashing user build with --force_debuggable option"
+                    _flash_cmd+=" --force_debuggable"
+                else
+                    log_info "--no-false-debuggable option is enabled. \
+                    Need to enable ADB Debug manually in development mode for adb access"
+                fi
             fi
         fi
         log_info "Flashing $SERIAL_NUMBER by flash station with platform build $PLATFORM_BUILD..."
-        if [ -n "${_build_id}" ] && [[ "${_build_id}" != latest* ]]; then
+        if [[ -n "${_build_id}" ]] && [[ "${_build_id}" != latest* ]]; then
             _flash_cmd+=" --bid ${_build_id}"
         else
             _flash_cmd+=" -l ${_branch}"
         fi
-    elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" = "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
-    [ -x "$PLATFORM_REPO_ROOT/vendor/google/tools/flashall" ]; then
+    elif [[ -n "$PLATFORM_REPO_ROOT" ]] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
+    [[ -x "$PLATFORM_REPO_ROOT/vendor/google/tools/flashall" ]]; then
         cd "$PLATFORM_REPO_ROOT" || { log_error "Fail to go to $PLATFORM_REPO_ROOT" && exit 1; }
         log_info "Flashing device by vendor/google/tools/flashall with platform build from ${PLATFORM_BUILD}"
-        if [ -z "${TARGET_PRODUCT:-}" ] || [[ "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
-            if [[ "$PLATFORM_VERSION" = aosp-* ]]; then
+        if [[ -z "${TARGET_PRODUCT:-}" ]] || [[ "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
+            if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                 set_platform_repo "aosp_$PRODUCT"
             else
                 set_platform_repo "$PRODUCT"
@@ -1288,7 +1323,7 @@ function flash_platform_build() {
         prepare_to_flash_platform_build_from_local_directory
 
         _flash_cmd="$LOCAL_FLASH_CLI --nointeractive --force_flash_partitions -w -s $DEVICE_SERIAL_NUMBER"
-        if [ "$DISABLE_VERIFICATION" = "true" ]; then
+        if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
             _flash_cmd+=" --disable_verity --disable_verification"
         fi
     fi
@@ -1296,7 +1331,7 @@ function flash_platform_build() {
     log_info "Flashing device with: $_flash_cmd"
     eval "$_flash_cmd"
     exit_code=$?
-    if [ "$exit_code" -eq 0 ]; then
+    if (( exit_code == 0 )); then
         log_info "Flashing platform build succeeded"
         wait_for_device_in_adb
         return 0
@@ -1307,49 +1342,71 @@ function flash_platform_build() {
 }
 
 function flash_gsi_build() {
-    if [[ "$GSI_BUILD" = ab://* ]]; then
-        updated_ab_string=""
-        if ! convert_ab_string "$TEST_DIR" updated_ab_string; then
-            log_error "Invalid Android Build string $TEST_DIR."
+    if [[ "$GSI_BUILD" == ab://* ]]; then
+        # Flashstation doesn't support flashing pvmfw.img yet. Use flashstation on Pixel6 only
+        if [[ -z "$CL_FLASH_CLI" ]] || [[ "$PRODUCT" != "raven" && "$PRODUCT" != "oriole" ]]; then
+            download_gsi_build
+        fi
+    fi
+
+    local _flash_cmd=""
+    # Flashstation doesn't support flashing pvmfw.img yet. Use flashstation on Pixel6 only
+    if [[ "$GSI_BUILD" == ab://* ]] && [[ "$PRODUCT" == "raven" || "$PRODUCT" == "oriole" ]]; then
+        log_info "Flashing GSI build $GSI_BUILD with $CL_FLASH_CLI"
+        _flash_cmd="$CL_FLASH_CLI --nointeractive -s $DEVICE_SERIAL_NUMBER"
+
+        if [[ "$USE_DSU" == "true" ]]; then
+            _flash_cmd+=" --dsu"
+        else
+            _flash_cmd+=" -w"
+            if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
+                _flash_cmd+=" --disable_verity --disable_verification"
+            fi
+        fi
+
+        local _branch
+        local _build_target
+        local _build_id
+        if ! parse_ab_url "$GSI_BUILD" _branch _build_target _build_id &> /dev/null; then
+            log_error "Invalid Android Build url string. GSI_BUILD=${GSI_BUILD}"
             exit 1
         fi
-        eval "$FETCH_SCRIPT $updated_ab_string"
-        download_gsi_build
-        GSI_BUILD="$GSI_DIR"
-    fi
-    if [ ! -f "$GSI_BUILD/system.img" ]; then
-        log_error "$GSI_BUILD doesn't have a valid GSI system image"
-        exit 1
-    fi
 
-    local _flash_cmd
-
-    log_info "Flash GSI from $GSI_BUILD"
-    reboot_device_into_bootloader
-    local _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar current-slot 2>&1)
-    local _current_slot=$(echo "$_output" | grep "^current-slot:" | awk '{print $2}')
-    log_info "Wiping the device"
-    fastboot -s "$FASTBOOT_SERIAL_NUMBER" -w
-    log_info "Reboot device into fastbootd"
-    fastboot -s "$FASTBOOT_SERIAL_NUMBER" reboot-fastboot
-    log_info "Delete logical partition product_$_current_slot"
-    fastboot -s "$FASTBOOT_SERIAL_NUMBER" delete-logical-partition product_"$_current_slot"
-    log_info "Erase logical partition system_$_current_slot"
-    fastboot -s "$FASTBOOT_SERIAL_NUMBER" erase system_"$_current_slot"
-
-    local _flash_cmd
-    if [ -f "$GSI_BUILD/system.img" ]; then
-        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash system $GSI_BUILD/system.img"
+        if [[ -n "${_build_target}" ]]; then
+            _flash_cmd+=" -t $_build_target"
+        fi
+        log_info "Flashing $SERIAL_NUMBER by flash station with gsi build $GSI_BUILD..."
+        if [[ -n "${_build_id}" ]] && [[ "${_build_id}" != latest* ]]; then
+            _flash_cmd+=" --bid ${_build_id}"
+        else
+            _flash_cmd+=" -l ${_branch}"
+        fi
+    else
+        log_info "Flashing GSI build $GSI_BUILD with fastboot"
+        reboot_device_into_bootloader
+        local _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar current-slot 2>&1)
+        local _current_slot=$(echo "$_output" | grep "^current-slot:" | awk '{print $2}')
+        local _pvmfw_partition_output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar has-slot:pvmfw 2>&1)
+        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w"
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot-fastboot && sleep 3"
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER delete-logical-partition product_$_current_slot"
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER erase system_$_current_slot"
+        if [[ -f "$GSI_BUILD/system.img" ]]; then
+            _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system $GSI_BUILD/system.img"
+        else
+            log_error "There is no system.img in $GSI_BUILD"
+            exit 1
+        fi
+        if [[ -f "$GSI_BUILD/pvmfw.img" ]] && [[ "$_pvmfw_partition_output" == *yes* ]]; then
+            _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot bootloader"
+            _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash pvmfw $GSI_BUILD/pvmfw.img"
+        fi
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
     fi
-    if [ -f "$GSI_BUILD/pvmfw.img" ] && [[ "$PRODUCT" != "raven" ]]  && [[ "$PRODUCT" != "oriole" ]]; then
-        _flash_cmd=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash pvmfw $GSI_BUILD/pvmfw.img"
-    fi
-    _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
-
     log_info "Flashing GSI with: $_flash_cmd"
     eval "$_flash_cmd"
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
+    if (( exit_code == 0 )); then
         echo "Flash GSI succeeded"
         wait_for_device_in_adb
         return
@@ -1362,11 +1419,11 @@ function flash_gsi_build() {
 
 function prepare_to_flash_platform_build_from_local_directory () {
     log_info "Setting up local environment to flash platform build from ${PLATFORM_BUILD}"
-    if [ ! -f "$PLATFORM_BUILD/android-info.txt" ] || [ ! -f "$PLATFORM_BUILD/boot.img" ]; then
+    if [[ ! -f "$PLATFORM_BUILD/android-info.txt" ]] || [[ ! -f "$PLATFORM_BUILD/boot.img" ]]; then
         local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -name *-img*.zip)
-        if [ -f "$device_image" ]; then
+        if [[ -f "$device_image" ]]; then
             unzip -j "$device_image" -d "$PLATFORM_BUILD"
-            if [ ! -f "$PLATFORM_BUILD/android-info.txt" ] || [ ! -f "$PLATFORM_BUILD/boot.img" ]; then
+            if [[ ! -f "$PLATFORM_BUILD/android-info.txt" ]] || [[ ! -f "$PLATFORM_BUILD/boot.img" ]]; then
                 log_error "There is no android-info.txt in $device_image"
                 exit 1
             fi
@@ -1375,24 +1432,24 @@ function prepare_to_flash_platform_build_from_local_directory () {
             exit 1
         fi
     fi
-    if [ -z "${TARGET_PRODUCT:-}" ] || [[ "${TARGET_PRODUCT:-}" != "$PRODUCT" ]]; then
+    if [[ -z "${TARGET_PRODUCT:-}" ]] || [[ "${TARGET_PRODUCT:-}" != "$PRODUCT" ]]; then
         log_info "Set env var TARGET_PRODUCT to $PRODUCT"
         export TARGET_PRODUCT="$PRODUCT"
     fi
-    if [ -z "${TARGET_BUILD_VARIANT:-}" ] || [[ "${TARGET_BUILD_VARIANT}" != "$DEVICE_VARIANT" ]]; then
+    if [[ -z "${TARGET_BUILD_VARIANT:-}" ]] || [[ "${TARGET_BUILD_VARIANT}" != "$DEVICE_VARIANT" ]]; then
         log_info "Set env var TARGET_BUILD_VARIANT to $DEVICE_VARIANT"
         export TARGET_BUILD_VARIANT="$DEVICE_VARIANT"
     fi
-    if [ -z "${ANDROID_PRODUCT_OUT:-}" ] || [[ "${ANDROID_PRODUCT_OUT}" != "$PLATFORM_BUILD" ]]; then
+    if [[ -z "${ANDROID_PRODUCT_OUT:-}" ]] || [[ "${ANDROID_PRODUCT_OUT}" != "$PLATFORM_BUILD" ]]; then
         log_info "Set env var ANDROID_PRODUCT_OUT to $PLATFORM_BUILD"
         export ANDROID_PRODUCT_OUT="$PLATFORM_BUILD"
     fi
-    if [ -z "${ANDROID_HOST_OUT:-}" ] || [[ "${ANDROID_HOST_OUT}" != "$PLATFORM_BUILD" ]]; then
+    if [[ -z "${ANDROID_HOST_OUT:-}" ]] || [[ "${ANDROID_HOST_OUT}" != "$PLATFORM_BUILD" ]]; then
         log_info "Set env var ANDROID_HOST_OUT to $PLATFORM_BUILD"
         export ANDROID_HOST_OUT="$PLATFORM_BUILD"
     fi
 
-    if [ "$SKIP_UPDATE_BOOTLOADER" = "true" ]; then
+    if [[ "$SKIP_UPDATE_BOOTLOADER" == "true" ]]; then
         awk '! /bootloader/' "$PLATFORM_BUILD"/android-info.txt > temp && mv temp "$PLATFORM_BUILD"/android-info.txt
     fi
     # skip update radio.img
@@ -1402,24 +1459,24 @@ function prepare_to_flash_platform_build_from_local_directory () {
 
 function mixing_build() {
     local _device_dir="$DEVICE_DIR/$DEVICE_SERIAL_NUMBER"
-    if [[ "$PLATFORM_BUILD" = ab://* ]]; then
+    if [[ "$PLATFORM_BUILD" == ab://* ]]; then
         download_platform_build
-    elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" = "$PLATFORM_REPO_ROOT"* ]]; then
+    elif [[ -n "$PLATFORM_REPO_ROOT" ]] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT"* ]]; then
         # Clean up device directory
-        if [ -d "$_device_dir" ]; then
+        if [[ -d "$_device_dir" ]]; then
             rm -rf "$_device_dir" || { log_error "Failed to clean up $_device_dir" && exit 1; }
         fi
         mkdir -p "$_device_dir" || { log_error "Failed to create $_device_dir folder" && exit 1; }
         log_info "Link platform build $PLATFORM_BUILD to $DOWNLOAD_PATH/device_dir"
         local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img.zip)
-        if [ -n "$device_image" ]; then
+        if [[ -n "$device_image" ]]; then
             if ! create_soft_link "$device_image" "$_device_dir/$PRODUCT-img-0.zip"; then
                 log_error "Failed to create soft link $device_image"
                 exit 1
             fi
         else
             device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img-*.zip)
-            if [ -n "$device_image" ]; then
+            if [[ -n "$device_image" ]]; then
                 if ! create_soft_link "$device_image" "$_device_dir/$PRODUCT-img-0.zip"; then
                     log_error "Failed to create link $device_image"
                     exit 1
@@ -1439,36 +1496,36 @@ function mixing_build() {
         PLATFORM_BUILD="$_device_dir"
     fi
 
-    if [ -n "${PLATFORM_REPO_ROOT}" ] && [ -f "${PLATFORM_REPO_ROOT}/vendor/google/tools/$MIX_SCRIPT_NAME" ]; then
+    if [[ -n "${PLATFORM_REPO_ROOT}" ]] && [[ -f "${PLATFORM_REPO_ROOT}/vendor/google/tools/$MIX_SCRIPT_NAME" ]]; then
         mix_kernel_cmd="${PLATFORM_REPO_ROOT}/vendor/google/tools/${MIX_SCRIPT_NAME}"
-    elif [ -f "${DOWNLOAD_PATH}/${MIX_SCRIPT_NAME}" ]; then
+    elif [[ -f "${DOWNLOAD_PATH}/${MIX_SCRIPT_NAME}" ]]; then
         mix_kernel_cmd="$DOWNLOAD_PATH/$MIX_SCRIPT_NAME"
-    elif [ -f "${PLATFORM_BUILD}/otatools.zip" ]; then
+    elif [[ -f "${PLATFORM_BUILD}/otatools.zip" ]]; then
         eval "unzip -j ${PLATFORM_BUILD}/otatools.zip bin/${MIX_SCRIPT_NAME}" -d "${DOWNLOAD_PATH}"
         mix_kernel_cmd="${DOWNLOAD_PATH}/${MIX_SCRIPT_NAME}"
     fi
-    if [ ! -f "$mix_kernel_cmd" ]; then
+    if [[ ! -f "$mix_kernel_cmd" ]]; then
         log_error "$mix_kernel_cmd doesn't exist or is not executable"
         exit 1
-    elif [ ! -x "$mix_kernel_cmd" ]; then
+    elif [[ ! -x "$mix_kernel_cmd" ]]; then
         log_error "$mix_kernel_cmd is not executable"
         exit 1
     fi
 
     local new_device_dir="$DOWNLOAD_PATH/new_device_dir/$DEVICE_SERIAL_NUMBER"
-    if [ -d "$new_device_dir" ]; then
+    if [[ -d "$new_device_dir" ]]; then
         rm -rf "$new_device_dir" || { log_error "Failed to clean up $new_device_dir" && exit 1; }
     fi
     mkdir -p "$new_device_dir" || { log_error "Failed to create $new_device_dir folder" && exit 1; }
     local mixed_build_cmd="$mix_kernel_cmd"
-    if [ -d "${KERNEL_BUILD}" ]; then
+    if [[ -d "${KERNEL_BUILD}" ]]; then
         mixed_build_cmd+=" --gki_dir $KERNEL_BUILD"
     fi
     mixed_build_cmd+=" $PLATFORM_BUILD $VENDOR_KERNEL_BUILD $new_device_dir"
     log_info "Run: $mixed_build_cmd"
     eval $mixed_build_cmd
     device_image=$(ls $new_device_dir/*$PRODUCT-img*.zip)
-    if [ ! -f "$device_image" ]; then
+    if [[ ! -f "$device_image" ]]; then
         log_error "New device image is not created in $new_device_dir"
         exit 1
     fi
@@ -1479,24 +1536,24 @@ function mixing_build() {
 
 function create_gki_boot_image() {
     local _device_dir="$DEVICE_DIR/$DEVICE_SERIAL_NUMBER"
-    if [[ "$PLATFORM_BUILD" = ab://* ]]; then
+    if [[ "$PLATFORM_BUILD" == ab://* ]]; then
         download_platform_build
-    elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" = "$PLATFORM_REPO_ROOT"* ]]; then
+    elif [[ -n "$PLATFORM_REPO_ROOT" ]] && [[ "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT"* ]]; then
         # Clean up device directory
-        if [ -d "$_device_dir" ]; then
+        if [[ -d "$_device_dir" ]]; then
             rm -rf "$_device_dir" || { log_error "Failed to clean up $_device_dir" && exit 1; }
         fi
         mkdir -p "$_device_dir" || { log_error "Failed to create $_device_dir folder" && exit 1; }
         log_info "Link platform build $PLATFORM_BUILD to $DOWNLOAD_PATH/device_dir"
         local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img.zip)
-        if [ -n "$device_image" ]; then
+        if [[ -n "$device_image" ]]; then
             if ! create_soft_link "$device_image" "$_device_dir/$PRODUCT-img-0.zip"; then
                 log_error "Failed to create soft link $device_image"
                 exit 1
             fi
         else
             device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img-*.zip)
-            if [ -n "$device_image" ]; then
+            if [[ -n "$device_image" ]]; then
                 if ! create_soft_link "$device_image" "$_device_dir/$PRODUCT-img-0.zip"; then
                     log_error "Failed to create link $device_image"
                     exit 1
@@ -1516,25 +1573,25 @@ function create_gki_boot_image() {
         PLATFORM_BUILD="$_device_dir"
     fi
 
-    if [ -n "${PLATFORM_REPO_ROOT}" ] && [ -f "${PLATFORM_REPO_ROOT}/system/tools/mkbootimg/mkbootimg.py" ]; then
+    if [[ -n "${PLATFORM_REPO_ROOT}" ]] && [[ -f "${PLATFORM_REPO_ROOT}/system/tools/mkbootimg/mkbootimg.py" ]]; then
         mk_boot_cmd="${PLATFORM_REPO_ROOT}/system/tools/mkbootimg/mkbootimg.py"
-    elif [ -f "${DOWNLOAD_PATH}/mkbootimg" ]; then
+    elif [[ -f "${DOWNLOAD_PATH}/mkbootimg" ]]; then
         mk_boot_cmd="$DOWNLOAD_PATH/mkbootimg"
-    elif [ -f "${PLATFORM_BUILD}/otatools.zip" ]; then
+    elif [[ -f "${PLATFORM_BUILD}/otatools.zip" ]]; then
         eval "unzip -j ${PLATFORM_BUILD}/otatools.zip bin/mkbootimg" -d "mkbootimg"
         mk_boot_cmd="${DOWNLOAD_PATH}/mkbootimg"
     fi
-    if [ ! -f "$mk_boot_cmd" ]; then
+    if [[ ! -f "$mk_boot_cmd" ]]; then
         log_error "$mk_boot_cmd doesn't exist or is not executable"
         exit 1
-    elif [ ! -x "$mk_boot_cmd" ]; then
+    elif [[ ! -x "$mk_boot_cmd" ]]; then
         log_error "$mk_boot_cmd is not executable"
         exit 1
     fi
 
     local gki_dir="$KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
     mk_boot_cmd+=" --kernel $KERNEL_BUILD/Image.lz4 --header_version 4 --base 0x00000000 "
-    if [ "${PLATFORM_BUILD}" = *16k* ]; then
+    if [[ "${PLATFORM_BUILD}" == *16k* ]]; then
         mk_boot_cmd+="--pagesize 16384 "
     else
         mk_boot_cmd+="--pagesize 4096 "
@@ -1542,7 +1599,7 @@ function create_gki_boot_image() {
     mk_boot_cmd+="--ramdisk $PLATFORM_BUILD/ramdisk.img -o $gki_dir/boot.img"
     log_info "Run: $mk_boot_cmd"
     eval $mk_boot_cmd
-    if [ -f "$gki_dir/boot.img" ]; then
+    if [[ -f "$gki_dir/boot.img" ]]; then
         log_info "The boot.img is created in $gki_dir"
     else
         log_error "New boot image is not created in $gki_dir"
@@ -1556,9 +1613,9 @@ get_kernel_version_from_boot_image() {
 
     # Check for mainline kernel
     version_output=$(strings "$boot_image_path" | grep android.*-g.*-ab.* | tail -n 1)
-    if [[ "$version_output" = *-mainline* ]]; then
+    if [[ "$version_output" == *-mainline* ]]; then
         KERNEL_VERSION="android-mainline"
-    elif [[ "$version_output" = *-android* ]]; then
+    elif [[ "$version_output" == *-android* ]]; then
         # Extract the substring between the first hyphen and the second hyphen
         KERNEL_VERSION=$(echo "$version_output" | awk -F '-' '{print $2"-"$1}' | cut -d '.' -f -2)
     else
@@ -1571,9 +1628,9 @@ get_kernel_version_from_boot_image() {
 function extract_device_kernel_version() {
     local kernel_string="$1"
     # Check if the string contains '-android'
-    if [[ "$kernel_string" = *-mainline* ]]; then
+    if [[ "$kernel_string" == *-mainline* ]]; then
         DEVICE_KERNEL_VERSION="android-mainline"
-    elif [[ "$kernel_string" = *"-android"* ]]; then
+    elif [[ "$kernel_string" == *"-android"* ]]; then
         # Extract the substring between the first hyphen and the second hyphen
         DEVICE_KERNEL_VERSION=$(echo "$kernel_string" | awk -F '-' '{print $2"-"$1}' | cut -d '.' -f -2)
     else
@@ -1590,7 +1647,7 @@ function is_device_adb_authorized() {
 dialog on your Android device; or (recommended) set ADB_VENDOR_KEYS (go/adb-keys) in your local environment and \
 then restart adb server with command (adb kill-server, adb start-server) to allow permanent authorization."
 
-    if [[ "$output" = *unauthorized* ]]; then
+    if [[ "$output" == *unauthorized* ]]; then
         log_warn "$message"
         return 1 # Failed.
     fi
@@ -1612,11 +1669,11 @@ function get_device_info_from_adb() {
     log_info "Getting device info from adb device $ADB_SERIAL_NUMBER"
 
     # Parse values locally from the captured properties ---
-    if [ -z "$DEVICE_SERIAL_NUMBER" ]; then
+    if [[ -z "$DEVICE_SERIAL_NUMBER" ]]; then
         DEVICE_SERIAL_NUMBER=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.serialno)
     fi
 
-    if [[ -z "$PRODUCT" || "$PRODUCT" = "generic_arm64" ]]; then
+    if [[ -z "$PRODUCT" || "$PRODUCT" == generic_arm64 ]]; then
         for property in "ro.product.board" "ro.build.product"; do
             local found_product=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop "$property")
             if [[ -n "$found_product" && "$found_product" != "generic_arm64" ]]; then
@@ -1628,7 +1685,7 @@ function get_device_info_from_adb() {
     fi
 
     # Final check: If we still don't have a valid product, it's a fatal error
-    if [[ -z "$PRODUCT" || "$PRODUCT" = "generic_arm64" ]]; then
+    if [[ -z "$PRODUCT" || "$PRODUCT" == generic_arm64 ]]; then
         log_error "Could not determine a valid hardware product for $ADB_SERIAL_NUMBER."
         exit 1
     fi
@@ -1659,7 +1716,7 @@ _parse_fastboot_var() {
 
 function get_device_info_from_fastboot() {
     # Only get DEVICE_SERIAL_NUMBER if it's not already set
-    if [ -z "$DEVICE_SERIAL_NUMBER" ]; then
+    if [[ -z "$DEVICE_SERIAL_NUMBER" ]]; then
         log_info "Attempting to get serial number from $FASTBOOT_SERIAL_NUMBER..."
 
         # Use a loop to handle the retry logic cleanly
@@ -1669,33 +1726,33 @@ function get_device_info_from_fastboot() {
             DEVICE_SERIAL_NUMBER=$(_parse_fastboot_var "$_output")
 
             # If we got a serial number, break the loop
-            if [ -n "$DEVICE_SERIAL_NUMBER" ]; then
+            if [[ -n "$DEVICE_SERIAL_NUMBER" ]]; then
                 log_info "Retrieved serial: $DEVICE_SERIAL_NUMBER"
                 break
             fi
 
             # If it's the first failed attempt, reboot and retry
-            if [ "$attempt" -eq 1 ]; then
+            if (( attempt == 1 )); then
                 log_warn "Command returned nothing. Rebooting into bootloader and retrying..."
                 reboot_device_into_bootloader
             fi
         done
 
         # If after all attempts the serial is still missing, this is a fatal error
-        if [ -z "$DEVICE_SERIAL_NUMBER" ]; then
+        if [[ -z "$DEVICE_SERIAL_NUMBER" ]]; then
             log_error "Could not get device serial for $FASTBOOT_SERIAL_NUMBER after retry."
             exit 1
         fi
     fi
 
     # Only get PRODUCT if it's not already set
-    if [ -z "$PRODUCT" ]; then
+    if [[ -z "$PRODUCT" ]]; then
         log_info "Attempting to get product name from $FASTBOOT_SERIAL_NUMBER..."
         local _output
         _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar product 2>&1)
         PRODUCT=$(_parse_fastboot_var "$_output")
 
-        if [ -z "$PRODUCT" ]; then
+        if [[ -z "$PRODUCT" ]]; then
             log_error "Could not get a valid product value for $FASTBOOT_SERIAL_NUMBER."
             exit 1
         fi
@@ -1750,12 +1807,12 @@ MY_NAME=$0
 
 parse_arg "$@"
 
-if [ -z "$SERIAL_NUMBER" ]; then
+if [[ -z "$SERIAL_NUMBER" ]]; then
     log_error "Device serial is not provided with flag -s <serial_number>."
     exit 1
 fi
 
-if [ ! -d "$DOWNLOAD_PATH" ]; then
+if [[ ! -d "$DOWNLOAD_PATH" ]]; then
     mkdir -p "$DOWNLOAD_PATH" || { log_error "Fail to create directory $DOWNLOAD_PATH" && exit 1; }
 fi
 
@@ -1776,14 +1833,14 @@ find_repo
 
 log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KERNEL_BUILD=$VENDOR_KERNEL_BUILD"
 
-[[ "${PLATFORM_BUILD,,}" = "none" ]] && PLATFORM_BUILD=""
-[[ "${KERNEL_BUILD,,}" = "none" ]] && KERNEL_BUILD=""
-[[ "${VENDOR_KERNEL_BUILD,,}" = "none" ]] && VENDOR_KERNEL_BUILD=""
+[[ "${PLATFORM_BUILD,,}" == "none" ]] && PLATFORM_BUILD=""
+[[ "${KERNEL_BUILD,,}" == "none" ]] && KERNEL_BUILD=""
+[[ "${VENDOR_KERNEL_BUILD,,}" == "none" ]] && VENDOR_KERNEL_BUILD=""
 
 # --- Platform Build Processing ---
-if [[ "$PLATFORM_BUILD" = ab://* ]]; then
+if [[ "$PLATFORM_BUILD" == ab://* ]]; then
     format_ab_platform_build_string
-elif [ -n "$PLATFORM_BUILD" ] && [ -d "$PLATFORM_BUILD" ]; then
+elif [[ -n "$PLATFORM_BUILD" ]] && [[ -d "$PLATFORM_BUILD" ]]; then
     if [[ "$PWD" != "$PLATFORM_BUILD" ]]; then
         log_info "The provided PLATFORM_BUILD '$PLATFORM_BUILD' is not in the current directory"
         # Check if PLATFORM_BUILD is an Android platform repo
@@ -1796,27 +1853,27 @@ elif [ -n "$PLATFORM_BUILD" ] && [ -d "$PLATFORM_BUILD" ]; then
             fi
         fi
     fi
-    if [[ "$PLATFORM_REPO_ROOT" = "$PLATFORM_BUILD" ]]; then
-        if [ "$SKIP_BUILD" = false ]; then
-            if [ -z "${TARGET_PRODUCT:-}" ] || [[ "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
-                if [[ "$PLATFORM_VERSION" = aosp-* ]]; then
+    if [[ "$PLATFORM_REPO_ROOT" == "$PLATFORM_BUILD" ]]; then
+        if [[ "$SKIP_BUILD" == "false" ]]; then
+            if [[ -z "${TARGET_PRODUCT:-}" ]] || [[ "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
+                if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
                     set_platform_repo "aosp_$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
                 else
                     set_platform_repo "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
                 fi
-            elif [[ "${TARGET_PRODUCT:-}" = *"$PRODUCT" ]]; then
+            elif [[ "${TARGET_PRODUCT:-}" == *"$PRODUCT" ]]; then
                 echo "TARGET_PRODUCT=${TARGET_PRODUCT}, ANDROID_PRODUCT_OUT=${ANDROID_PRODUCT_OUT}"
             fi
-            if [[ "${TARGET_PRODUCT:-}" = *"$PRODUCT" ]]; then
+            if [[ "${TARGET_PRODUCT:-}" == *"$PRODUCT" ]]; then
                 build_platform
             else
                 log_error "Can not build platform build due to lunch build target failure"
                 exit 1
             fi
         fi
-        if [ -d "${PLATFORM_REPO_ROOT}" ] && [ -f "$PLATFORM_REPO_ROOT/out/dist/otatools.zip" ]; then
+        if [[ -d "${PLATFORM_REPO_ROOT}" ]] && [[ -f "$PLATFORM_REPO_ROOT/out/dist/otatools.zip" ]]; then
             PLATFORM_BUILD=$PLATFORM_REPO_ROOT/out/dist
-        elif [ -d "${ANDROID_PRODUCT_OUT}" ] && [ -f "${ANDROID_PRODUCT_OUT}/otatools.zip" ]; then
+        elif [[ -d "${ANDROID_PRODUCT_OUT}" ]] && [[ -f "${ANDROID_PRODUCT_OUT}/otatools.zip" ]]; then
             PLATFORM_BUILD="${ANDROID_PRODUCT_OUT}"
         else
             log_error "Can't find valid image in $PLATFORM_REPO_ROOT"
@@ -1829,10 +1886,10 @@ log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KER
 
 find_flashstation_binary
 
-if [[ "$KERNEL_BUILD" = ab://* ]]; then
+if [[ "$KERNEL_BUILD" == ab://* ]]; then
     format_ab_kernel_build_string
     download_kernel_build
-elif [ -n "$KERNEL_BUILD" ] && [ -d "$KERNEL_BUILD" ]; then
+elif [[ -n "$KERNEL_BUILD" ]] && [[ -d "$KERNEL_BUILD" ]]; then
     # Check if kernel repo is provided
     cd "$KERNEL_BUILD" || { log_error "Fail to go to $KERNEL_BUILD" && exit 1; }
     KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
@@ -1842,8 +1899,8 @@ elif [ -n "$KERNEL_BUILD" ] && [ -d "$KERNEL_BUILD" ]; then
         if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
             find_repo
         fi
-        if [ "$SKIP_BUILD" = false ] ; then
-            if [ ! -f "common/BUILD.bazel" ]; then
+        if [[ "$SKIP_BUILD" == "false" ]] ; then
+            if [[ ! -f "common/BUILD.bazel" ]]; then
                 # TODO: Add build support to android12 and earlier kernels
                 log_error "bazel build is not supported in $PWD"
                 exit 1
@@ -1852,24 +1909,24 @@ elif [ -n "$KERNEL_BUILD" ] && [ -d "$KERNEL_BUILD" ]; then
             fi
         fi
         KERNEL_BUILD="$PWD/out/kernel_aarch64/dist"
-    elif [ -f "$KERNEL_BUILD/boot.img" ]; then
+    elif [[ -f "$KERNEL_BUILD/boot.img" ]]; then
         get_kernel_version_from_boot_image "$KERNEL_BUILD/boot.img"
-    elif [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
+    elif [[ -f "$KERNEL_BUILD/boot-lz4.img" ]]; then
         get_kernel_version_from_boot_image "$KERNEL_BUILD/boot-lz4.img"
-    elif [ -f "$KERNEL_BUILD/boot-gz.img" ]; then
+    elif [[ -f "$KERNEL_BUILD/boot-gz.img" ]]; then
         get_kernel_version_from_boot_image "$KERNEL_BUILD/boot-gz.img"
     fi
 fi
 
-if [[ "$VENDOR_KERNEL_BUILD" = ab://* ]]; then
+if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     format_ab_vendor_kernel_build_string
     log_info "Downloading vendor kernel build $VENDOR_KERNEL_BUILD"
-    if [ -z "$PLATFORM_BUILD" ] || [[ "$PRODUCT" != "oriole" && "$PRODUCT" != "raven" ]]; then
+    if [[ -z "$PLATFORM_BUILD" ]] || [[ "$PRODUCT" != "oriole" && "$PRODUCT" != "raven" ]]; then
         download_vendor_kernel_for_direct_flash
     else
         download_vendor_kernel_build
     fi
-elif [ -n "$VENDOR_KERNEL_BUILD" ] && [ -d "$VENDOR_KERNEL_BUILD" ]; then
+elif [[ -n "$VENDOR_KERNEL_BUILD" ]] && [[ -d "$VENDOR_KERNEL_BUILD" ]]; then
     # Check if vendor kernel repo is provided
     cd "$VENDOR_KERNEL_BUILD"  || { log_error "Fail to go to $VENDOR_KERNEL_BUILD" && exit 1; }
     VENDOR_KERNEL_REPO_LIST_OUT=$(repo list 2>&1)
@@ -1878,9 +1935,9 @@ elif [ -n "$VENDOR_KERNEL_BUILD" ] && [ -d "$VENDOR_KERNEL_BUILD" ]; then
         if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
             find_repo
         fi
-        if [ -z "$VENDOR_KERNEL_BUILD_TARGET" ]; then
+        if [[ -z "$VENDOR_KERNEL_BUILD_TARGET" ]]; then
             kernel_build_target_count=$(ls build_*.sh | wc -w)
-            if (( kernel_build_target_count = 1 )); then
+            if (( kernel_build_target_count == 1 )); then
                 VENDOR_KERNEL_BUILD_TARGET=$(echo $(ls build_*.sh) | sed 's/build_\(.*\)\.sh/\1/')
             elif (( kernel_build_target_count > 1 )); then
                 log_warn "There are multiple build_*.sh scripts in $PWD, Can't decide vendor kernel build target"
@@ -1893,21 +1950,21 @@ build target"
                 exit 1
             fi
         fi
-        if [ "$SKIP_BUILD" = false ] ; then
+        if [[ "$SKIP_BUILD" == "false" ]] ; then
             build_cmd="./build_$VENDOR_KERNEL_BUILD_TARGET.sh"
-            if [ "$GCOV" = true ]; then
+            if [[ "$GCOV" == "true" ]]; then
                 build_cmd+=" --gcov"
             fi
-            if [ "$DEBUG" = true ]; then
+            if [[ "$DEBUG" == "true" ]]; then
                 build_cmd+=" --debug"
             fi
-            if [ "$KASAN" = true ]; then
+            if [[ "$KASAN" == "true" ]]; then
                 build_cmd+=" --kasan"
             fi
             log_info "Build vendor kernel with $build_cmd"
             eval "$build_cmd"
             exit_code=$?
-            if [ $exit_code -eq 0 ]; then
+            if (( exit_code == 0 )); then
                 log_info "Build vendor kernel succeeded"
             else
                 log_error "Build vendor kernel failed with exit code $exit_code"
@@ -1918,25 +1975,25 @@ build target"
     fi
 fi
 
-if [ -z "$PLATFORM_BUILD" ]; then  # No platform build provided
-    if [ -z "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ] && [ -z "$GSI_BUILD" ]; then
+if [[ -z "$PLATFORM_BUILD" ]]; then  # No platform build provided
+    if [[ -z "$KERNEL_BUILD" ]] && [[ -z "$VENDOR_KERNEL_BUILD" ]] && [[ -z "$GSI_BUILD" ]]; then
         log_info "KERNEL_BUILD=$KERNEL_BUILD VENDOR_KERNEL_BUILD=$VENDOR_KERNEL_BUILD"
         log_error "Nothing to flash"
         exit 1
     fi
-    if [ -n "$VENDOR_KERNEL_BUILD" ]; then
+    if [[ -n "$VENDOR_KERNEL_BUILD" ]]; then
         log_info "Flash kernel from $VENDOR_KERNEL_BUILD"
         flash_vendor_kernel_build
     fi
-    if [ -n "$KERNEL_BUILD" ]; then
+    if [[ -n "$KERNEL_BUILD" ]]; then
         flash_kernel_build
     fi
 else  # Platform build provided
-    if [ -z "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then  # No kernel or vendor kernel build
+    if [[ -z "$KERNEL_BUILD" ]] && [[ -z "$VENDOR_KERNEL_BUILD" ]]; then  # No kernel or vendor kernel build
         log_info "Flash platform build from $PLATFORM_BUILD"
         flash_platform_build
-    elif [ -z "$KERNEL_BUILD" ] && [ -n "$VENDOR_KERNEL_BUILD" ]; then  # Vendor kernel build and platform build
-        if [[ "$PRODUCT" = "oriole" || "$PRODUCT" = "raven" ]]; then
+    elif [[ -z "$KERNEL_BUILD" ]] && [[ -n "$VENDOR_KERNEL_BUILD" ]]; then  # Vendor kernel build and platform build
+        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" ]]; then
             log_info "Mix vendor kernel and platform build"
             mixing_build
             flash_platform_build
@@ -1945,15 +2002,15 @@ else  # Platform build provided
             flash_platform_build
             flash_vendor_kernel_build
         fi
-    elif [ -n "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then # Kernel build and platform build
-        if [ -f "$KERNEL_BUILD/Image.lz4" ]  && [ $(ls -1 "$KERNEL_BUILD" | wc -l) -eq 1 ] \
-        && [[ "$PRODUCT" = "oriole" || "$PRODUCT" = "raven" ]]; then
+    elif [[ -n "$KERNEL_BUILD" ]] && [[ -z "$VENDOR_KERNEL_BUILD" ]]; then # Kernel build and platform build
+        if [[ -f "$KERNEL_BUILD/Image.lz4" ]]  && (( $(ls -1 "$KERNEL_BUILD" | wc -l) == 1 )) \
+        && [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" ]]; then
             create_gki_boot_image
         fi
         flash_platform_build
         flash_kernel_build
-    elif [ -n "$KERNEL_BUILD" ] && [ -n "$VENDOR_KERNEL_BUILD" ]; then  # All three builds provided
-        if [[ "$PRODUCT" = "oriole" || "$PRODUCT" = "raven" ]]; then
+    elif [[ -n "$KERNEL_BUILD" ]] && [[ -n "$VENDOR_KERNEL_BUILD" ]]; then  # All three builds provided
+        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" ]]; then
             log_info "Mix common kernel, vendor kernel and platform build"
             mixing_build
             flash_platform_build
@@ -1966,26 +2023,47 @@ else  # Platform build provided
     fi
 fi
 
-if [[ "$GSI_BUILD" = ab://* ]]; then
+if [[ "$GSI_BUILD" == ab://* ]]; then
     format_ab_gsi_build_string
-elif [ -n "$GSI_BUILD" ] && [ -d "$GSI_BUILD" ]; then
-    cd "$GSI_BUILD"  || { log_error "Fail to go to $GSI_BUILD" && exit 1; }
-    GSI_REPO_LIST_OUT=$(repo list 2>&1)
-    if [[ "$GSI_REPO_LIST_OUT" != "error"* ]]; then
-        go_to_repo_root "$PWD"
-        if [[ "$PWD" != "$REPO_ROOT_PATH" ]]; then
-            find_repo
+elif [[ -n "$GSI_BUILD" ]] && [[ -d "$GSI_BUILD" ]]; then
+    if [[ "$REPO_ROOT_PATH" == "$GSI_BUILD" ]] && [[ "$PLATFORM_REPO_ROOT" == "$GSI_BUILD" ]]; then
+        if [[ "$SKIP_BUILD" == "false" ]]; then
+            set_platform_repo "gsi_arm64" "userdebug" "$REPO_ROOT_PATH"
+            build_platform
         fi
-        if [ -z "${TARGET_PRODUCT:-}" ] || [[ "${TARGET_PRODUCT:-}" != "gsi_arm64" ]]; then
-            set_platform_repo "gsi_arm64"
-            if [ "$SKIP_BUILD" = false ] ; then
-                build_platform
+        if [[ -d "${PLATFORM_REPO_ROOT}" ]] && [[ -f "$PLATFORM_REPO_ROOT/out/dist/otatools.zip" ]]; then
+            PLATFORM_BUILD=$PLATFORM_REPO_ROOT/out/dist
+        elif [[ -d "${ANDROID_PRODUCT_OUT}" ]] && [[ -f "${ANDROID_PRODUCT_OUT}/otatools.zip" ]]; then
+            PLATFORM_BUILD="${ANDROID_PRODUCT_OUT}"
+        else
+            log_error "Can't find valid image in $PLATFORM_REPO_ROOT"
+            exit
+        fi
+        GSI_BUILD="${ANDROID_PRODUCT_OUT}"
+    else
+        gsi_image=$(find "$GSI_BUILD" -maxdepth 1 -type f -name "*_arm64-img-*.zip")
+        gsi_dir="$GSI_DIR/$DEVICE_SERIAL_NUMBER"
+        if [[ -f "$gsi_image" ]]; then
+            # GSI image was given as a zip file
+            if [[ -d "$gsi_dir" ]]; then
+                rm -rf "$gsi_dir" || { log_error "Failed to clean up $gsi_dir" && exit 1; }
             fi
-            GSI_BUILD="${ANDROID_PRODUCT_OUT}"
+            mkdir -p "$gsi_dir" || { log_error "Failed to create $gsi_dir folder" && exit 1; }
+            unzip -j "$gsi_image" -d "$gsi_dir"
+            if [[ ! -f "$gsi_dir/system.img" ]]; then
+                log_error "There is no system.img in $gsi_image"
+                exit 1
+            fi
+            GSI_BUILD="$gsi_dir"
+        elif [[ -f "$GSI_BUILD/system.img" ]]; then
+            log_info "There is system.img in GSI build folder $GSI_BUILD"
+        else
+            log_error "$GSI_BUILD doesn't have a valid GSI system image"
+            exit 1
         fi
     fi
 fi
 
-if [ -n "$GSI_BUILD" ]; then
+if [[ -n "$GSI_BUILD" ]]; then
     flash_gsi_build
 fi
