@@ -23,9 +23,9 @@ readonly COMMON_LIB_CL_FLASH_CLI="/google/bin/releases/android/flashstation/cl_f
 readonly COMMON_LIB_LOCAL_FLASH_CLI="/google/bin/releases/android/flashstation/local_flashstation"
 
 # --- Download Path ---
-if [ -d "/tmp" ]; then
+if [[ -d "/tmp" ]]; then
     readonly DOWNLOAD_PATH="/tmp/kernel_tests_downloads"
-elif [ -d "$HOME/Downloads" ]; then
+elif [[ -d "$HOME/Downloads" ]]; then
     readonly DOWNLOAD_PATH="$HOME/Downloads/kernel_tests_downloads"
 else
     readonly DOWNLOAD_PATH="$PWD/out/kernel_tests_downloads"
@@ -138,14 +138,14 @@ function _print_log() {
     local full_message_suffix=""
 
     # Append exit code context for errors if provided and non-zero
-    if [[ "$log_level" = "ERROR" && -n "$exit_code" && "$exit_code" -ne 0 ]]; then
+    if [[ "$log_level" == "ERROR" && -n "$exit_code" ]] && (( exit_code != 0 )); then
         # Append color codes carefully around the exit code part
         full_message_suffix=" (${BOLD}Exit Code ${exit_code}${END}${color_code})${END}"
     fi
 
     # Determine output stream (stderr for WARN/ERROR)
     local output_stream="/dev/stderr"
-    if [[ "$log_level" = "INFO" ]]; then
+    if [[ "$log_level" == "INFO" ]]; then
         output_stream="/dev/stdout"
     fi
 
@@ -202,7 +202,7 @@ function check_command() {
 # Usage: check_commands_available "cmd1" "cmd2" ...
 function check_commands_available() {
     local -a commands_to_check=("$@")
-    if [[ ${#commands_to_check[@]} -eq 0 ]]; then
+    if (( ${#commands_to_check[@]} == 0 )); then
         log_warn "No commands provided to check_commands_available."
         return 0 # Nothing to check
     fi
@@ -275,7 +275,7 @@ function go_to_repo_root() {
         return 1
     fi
 
-    if [[ $(pwd) = "$repo_root" ]]; then
+    if [[ $(pwd) == "$repo_root" ]]; then
         log_info "The current directory is already the repo root: $PWD"
     else
         # Only log and change directory if we are not already in the repo root
@@ -482,7 +482,7 @@ function create_soft_link() {
     local soft_link_name="$2"
     ln -s "$original_file_name" "$soft_link_name"
     exit_code=$?
-    if [ $exit_code -eq 0 ]; then
+    if (( exit_code == 0 )); then
         log_info "Linked $original_file_name to $soft_link_name"
     else
         log_error "Failed to link $original_file_name to $soft_link_name"
@@ -506,7 +506,7 @@ function convert_ab_string() {
     IFS='/' read -ra array <<< "$path_string"
     # The expected array length is 3 (branch/target/id) or 4 (branch/target/id/file)
     local array_len="${#array[@]}"
-    if [ "$array_len" -lt 3 ] || [ "$array_len" -gt 4 ]; then
+    if (( array_len < 3 || array_len > 4 )); then
         log_error "$ab_string_error_message"
         return 1
     fi
@@ -515,18 +515,18 @@ function convert_ab_string() {
     local build_target="${array[1]}"
     local build_id=""
     local rest_string=""
-    if [ "$array_len" -eq 3 ]; then
+    if (( array_len == 3 )); then
         build_id="${array[2]}"
-        if [ -z "$build_id" ]; then
+        if [[ -z "$build_id" ]]; then
             build_id="latest"
         fi
-    elif [ "$array_len" -eq 4 ]; then
+    elif (( array_len == 4 )); then
         build_id="${array[2]}"
         rest_string="/${array[3]}"
     fi
 
-    if [[ "$build_id" = "latest" || "$build_id" = "lkgb" ]]; then
-        if [ -f "$DEFAULT_BUILD_CHECKER" ]; then
+    if [[ "$build_id" == "latest" || "$build_id" == "lkgb" ]]; then
+        if [[ -f "$DEFAULT_BUILD_CHECKER" ]]; then
             local output
             local check_build_cmd="$DEFAULT_BUILD_CHECKER lkgb --branch $branch --target $build_target"
             output=$("$DEFAULT_BUILD_CHECKER" lkgb --branch "$branch" --target "$build_target")
@@ -563,7 +563,7 @@ function parse_ab_url() {
     local IFS='/'
     read -r -a parts <<< "$path_part"
 
-    if [[ ${#parts[@]} -lt 2 ]]; then # Must have at least branch and target
+    if (( ${#parts[@]} < 2 )); then # Must have at least branch and target
         log_error "Malformed ab URL (not enough parts): $url" 1
         return 1
     fi
@@ -580,7 +580,7 @@ function parse_ab_url() {
     printf -v "$branch_var" "%s" "${parts[0]}"
     printf -v "$target_var" "%s" "${parts[1]}"
 
-    if [[ ${#parts[@]} -ge 3 && -n "${parts[2]}" ]]; then
+    if (( ${#parts[@]} >= 3 )) && [[ -n "${parts[2]}" ]]; then
         printf -v "$id_var" "%s" "${parts[2]}"
     else
         log_warn "id variable is empty, use 'latest' as default id"
