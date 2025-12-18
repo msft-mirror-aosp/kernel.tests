@@ -454,6 +454,8 @@ function format_ab_kernel_build_string() {
     else
         if [[ "$_branch" = *mainline* ]]; then
             KERNEL_VERSION="android-mainline"
+        elif [[ "$KERNEL_BUILD" = ab://git_sc-gsi-release/gsi_arm64-user* ]]; then
+            KERNEL_VERSION="android12-5.10"
         else
             local _android_version=$(echo "$_branch" | grep -oE 'android[0-9]+')
             local _kernel_version=$(echo "$_branch" | grep -oE '[0-9]+\.[0-9]+')
@@ -632,17 +634,20 @@ function download_platform_build() {
     fi
     mkdir -p "$_device_dir" || { log_error "Failed to create $_device_dir folder" && exit 1; }
     local _build_info="$PLATFORM_BUILD"
-    local _file_patterns=("*$PRODUCT-img-*.zip" "radio.img")
+    local _file_patterns=( "*$PRODUCT-img-*.zip" "radio.img" )
     if [ "$SKIP_UPDATE_BOOTLOADER" = false ] || [ -n "$VENDOR_KERNEL_BUILD" ]; then
         _file_patterns+=("bootloader.img")
     fi
     if [ -n "$VENDOR_KERNEL_BUILD" ]; then
-        _file_patterns+=("misc_info.txt" "otatools.zip")
+        _file_patterns+=( "misc_info.txt" "otatools.zip" )
         if [[ "$_build_info" = *git_sc* ]]; then
-            _file_patterns+=("ramdisk.img")
+            _file_patterns+=( "ramdisk.img" )
         elif [[ "$_build_info" = *user/* ]]; then
-            _file_patterns+=("vendor_ramdisk-debug.img")
+            _file_patterns+=( "vendor_ramdisk-debug.img" )
         fi
+    fi
+    if [ -n "$KERNEL_BUILD" ] && [[ "$_build_info" = *git_sc* ]]; then
+        _file_patterns+=( "ramdisk.img" )
     fi
 
     local _file_path="${PLATFORM_BUILD/ab:\/\//}"
@@ -720,6 +725,11 @@ function download_kernel_build() {
     case "$PRODUCT" in
         oriole | raven | bluejay)
             _file_patterns=( "boot-lz4.img" )
+            if [[ "$KERNEL_BUILD" = *android12-5.10* ]]; then
+                _file_patterns=( "Image.lz4" )
+            elif [[ "$KERNEL_BUILD" = *git_sc-gsi-release/gsi_arm64-user* ]]; then
+                _file_patterns=( "gsi_arm64-img-*.zip" )
+            fi
             if [ -n "$VENDOR_KERNEL_BUILD" ] && [[ "$_build_info" != *android13* ]]; then
                 _file_patterns+=( "system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers" )
             fi
@@ -776,9 +786,13 @@ function download_kernel_build() {
         elif [[ "$_pattern" = system_dlkm* ]]; then
             _new_file_name="system_dlkm.img"
         fi
-        if ! create_soft_link "$_full_file_name" "$_kernel_dir/$_new_file_name"; then
-            log_error "Failed to create soft link for $_full_file_name"
-            exit 1
+        if [[ "$_pattern" = "gsi_arm64-img-*.zip" ]]; then
+            eval "unzip -j $_full_file_path/gsi_arm64-img-*.zip boot-5.10-lz4.img" -d "$_kernel_dir/mkbootimg"
+        else
+            if ! create_soft_link "$_full_file_name" "$_kernel_dir/$_new_file_name"; then
+                log_error "Failed to create soft link for $_full_file_name"
+                exit 1
+            fi
         fi
     done
     echo ""
@@ -919,17 +933,16 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     reboot_device_into_bootloader
     log_info "Flash GKI kernel from $KERNEL_BUILD"
     log_info "Wiping the device"
-    local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5 && "
+    local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5"
     if [ "$DISABLE_VERIFICATION" = "true" ]; then
-        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification && "
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification"
     fi
-    local _flash_cmd
     if [ -f "$KERNEL_BUILD/boot-lz4.img" ]; then
-        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-lz4.img"
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-lz4.img"
     elif [ -f "$KERNEL_BUILD/boot-gz.img" ]; then
-        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-gz.img"
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-gz.img"
     elif [ -f "$KERNEL_BUILD/boot.img" ]; then
-        _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot.img"
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot.img"
     fi
     if [ -f "$KERNEL_BUILD/system_dlkm.img" ]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $KERNEL_BUILD/system_dlkm.img"
@@ -987,27 +1000,24 @@ function flash_vendor_kernel_build() {
 
     log_info "Rebooting device into bootload and flashing vendor kernel from $VENDOR_KERNEL_BUILD"
     reboot_device_into_bootloader
-    local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5 && "
+    local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5"
     if [ "$DISABLE_VERIFICATION" = "true" ]; then
-        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification && "
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification"
     fi
-    _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $VENDOR_KERNEL_BUILD/boot.img && "
+    _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $VENDOR_KERNEL_BUILD/boot.img"
     if [ -f "$VENDOR_KERNEL_BUILD/dtb.img" ] && [ -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]; then
-        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER flash --dtb $VENDOR_KERNEL_BUILD/dtb.img vendor_boot:dlkm $VENDOR_KERNEL_BUILD/initramfs.img && "
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash --dtb $VENDOR_KERNEL_BUILD/dtb.img vendor_boot:dlkm $VENDOR_KERNEL_BUILD/initramfs.img"
     fi
     if [ -f "$VENDOR_KERNEL_BUILD/vendor_kernel_boot.img" ]; then
-        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER flash vendor_kernel_boot $VENDOR_KERNEL_BUILD/vendor_kernel_boot.img && "
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash vendor_kernel_boot $VENDOR_KERNEL_BUILD/vendor_kernel_boot.img"
     fi
-    _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER flash dtbo $VENDOR_KERNEL_BUILD/dtbo.img && "
-    _flash_cmd+="sleep 2 && "
-    _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && "
-    _flash_cmd+="sleep 10 && "
+    _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash dtbo $VENDOR_KERNEL_BUILD/dtbo.img"
+    _flash_cmd+=" && sleep 2 && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot && sleep 2"
     if [ -f "$VENDOR_KERNEL_BUILD/system_dlkm.img" ]; then
-        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $VENDOR_KERNEL_BUILD/system_dlkm.img && "
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash system_dlkm $VENDOR_KERNEL_BUILD/system_dlkm.img"
     fi
-    _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER flash vendor_dlkm $VENDOR_KERNEL_BUILD/vendor_dlkm.img && "
-    _flash_cmd+="sleep 2 && "
-    _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
+    _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash vendor_dlkm $VENDOR_KERNEL_BUILD/vendor_dlkm.img"
+    _flash_cmd+=" && sleep 2 && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
     log_info "Executing vendor kernel flash command: $_flash_cmd"
     eval "$_flash_cmd"
     exit_code=$?
@@ -1393,7 +1403,6 @@ function prepare_to_flash_platform_build_from_local_directory () {
 function mixing_build() {
     local _device_dir="$DEVICE_DIR/$DEVICE_SERIAL_NUMBER"
     if [[ "$PLATFORM_BUILD" = ab://* ]]; then
-        # vendor/google/tools/build_mixed_kernels_ramdisk doesn't support soft link device zip file
         download_platform_build
     elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" = "$PLATFORM_REPO_ROOT"* ]]; then
         # Clean up device directory
@@ -1466,6 +1475,79 @@ function mixing_build() {
     cp "$PLATFORM_BUILD/bootloader.img" "$new_device_dir/."
     cp "$PLATFORM_BUILD/radio.img" "$new_device_dir/."
     PLATFORM_BUILD="$new_device_dir"
+}
+
+function create_gki_boot_image() {
+    local _device_dir="$DEVICE_DIR/$DEVICE_SERIAL_NUMBER"
+    if [[ "$PLATFORM_BUILD" = ab://* ]]; then
+        download_platform_build
+    elif [ -n "$PLATFORM_REPO_ROOT" ] && [[ "$PLATFORM_BUILD" = "$PLATFORM_REPO_ROOT"* ]]; then
+        # Clean up device directory
+        if [ -d "$_device_dir" ]; then
+            rm -rf "$_device_dir" || { log_error "Failed to clean up $_device_dir" && exit 1; }
+        fi
+        mkdir -p "$_device_dir" || { log_error "Failed to create $_device_dir folder" && exit 1; }
+        log_info "Link platform build $PLATFORM_BUILD to $DOWNLOAD_PATH/device_dir"
+        local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img.zip)
+        if [ -n "$device_image" ]; then
+            if ! create_soft_link "$device_image" "$_device_dir/$PRODUCT-img-0.zip"; then
+                log_error "Failed to create soft link $device_image"
+                exit 1
+            fi
+        else
+            device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img-*.zip)
+            if [ -n "$device_image" ]; then
+                if ! create_soft_link "$device_image" "$_device_dir/$PRODUCT-img-0.zip"; then
+                    log_error "Failed to create link $device_image"
+                    exit 1
+                fi
+            else
+                log_error "Can't find $PRODUCT-img-*.zip in $PLATFORM_BUILD"
+                exit 1
+            fi
+        fi
+        local file_patterns=("bootloader.img" "radio.img" "vendor_ramdisk.img" "misc_info.txt" "otatools.zip")
+        for pattern in "${file_patterns[@]}"; do
+            if ! create_soft_link "$PLATFORM_BUILD/$pattern" "$_device_dir/$pattern"; then
+                log_error "Failed to create soft link $$PLATFORM_BUILD/$pattern"
+                exit 1
+            fi
+        done
+        PLATFORM_BUILD="$_device_dir"
+    fi
+
+    if [ -n "${PLATFORM_REPO_ROOT}" ] && [ -f "${PLATFORM_REPO_ROOT}/system/tools/mkbootimg/mkbootimg.py" ]; then
+        mk_boot_cmd="${PLATFORM_REPO_ROOT}/system/tools/mkbootimg/mkbootimg.py"
+    elif [ -f "${DOWNLOAD_PATH}/mkbootimg" ]; then
+        mk_boot_cmd="$DOWNLOAD_PATH/mkbootimg"
+    elif [ -f "${PLATFORM_BUILD}/otatools.zip" ]; then
+        eval "unzip -j ${PLATFORM_BUILD}/otatools.zip bin/mkbootimg" -d "mkbootimg"
+        mk_boot_cmd="${DOWNLOAD_PATH}/mkbootimg"
+    fi
+    if [ ! -f "$mk_boot_cmd" ]; then
+        log_error "$mk_boot_cmd doesn't exist or is not executable"
+        exit 1
+    elif [ ! -x "$mk_boot_cmd" ]; then
+        log_error "$mk_boot_cmd is not executable"
+        exit 1
+    fi
+
+    local gki_dir="$KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
+    mk_boot_cmd+=" --kernel $KERNEL_BUILD/Image.lz4 --header_version 4 --base 0x00000000 "
+    if [ "${PLATFORM_BUILD}" = *16k* ]; then
+        mk_boot_cmd+="--pagesize 16384 "
+    else
+        mk_boot_cmd+="--pagesize 4096 "
+    fi
+    mk_boot_cmd+="--ramdisk $PLATFORM_BUILD/ramdisk.img -o $gki_dir/boot.img"
+    log_info "Run: $mk_boot_cmd"
+    eval $mk_boot_cmd
+    if [ -f "$gki_dir/boot.img" ]; then
+        log_info "The boot.img is created in $gki_dir"
+    else
+        log_error "New boot image is not created in $gki_dir"
+        exit 1
+    fi
 }
 
 get_kernel_version_from_boot_image() {
@@ -1864,6 +1946,10 @@ else  # Platform build provided
             flash_vendor_kernel_build
         fi
     elif [ -n "$KERNEL_BUILD" ] && [ -z "$VENDOR_KERNEL_BUILD" ]; then # Kernel build and platform build
+        if [ -f "$KERNEL_BUILD/Image.lz4" ]  && [ $(ls -1 "$KERNEL_BUILD" | wc -l) -eq 1 ] \
+        && [[ "$PRODUCT" = "oriole" || "$PRODUCT" = "raven" ]]; then
+            create_gki_boot_image
+        fi
         flash_platform_build
         flash_kernel_build
     elif [ -n "$KERNEL_BUILD" ] && [ -n "$VENDOR_KERNEL_BUILD" ]; then  # All three builds provided
