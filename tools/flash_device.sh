@@ -269,34 +269,14 @@ function parse_arg() {
     done
 }
 
-function set_platform_repo() {
-    log_warn "Build environment target product '${TARGET_PRODUCT:-}' does not match expected $1. \
-    Reset build environment"
-    local lunch_cli="source build/envsetup.sh && lunch $1"
-    if [[ -f "build/release/release_configs/trunk_staging.textproto" ]]; then
-        lunch_cli+="-trunk_staging-$DEVICE_VARIANT"
-    else
-        lunch_cli+="-$DEVICE_VARIANT"
-    fi
-    log_info "Setup build environment with: $lunch_cli"
-    eval "$lunch_cli"
-    exit_code=$?
-    if (( exit_code == 0 )); then
-        log_info "$lunch_cli succeeded"
-    else
-        log_error "$lunch_cli failed"
-        exit 1
-    fi
-}
-
 function find_repo() {
     manifest_output=$(grep -e "platform/system/core" -e "gs-pixel" -e "kernel/common" \
      -e "common-modules/virtual-device" -e "private/google-modules/soc/gs" .repo/manifests/default.xml)
     if [[ -d "system/core" && "$manifest_output" == *platform/system/core* ]]; then
         log_info "I am in an Android platform tree"
         PLATFORM_REPO_ROOT="$PWD"
-        if [[ -z "$PLATFORM_BUILD" ]]; then
-            PLATFORM_VERSION=$(sed -n 's/^export BUILD_ID=\(.*\)/\1/p' build/make/core/build_id.mk)
+        if [[ -z "$PLATFORM_BUILD" || "$PLATFORM_REPO_ROOT" == "$PLATFORM_BUILD" ]]; then
+            PLATFORM_VERSION=$(sed -n 's/^BUILD_ID=\(.*\)/\1/p' build/make/core/build_id.mk)
             log_info "PLATFORM_REPO_ROOT=$PLATFORM_REPO_ROOT, PLATFORM_VERSION=$PLATFORM_VERSION"
             PLATFORM_BUILD="$PLATFORM_REPO_ROOT"
         fi
@@ -330,11 +310,10 @@ function build_platform() {
         log_warn "--skip-build is set. Do not rebuild platform build"
         return
     fi
-    build_cmd="m -j18 droid"
-    if [[ "${TARGET_PRODUCT:-}" != "gsi_arm64" ]]; then
-        build_cmd+=" otatools-packege"
+    build_cmd="m -j18"
+    if [[ "${TARGET_PRODUCT:-}" != "gsi_arm64" && -n "$VENDOR_KERNEL_BUILD" ]]; then
+        build_cmd+=" droid otatools-package dist DIST_DIR=out/dist/$PRODUCT"
     fi
-    build_cmd+=" dist"
     log_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
     eval $build_cmd
     exit_code=$?
@@ -421,7 +400,7 @@ function format_ab_platform_build_string() {
 
 function format_ab_gsi_build_string() {
     if [[ "$GSI_BUILD" != ab://* ]]; then
-        log_error "Please provide the GSI build in the form of ab:// with flag -sb"
+        log_error "Please provide the GSI build in the form of ab:// with flag -gsi"
         exit 1
     fi
     if [[ "$GSI_BUILD" == ab:// ]]; then
@@ -818,7 +797,7 @@ function download_kernel_build() {
             _new_file_name="system_dlkm.img"
         fi
         if [[ "$_pattern" == "gsi_arm64-img-*.zip" ]]; then
-            eval "unzip -j $_full_file_path/gsi_arm64-img-*.zip boot-5.10-lz4.img" -d "$_kernel_dir/mkbootimg"
+            eval "unzip -j $_full_file_path/gsi_arm64-img-*.zip boot-5.10-lz4.img" -d "$_kernel_dir/boot.img"
         else
             if ! create_soft_link "$_full_file_name" "$_kernel_dir/$_new_file_name"; then
                 log_error "Failed to create soft link for $_full_file_name"
@@ -1311,10 +1290,10 @@ function flash_platform_build() {
         cd "$PLATFORM_REPO_ROOT" || { log_error "Fail to go to $PLATFORM_REPO_ROOT" && exit 1; }
         log_info "Flashing device by vendor/google/tools/flashall with platform build from ${PLATFORM_BUILD}"
         if [[ -z "${TARGET_PRODUCT:-}" || "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
-            if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
-                set_platform_repo "aosp_$PRODUCT"
+            if [[ "${PLATFORM_VERSION:-}" == aosp-* || "${PLATFORM_VERSION:-}" == AOSP* ]]; then
+                set_platform_repo "aosp_$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
             else
-                set_platform_repo "$PRODUCT"
+                set_platform_repo "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
             fi
         fi
         _flash_cmd="vendor/google/tools/flashall  --nointeractive -w -s $DEVICE_SERIAL_NUMBER"
@@ -1397,7 +1376,8 @@ function flash_gsi_build() {
             log_error "There is no system.img in $GSI_BUILD"
             exit 1
         fi
-        if [[ -f "$GSI_BUILD/pvmfw.img" && "$_pvmfw_partition_output" == *yes* ]]; then
+        if [[ -f "$GSI_BUILD/pvmfw.img" && "$_pvmfw_partition_output" == *yes* \
+        && "$PRODUCT" != "raven" && "$PRODUCT" != "oriole" ]]; then
             _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot bootloader"
             _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash pvmfw $GSI_BUILD/pvmfw.img"
         fi
@@ -1467,7 +1447,7 @@ function mixing_build() {
             rm -rf "$_device_dir" || { log_error "Failed to clean up $_device_dir" && exit 1; }
         fi
         mkdir -p "$_device_dir" || { log_error "Failed to create $_device_dir folder" && exit 1; }
-        log_info "Link platform build $PLATFORM_BUILD to $DOWNLOAD_PATH/device_dir"
+
         local device_image=$(find "$PLATFORM_BUILD" -maxdepth 1 -type f -name *-img.zip)
         if [[ -n "$device_image" ]]; then
             if ! create_soft_link "$device_image" "$_device_dir/$PRODUCT-img-0.zip"; then
@@ -1486,11 +1466,14 @@ function mixing_build() {
                 exit 1
             fi
         fi
-        local file_patterns=("bootloader.img" "radio.img" "vendor_ramdisk.img" "misc_info.txt" "otatools.zip")
+
+        local file_patterns=("bootloader.img" "radio.img" "vendor_ramdisk.img" "misc_info.txt", "otatools.zip")
         for pattern in "${file_patterns[@]}"; do
             if ! create_soft_link "$PLATFORM_BUILD/$pattern" "$_device_dir/$pattern"; then
-                log_error "Failed to create soft link $$PLATFORM_BUILD/$pattern"
+                log_error "Failed to create soft link for $PLATFORM_BUILD/$pattern"
                 exit 1
+            else
+                log_info "Created soft link for $PLATFORM_BUILD/$pattern"
             fi
         done
         PLATFORM_BUILD="$_device_dir"
@@ -1575,6 +1558,8 @@ function create_gki_boot_image() {
 
     if [[ -n "${PLATFORM_REPO_ROOT}" && -f "${PLATFORM_REPO_ROOT}/system/tools/mkbootimg/mkbootimg.py" ]]; then
         mk_boot_cmd="${PLATFORM_REPO_ROOT}/system/tools/mkbootimg/mkbootimg.py"
+    elif [[ -n "${PLATFORM_REPO_ROOT}/out/host/linux-x86/bin" && -f "${PLATFORM_REPO_ROOT}/out/host/linux-x86/bin/mkbootimg.py" ]]; then
+        mk_boot_cmd="${PLATFORM_REPO_ROOT}/out/host/linux-x86/bin"
     elif [[ -f "${DOWNLOAD_PATH}/mkbootimg" ]]; then
         mk_boot_cmd="$DOWNLOAD_PATH/mkbootimg"
     elif [[ -f "${PLATFORM_BUILD}/otatools.zip" ]]; then
@@ -1856,7 +1841,7 @@ elif [[ -n "$PLATFORM_BUILD" && -d "$PLATFORM_BUILD" ]]; then
     if [[ "$PLATFORM_REPO_ROOT" == "$PLATFORM_BUILD" ]]; then
         if [[ "$SKIP_BUILD" == "false" ]]; then
             if [[ -z "${TARGET_PRODUCT:-}" || "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
-                if [[ "$PLATFORM_VERSION" == aosp-* ]]; then
+                if [[ "${PLATFORM_VERSION:-}" == aosp-* || "${PLATFORM_VERSION:-}" == AOSP* ]]; then
                     set_platform_repo "aosp_$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
                 else
                     set_platform_repo "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
@@ -1870,13 +1855,26 @@ elif [[ -n "$PLATFORM_BUILD" && -d "$PLATFORM_BUILD" ]]; then
                 log_error "Can not build platform build due to lunch build target failure"
                 exit 1
             fi
-        fi
-        if [[ -d "${PLATFORM_REPO_ROOT}" && -f "$PLATFORM_REPO_ROOT/out/dist/otatools.zip" ]]; then
-            PLATFORM_BUILD=$PLATFORM_REPO_ROOT/out/dist
-        elif [[ -d "${ANDROID_PRODUCT_OUT}" && -f "${ANDROID_PRODUCT_OUT}/otatools.zip" ]]; then
-            PLATFORM_BUILD="${ANDROID_PRODUCT_OUT}"
+            if [[ ! -d "${ANDROID_PRODUCT_OUT:-}" || ! -f "${ANDROID_PRODUCT_OUT}/system.img" ]]; then
+                log_error "Can't find a valid system.img in ${ANDROID_PRODUCT_OUT}"
+                exit 1
+            fi
+            if [[ -n "$VENDOR_KERNEL_BUILD" ]]; then
+                PLATFORM_BUILD="$PLATFORM_REPO_ROOT/out/dist/$PRODUCT"
+            else
+                PLATFORM_BUILD="${ANDROID_PRODUCT_OUT:-}"
+            fi
+        elif [[ -n "$VENDOR_KERNEL_BUILD" ]]; then
+            log_info "Set PLATFORM BUILD to $PLATFORM_REPO_ROOT/out/dist/$PRODUCT"
+            PLATFORM_BUILD="$PLATFORM_REPO_ROOT/out/dist/$PRODUCT"
         else
-            log_error "Can't find valid image in $PLATFORM_REPO_ROOT"
+            PLATFORM_BUILD="$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT"
+        fi
+        log_info "PLATFORM_BUILD=$PLATFORM_BUILD"
+        if [[ -d "$PLATFORM_BUILD" ]] && [[ -f "$PLATFORM_BUILD/system.img" || -f "$PLATFORM_BUILD/otatools.zip" ]]; then
+            log_info "Use platform build from $PLATFORM_BUILD"
+        else
+            log_error "Can't find valid image in $PLATFORM_BUILD"
             exit
         fi
     fi
@@ -2030,16 +2028,15 @@ elif [[ -n "$GSI_BUILD" && -d "$GSI_BUILD" ]]; then
         if [[ "$SKIP_BUILD" == "false" ]]; then
             set_platform_repo "gsi_arm64" "userdebug" "$REPO_ROOT_PATH"
             build_platform
+            GSI_BUILD="${ANDROID_PRODUCT_OUT:-}"
+        elif [[ -d $REPO_ROOT_PATH/out/target/product/generic_arm64 ]]; then
+            log_info "Set GSI_BUILD to $REPO_ROOT_PATH/out/target/product/generic_arm64"
+            GSI_BUILD="$REPO_ROOT_PATH/out/target/product/generic_arm64"
         fi
-        if [[ -d "${PLATFORM_REPO_ROOT}" && -f "$PLATFORM_REPO_ROOT/out/dist/otatools.zip" ]]; then
-            PLATFORM_BUILD=$PLATFORM_REPO_ROOT/out/dist
-        elif [[ -d "${ANDROID_PRODUCT_OUT}" && -f "${ANDROID_PRODUCT_OUT}/otatools.zip" ]]; then
-            PLATFORM_BUILD="${ANDROID_PRODUCT_OUT}"
-        else
-            log_error "Can't find valid image in $PLATFORM_REPO_ROOT"
+        if [[ ! -f "${GSI_BUILD}/system.img" ]]; then
+            log_error "Can't find valid image in ${GSI_BUILD}"
             exit
         fi
-        GSI_BUILD="${ANDROID_PRODUCT_OUT}"
     else
         gsi_image=$(find "$GSI_BUILD" -maxdepth 1 -type f -name "*_arm64-img-*.zip")
         gsi_dir="$GSI_DIR/$DEVICE_SERIAL_NUMBER"
