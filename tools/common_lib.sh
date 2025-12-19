@@ -597,7 +597,7 @@ function run_command() {
 
     "${command_to_run[@]}"
     status_code=$?
-    if (( status_code = 0 )); then
+    if (( status_code == 0 )); then
         log_info "Succeeded."
     else
         log_error "Failed." "$status_code"
