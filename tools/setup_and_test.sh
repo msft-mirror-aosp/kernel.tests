@@ -141,7 +141,7 @@ function cleanup() {
 }
 
 function parse_args() {
-    while test $# -gt 0; do
+    while (( $# > 0 )); do
         case "$1" in
             -h|--help)
                 print_help
@@ -201,7 +201,7 @@ function parse_args() {
         esac
     done
 
-    if [[ ${#TEST_NAME[@]} -eq 0 ]]; then
+    if (( ${#TEST_NAME[@]} == 0 )); then
          fail_error "At least one test must be specified with -t."
     fi
 
