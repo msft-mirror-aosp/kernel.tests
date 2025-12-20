@@ -166,7 +166,7 @@ function parse_args() {
     local has_input_file=false
     local has_new_bisect_args=false
 
-    while test $# -gt 0; do
+    while (( $# > 0 )); do
         case "$1" in
             -h|--help)
                 print_help
@@ -254,7 +254,7 @@ function parse_args() {
     fi
 
     if ! "$has_input_file"; then
-        if [[ -z "$TEST_SUITE_BUILD" || ${#TEST_NAME[@]} -eq 0 ]]; then
+        if [[ -z "$TEST_SUITE_BUILD" ]] || (( ${#TEST_NAME[@]} == 0 )); then
              fail_error "For a new bisection, both --test (-t) and --test-dir|--test-suite-build (-td|-tb) must be specified."
         fi
     fi
@@ -368,7 +368,7 @@ function handle_test_suite_url() {
         local download_success=false
         for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
             "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
-            if [[ $? -eq 0 && -f "$filename" ]]; then
+            if (( $? == 0 )) && [[ -f "$filename" ]]; then
                 download_success=true
                 break
             fi
@@ -420,7 +420,7 @@ function handle_test_suite_url() {
         local download_success=false
         for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
             "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
-            if [[ $? -eq 0 && -f "$filename" ]]; then
+            if (( $? == 0 )) && [[ -f "$filename" ]]; then
                 download_success=true
                 break
             fi
