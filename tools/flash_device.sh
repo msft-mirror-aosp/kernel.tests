@@ -258,7 +258,7 @@ function parse_arg() {
                 shift
                 ;;
             --no-force-debuggable)
-                FALSE_DEBUGGABLE=true
+                FORCE_DEBUGGABLE=false
                 shift
                 ;;
             *)
@@ -1270,11 +1270,11 @@ function flash_platform_build() {
         if [[ -n "${_build_target}" ]]; then
             _flash_cmd+=" -t $_build_target"
             if [[ "$_build_target" == *user ]]; then
-                if [[ "$FALSE_DEBUGGABLE" == "true" ]]; then
+                if [[ "$FORCE_DEBUGGABLE" == "true" ]]; then
                     log_info "Flashing user build with --force_debuggable option"
                     _flash_cmd+=" --force_debuggable"
                 else
-                    log_info "--no-false-debuggable option is enabled. \
+                    log_info "--no-force-debuggable option is enabled. \
                     Need to enable ADB Debug manually in development mode for adb access"
                 fi
             fi
