@@ -9,26 +9,27 @@
 #
 
 # --- Configuration Constants ---
-readonly DEFAULT_OUTPUT_DIR="/tmp/setup_and_test_out/$(date +%Y%m%d_%H%M%S)"
 readonly -A BUILD_TYPE_MAP=(
     ["pb"]="PLATFORM_BUILD"
+    ["sb"]="GSI_BUILD"
     ["kb"]="KERNEL_BUILD"
     ["vkb"]="VENDOR_KERNEL_BUILD"
     ["tb"]="TEST_SUITE_BUILD"
 )
+readonly -a BUILD_SETUP_ORDER=("pb" "sb" "kb" "vkb")
 
 # --- Global Variables ---
 ACLOUD_OUTPUT_FILE="/tmp/ACLOUD_OUTPUT.tmp"
 FILES_TO_CLEANUP=("$ACLOUD_OUTPUT_FILE")
 DEVICE_TYPE=""
 PLATFORM_BUILD=""
+GSI_BUILD=""
 KERNEL_BUILD=""
 VENDOR_KERNEL_BUILD=""
 SERIAL_NUMBER=""
 TEST_NAME=()
 TEST_DIR=""
 TEST_SUITE_BUILD=""
-CACHE_DIR=""
 OUTPUT_DIR=""
 SKIP_BUILD=false
 RESTORE_GIT_STATE=false
@@ -45,8 +46,6 @@ SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
 DEVICE_UTIL_PATH="${SCRIPT_DIR}/lib/device_util.sh"
-
-# Check for libraries (Adjust paths if libs are in same dir or ./lib)
 if [[ ! -f "$LIB_PATH" ]]; then
     echo "FATAL ERROR: Cannot find required library 'common_lib.sh'" >&2
     exit 1
@@ -84,13 +83,15 @@ function print_help() {
     echo ""
     echo "Options:"
     echo "  -pb,  --platform-build <string>    Platform build definition."
-    echo "  -kb,  --kernel-build <string>      Kernel build definition."
+    echo "  -kb,  --kernel-build,  -gki,  --gki-build <string>"
+    echo "                                     GKI build definition."
+    echo "  -sb,  --system-build,  -gsi,  --gsi-build <string>"
+    echo "                                     GSI build definition."
     echo "  -vkb, --vendor-kernel-build <string> Vendor kernel build definition."
     echo "  -tb,  --test-suite-build <string>  Test suite definition (AB URL, local path, or fixed commit)."
     echo "  -t,   --test <name>                [Required] Test name(s) to run."
     echo "  -s,   --serial-number <serial>     Physical device serial. Default: Cuttlefish."
-    echo "  -od,  --output-dir <path>          Directory for logs/artifacts. Default: /tmp/setup_and_test_out/<timestamp>"
-    echo "  -cd,  --cache-dir <path>           Directory for cached downloads."
+    echo "  -od,  --output-dir <path>          Directory for logs/artifacts."
     echo "  --restore                          Restore git repositories to their original state after testing."
     echo "  --skip-build                       Skip the build/flash step, just run tests."
     echo "  -h,   --help                       Display this message."
@@ -157,7 +158,12 @@ function parse_args() {
                 PLATFORM_BUILD="$1"
                 shift
                 ;;
-            -kb|--kernel-build)
+            -sb|-gsi|--system-build|--gsi-build)
+                shift
+                GSI_BUILD="$1"
+                shift
+                ;;
+            -kb|-gki|--kernel-build|--gki-build)
                 shift
                 KERNEL_BUILD="$1"
                 shift
@@ -182,11 +188,6 @@ function parse_args() {
                 TEST_SUITE_BUILD="$1"
                 shift
                 ;;
-            -cd|--cache-dir)
-                shift
-                CACHE_DIR="$1"
-                shift
-                ;;
             --restore)
                 RESTORE_GIT_STATE=true
                 shift
@@ -204,16 +205,6 @@ function parse_args() {
     if (( ${#TEST_NAME[@]} == 0 )); then
          fail_error "At least one test must be specified with -t."
     fi
-
-    # Set Default Output Dir if not provided
-    if [[ -z "$OUTPUT_DIR" ]]; then
-        OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
-    fi
-    # Create output dir
-    mkdir -p "$OUTPUT_DIR" || fail_error "Failed to create output directory: $OUTPUT_DIR"
-    OUTPUT_DIR=$(realpath "$OUTPUT_DIR")
-
-    log_info "Output Directory: $OUTPUT_DIR"
 }
 
 function parse_change_string() {
@@ -336,11 +327,11 @@ function lock_configuration() {
     # Locks configuration variables to be Read-Only.
     readonly DEVICE_TYPE
     readonly PLATFORM_BUILD
+    readonly GSI_BUILD
     readonly KERNEL_BUILD
     readonly VENDOR_KERNEL_BUILD
     readonly SERIAL_NUMBER
     readonly TEST_SUITE_BUILD
-    readonly CACHE_DIR
     readonly OUTPUT_DIR
     readonly SKIP_BUILD
     readonly RESTORE_GIT_STATE
@@ -365,136 +356,6 @@ function git_hard_checkout() {
     fi
 }
 
-# --- Test Suite Logic (Reused) ---
-function get_test_suite_base_dir() {
-    if [[ -n "$CACHE_DIR" ]]; then
-        echo "$(realpath "$CACHE_DIR")"
-    else
-        echo "/tmp/bisect_changes_cache"
-    fi
-}
-
-function resolve_latest_build_id() {
-    local branch="$1"
-    local target="$2"
-    local -n _resolved_id_ref="$3"
-
-    log_info "Build ID is 'latest'. Resolving to specific BID..."
-
-    local build_info_filename="BUILD_INFO"
-    local build_info_path="${OUTPUT_DIR}/${build_info_filename}"
-    local build_info_url="ab://${branch}/${target}/latest/${build_info_filename}"
-
-    # Download BUILD_INFO to OUTPUT_DIR
-    pushd "$OUTPUT_DIR" >/dev/null || fail_error "Failed to pushd to $OUTPUT_DIR"
-    if ! "$FETCH_ARTIFACT_SCRIPT" "$build_info_url"; then
-        popd >/dev/null
-        fail_error "Failed to download BUILD_INFO to resolve 'latest'."
-    fi
-    popd >/dev/null
-
-    if [[ ! -f "$build_info_path" ]]; then
-        fail_error "BUILD_INFO file not found at $build_info_path"
-    fi
-
-    FILES_TO_CLEANUP+=("$build_info_path")
-
-    local resolved_bid
-    resolved_bid=$(awk -F'"' '/"bid"/{print $4}' "$build_info_path")
-
-    if [[ -z "$resolved_bid" ]]; then
-        fail_error "Failed to parse 'bid' from BUILD_INFO file."
-    fi
-
-    log_info "Resolved 'latest' to Build ID: $resolved_bid"
-    _resolved_id_ref="$resolved_bid"
-}
-
-function prepare_test_suite() {
-    local locator="$TEST_SUITE_BUILD"
-    if [[ -z "$locator" ]]; then
-        return 0
-    fi
-
-    log_info "Preparing test suite: $locator"
-
-    if [[ "$locator" == ab://* ]]; then
-        # Reuse fetch/unzip logic via cache
-        local branch target build_id filename
-
-        if ! parse_ab_url "$locator" branch target build_id; then
-            fail_error "Could not parse test suite URL: $locator"
-        fi
-
-        if [[ "$build_id" == "latest" ]]; then
-            resolve_latest_build_id "$branch" "$target" build_id
-        fi
-
-        filename="${locator##*/}"
-
-        local base_dir
-        base_dir=$(get_test_suite_base_dir)
-        local suite_path="${base_dir}/${branch}/${target}/${build_id}"
-
-        # Check cache
-        local unzipped_dir
-        if [[ -d "$suite_path" ]]; then
-            unzipped_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
-            if [[ -n "$unzipped_dir" && -d "$unzipped_dir" ]]; then
-                log_info "Found cached test suite: $unzipped_dir"
-                TEST_DIR="$unzipped_dir"
-                return 0
-            fi
-        fi
-
-        # Download
-        mkdir -p "$suite_path" || fail_error "Could not create dir: $suite_path"
-        pushd "$suite_path" >/dev/null || exit 1
-
-        # Construct the specific URL using the resolved ID
-        local specific_url="ab://${branch}/${target}/${build_id}/${filename}"
-        log_info "Downloading artifact: $specific_url"
-
-        "$FETCH_ARTIFACT_SCRIPT" "$specific_url"
-        if (( $? != 0 )); then
-            popd >/dev/null
-            fail_error "Failed to download test suite."
-        fi
-        popd >/dev/null
-
-        if [[ ! -f "${suite_path}/${filename}" ]]; then
-            fail_error "Downloaded file not found: ${suite_path}/${filename}"
-        fi
-
-        log_info "Unzipping test suite..."
-        unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip."
-        rm -f "${suite_path}/${filename}"
-
-        unzipped_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
-        TEST_DIR="$unzipped_dir"
-
-    elif [[ "${ID_TYPES[tb]}" == "fixed_commit" ]]; then
-        # Orchestrate checkout for Test Suite
-        local path="${TREE_PATHS[tb]}/${PROJECTS[tb]}"
-        local commit="${COMMITS_TO_TEST_MAP[tb]}"
-
-        if [[ -z "${ORIGINAL_GIT_STATES[tb]}" ]]; then
-            ORIGINAL_GIT_STATES[tb]="$(git_get_current_head "$path")"
-            log_info "Saved original git state for tb: ${ORIGINAL_GIT_STATES[tb]}"
-        fi
-
-        git_hard_checkout "$path" "$commit"
-        TEST_DIR="${TREE_PATHS[tb]}"
-    else
-        # Local path
-        TEST_DIR="$locator"
-    fi
-
-    if [[ ! -d "$TEST_DIR" ]]; then
-        fail_error "Test suite directory is invalid: $TEST_DIR"
-    fi
-    TEST_DIR=$(realpath "$TEST_DIR")
-}
 
 # --- Main Execution Logic ---
 
@@ -513,8 +374,6 @@ function setup_and_run() {
         fi
     done
 
-    prepare_test_suite
-
     local -a setup_cmd_array=()
     if [[ "$DEVICE_TYPE" == "PHYSICAL" ]]; then
         setup_cmd_array=("$FLASH_DEVICE_SCRIPT" "-s" "$SERIAL_NUMBER")
@@ -523,7 +382,7 @@ function setup_and_run() {
     fi
 
     # Add build args
-    for type_code in pb kb vkb; do
+    for type_code in "${BUILD_SETUP_ORDER[@]}"; do
         local arg_val=""
         # If it's a git type (fixed_commit), pass the Tree Path
         if [[ "${ID_TYPES[$type_code]}" == "fixed_commit" ]]; then
@@ -591,11 +450,13 @@ function run_tests_on_device() {
     adb_serial=$(device_util::get_adb_serial)
 
     # Ensure test logs dir exists
-    local logs_dir="${OUTPUT_DIR}/test_logs"
-    mkdir -p "$logs_dir"
-
-    local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_DIR" "-tl" "$logs_dir")
+    local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_SUITE_BUILD")
     test_cmd+=("-s" "$adb_serial")
+
+    if [[ -n "$OUTPUT_DIR" ]]; then
+        local logs_dir="${OUTPUT_DIR}/test_logs"
+        test_cmd+=("-tl" "$logs_dir")
+    fi
 
     for test in "${TEST_NAME[@]}"; do
         test_cmd+=("-t" "$test")
