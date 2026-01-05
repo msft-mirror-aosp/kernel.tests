@@ -1125,7 +1125,7 @@ pontis yet. If device booted up already, please visit https://pontis.corp.google
 where the device is attached to physically and make sure adb through pontis is connected. Please \
 enforce connection in the WebUI if the device shows up but is not yet connected. When adb server \
 on the host where the device is attached to physically is still running, the adb through pontis \
-will fail to connect autimatically, please try killing adb server (adb kill-server) on the host." 
+will fail to connect autimatically, please try killing adb server (adb kill-server) on the host."
             fi
         fi
         return 1 # Failure
@@ -1161,7 +1161,7 @@ function wait_for_device_in_adb() {
             log_level=1
         fi
         if check_adb_status "$log_level"; then
-            log_info "Device $DEVICE_SERIAL_NUMBER is ready in adb mode" 
+            log_info "Device $DEVICE_SERIAL_NUMBER is ready in adb mode"
             return 0 # Success
         fi
         sleep 10
@@ -1378,7 +1378,7 @@ function flash_gsi_build() {
         fi
         if [[ -f "$GSI_BUILD/pvmfw.img" && "$_pvmfw_partition_output" == *yes* \
         && "$PRODUCT" != "raven" && "$PRODUCT" != "oriole" ]]; then
-            _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot bootloader"
+            _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot bootloader && sleep 3"
             _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash pvmfw $GSI_BUILD/pvmfw.img"
         fi
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
