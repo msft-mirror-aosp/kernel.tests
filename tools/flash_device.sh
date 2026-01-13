@@ -20,6 +20,7 @@ KASAN=false
 DISABLE_VERIFICATION=true
 EXTRA_OPTIONS=()
 DEVICE_VARIANT="userdebug"
+DEVICE_LUNCH_TARGET=
 
 ABI=
 PRODUCT=
@@ -92,6 +93,9 @@ function print_help() {
     echo "  --device-variant=<device_variant>"
     echo "                        [Optional] Device variant such as userdebug, user, or eng."
     echo "                        If not specified, will be userdebug by default."
+    echo "  --device-lunch-target=<device_lunch_target>"
+    echo "                        [Optional] Device lunch target such as frankel_16k-trunk_pixel_kernel_6_12-userdebug."
+    echo "                        If not specified, will use default."
     echo "  -h, --help            Display this help message and exit"
     echo ""
     echo "Examples:"
@@ -231,6 +235,10 @@ function parse_arg() {
                 ;;
             --device-variant=*)
                 DEVICE_VARIANT=$(echo $1 | sed -e "s/^[^=]*=//g")
+                shift
+                ;;
+            --device-lunch-target=*)
+                DEVICE_LUNCH_TARGET=$(echo $1 | sed -e "s/^[^=]*=//g")
                 shift
                 ;;
             --skip-update-bootloader)
@@ -1289,11 +1297,11 @@ function flash_platform_build() {
     [[ -x "$PLATFORM_REPO_ROOT/vendor/google/tools/flashall" ]]; then
         cd "$PLATFORM_REPO_ROOT" || { log_error "Fail to go to $PLATFORM_REPO_ROOT" && exit 1; }
         log_info "Flashing device by vendor/google/tools/flashall with platform build from ${PLATFORM_BUILD}"
-        if [[ -z "${TARGET_PRODUCT:-}" || "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
+        if [[ -z "${TARGET_PRODUCT:-}" || "${TARGET_PRODUCT:-}" != *"$PRODUCT"* ]]; then
             if [[ "${PLATFORM_VERSION:-}" == aosp-* || "${PLATFORM_VERSION:-}" == AOSP* ]]; then
-                set_platform_repo "aosp_$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
+                set_platform_repo "aosp_$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT" "$DEVICE_LUNCH_TARGET"
             else
-                set_platform_repo "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
+                set_platform_repo "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT" "$DEVICE_LUNCH_TARGET"
             fi
         fi
         _flash_cmd="vendor/google/tools/flashall  --nointeractive -w -s $DEVICE_SERIAL_NUMBER"
@@ -1840,16 +1848,18 @@ elif [[ -n "$PLATFORM_BUILD" && -d "$PLATFORM_BUILD" ]]; then
     fi
     if [[ "$PLATFORM_REPO_ROOT" == "$PLATFORM_BUILD" ]]; then
         if [[ "$SKIP_BUILD" == "false" ]]; then
-            if [[ -z "${TARGET_PRODUCT:-}" || "${TARGET_PRODUCT:-}" != *"$PRODUCT" ]]; then
+            if [[ -n "$DEVICE_LUNCH_TARGET" ]]; then
+                set_platform_repo  "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT" "$DEVICE_LUNCH_TARGET"
+            elif [[ -z "${TARGET_PRODUCT:-}" || "${TARGET_PRODUCT:-}" != *"$PRODUCT"* ]]; then
                 if [[ "${PLATFORM_VERSION:-}" == aosp-* || "${PLATFORM_VERSION:-}" == AOSP* ]]; then
-                    set_platform_repo "aosp_$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
+                    set_platform_repo "aosp_$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT" "$DEVICE_LUNCH_TARGET"
                 else
-                    set_platform_repo "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT"
+                    set_platform_repo "$PRODUCT" "userdebug" "$PLATFORM_REPO_ROOT" "$DEVICE_LUNCH_TARGET"
                 fi
             elif [[ "${TARGET_PRODUCT:-}" == *"$PRODUCT" ]]; then
                 echo "TARGET_PRODUCT=${TARGET_PRODUCT}, ANDROID_PRODUCT_OUT=${ANDROID_PRODUCT_OUT}"
             fi
-            if [[ "${TARGET_PRODUCT:-}" == *"$PRODUCT" ]]; then
+            if [[ "${TARGET_PRODUCT:-}" == *"$PRODUCT"* ]]; then
                 build_platform
             else
                 log_error "Can not build platform build due to lunch build target failure"
