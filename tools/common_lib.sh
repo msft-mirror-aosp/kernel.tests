@@ -388,8 +388,8 @@ function set_platform_repo() {
     local product="$1"
     local device_variant="$2" # e.g., "userdebug"
     local platform_root="$3"
+    local lunch_target="${4:-}" # defaults to empty
     local resolved_root
-    local lunch_target
     local envsetup_script
 
     # Validate arguments
@@ -416,20 +416,24 @@ function set_platform_repo() {
         return 1
     fi
 
-    if [[ -f "${resolved_root}/build/release/release_configs/trunk_staging.textproto" ]]; then
-        lunch_target="${product}-trunk_staging-${device_variant}"
-    else
-        lunch_target="${product}-${device_variant}"
+    if [[ -z "$lunch_target" ]]; then
+        if [[ -f "${resolved_root}/build/release/release_configs/trunk_staging.textproto" ]]; then
+            lunch_target="${product}-trunk_staging-${device_variant}"
+        else
+            lunch_target="${product}-${device_variant}"
+        fi
+        log_info "Determined lunch target: ${BOLD}${lunch_target}${END}"
     fi
-    log_info "Determined lunch target: ${BOLD}${lunch_target}${END}"
 
-    # Temporarily change to the repo root to run the commands
-    # Use pushd/popd to manage directory changes reliably
-    log_info "Changing directory to '${resolved_root}' for setup..."
+    if [[ "$PWD" != "$resolved_root" ]]; then
+        # Temporarily change to the repo root to run the commands
+        # Use pushd/popd to manage directory changes reliably
+        log_info "Changing directory to '${resolved_root}' for setup..."
 
-    pushd "$resolved_root" &> /dev/null || { log_error "Failed to pushd into platform root: '${resolved_root}'"; return 1; }
+        pushd "$resolved_root" &> /dev/null || { log_error "Failed to pushd into platform root: '${resolved_root}'"; return 1; }
 
-    log_info "Changed directory to '${resolved_root}' successfully."
+        log_info "Changed directory to '${resolved_root}' successfully."
+    fi
 
     # Source the setup script. This executes it in the CURRENT shell.
     env_cmd=("." "${envsetup_script}")
