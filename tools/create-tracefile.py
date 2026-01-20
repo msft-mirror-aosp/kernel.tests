@@ -360,7 +360,7 @@ def load_kernel_clang_version(repo_dir: str) -> str:
   clang_version = ""
   with open(config_path, "r") as config_file:
     for line in config_file:
-      match = re.fullmatch(r"\s*CLANG_VERSION=(\S*)\s*", line)
+      match = re.fullmatch(r"\s*CLANG_VERSION=\"?([^\"\s]*)\"?\s*", line)
       if match:
         clang_version = match.group(1)
   return clang_version
