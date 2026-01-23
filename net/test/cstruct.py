@@ -77,7 +77,7 @@ import re
 def _PythonFormat(fmt):
   if "A" in fmt:
     fmt = fmt.replace("A", "s")
-  return re.split('\d+$', fmt)[0]
+  return re.split(r'\d+$', fmt)[0]
 
 def CalcSize(fmt):
   return struct.calcsize(_PythonFormat(fmt))
