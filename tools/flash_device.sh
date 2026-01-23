@@ -11,7 +11,8 @@ set -euo pipefail
 MIX_SCRIPT_NAME="build_mixed_kernels_ramdisk"
 MIN_FASTBOOT_VERSION="35.0.2-12583183"
 VENDOR_KERNEL_IMGS=("boot.img" "initramfs.img" "dtb.img" "dtbo.img" "vendor_dlkm.img")
-VENDOR_KERNEL_IMGS_SPECIAL=("boot.img" "vendor_kernel_boot.img" "dtbo.img" "vendor_dlkm.img" "system_dlkm.img")
+# For Pixel kernel branches like kernel-pixel-android*-gs-pixel*
+VENDOR_KERNEL_IMGS_PIXEL_BRANCH=("boot.img" "vendor_kernel_boot.img" "dtbo.img" "vendor_dlkm.img" "system_dlkm.img")
 SKIP_UPDATE_BOOTLOADER=false
 SKIP_BUILD=false
 GCOV=false
@@ -894,8 +895,8 @@ function download_vendor_kernel_for_direct_flash() {
     local _vendor_kernel_dir="$VENDOR_KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
     local _image_patterns=("${VENDOR_KERNEL_IMGS[@]}")
 
-    if [[ "$_build_info" == *kernel-pixel-android16-gs-pixel-6.12* ]]; then
-        _image_patterns=("${VENDOR_KERNEL_IMGS_SPECIAL[@]}")
+    if [[ "$_build_info" == *kernel-pixel-android*-gs-pixel* ]]; then
+        _image_patterns=("${VENDOR_KERNEL_IMGS_PIXEL_BRANCH[@]}")
     fi
 
     log_info "Downloading vendor kernel artifacts ${_image_patterns[*]} from $VENDOR_KERNEL_BUILD"
