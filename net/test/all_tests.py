@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import ctypes
 import importlib
 import os
@@ -60,7 +61,32 @@ all_test_modules = [
 ]
 
 
-def RunTests(modules_to_test):
+def FilterTests(suite, exclude_test_ids):
+  """Returns a new TestSuite, skipping tests that exactly match the exclude_test_ids.
+
+  Args:
+    suite: The unittest.TestSuite to filter.
+    exclude_test_ids: A list of exact test IDs to exclude.
+
+  Returns:
+    A new unittest.TestSuite containing only the non-excluded tests.
+  """
+  new_suite = unittest.TestSuite()
+  for test in suite:
+    if isinstance(test, unittest.TestSuite):
+      # Recursively filter nested suites
+      sub_suite = FilterTests(test, exclude_test_ids)
+      if sub_suite.countTestCases() > 0:
+        new_suite.addTest(sub_suite)
+    elif isinstance(test, unittest.TestCase):
+      # Check for exact match
+      if test.id() in exclude_test_ids:
+        continue
+      new_suite.addTest(test)
+  return new_suite
+
+
+def RunTests(modules_to_test, excludes=None):
   uname = os.uname()
   linux = uname.sysname
   kver = uname.release
@@ -84,8 +110,15 @@ def RunTests(modules_to_test):
 
   test_suite = unittest.defaultTestLoader.loadTestsFromNames(modules_to_test)
 
+  # Filter the tests if exclude patterns are provided
+  if excludes:
+    test_suite = FilterTests(test_suite, excludes)
+
   assert test_suite.countTestCases() > 0, (
-      'Inconceivable: no tests found! Command line: %s' % ' '.join(sys.argv))
+      'Inconceivable: no tests found or all tests are filtered out! Command'
+      ' line: %s'
+      % ' '.join(sys.argv)
+  )
 
   runner = unittest.TextTestRunner(verbosity=2)
   result = runner.run(test_suite)
@@ -93,8 +126,34 @@ def RunTests(modules_to_test):
 
 
 if __name__ == '__main__':
-  # If one or more tests were passed in on the command line, only run those.
-  if len(sys.argv) > 1:
-    RunTests(sys.argv[1:])
-  else:
-    RunTests(all_test_modules)
+  # Use argparse to handle the exclude option and positional arguments
+  parser = argparse.ArgumentParser(
+      description='Run network tests.',
+      formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+  )
+
+  parser.add_argument(
+      '--exclude',
+      action='append',
+      dest='excludes',
+      help=(
+          'Do not run tests with the exact specified ID. Can be used multiple'
+          ' times.'
+      ),
+  )
+
+  parser.add_argument(
+      'modules',
+      nargs='*',
+      help=(
+          'Specific test modules to run. If not specified, all modules will'
+          ' be run'
+      ),
+  )
+
+  args = parser.parse_args()
+
+  # Determine which modules to run
+  modules_to_run = args.modules or all_test_modules
+
+  RunTests(modules_to_run, excludes=args.excludes)
