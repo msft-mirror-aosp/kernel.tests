@@ -416,13 +416,13 @@ fi
 
 log_info "Will run tests with test artifacts in $TEST_DIR"
 
-tf_cli=$(find "$TEST_DIR" -type f -name "[cv]ts-tradefed" -executable)
+tf_cli=$(find "$TEST_DIR" -type f -name "[cvp]ts-tradefed" -executable)
 testcases_path=$(find "$TEST_DIR" -type d -name "testcases")
 if [[ -n "$tf_cli" && -n "$testcases_path" ]]; then
     xts=$(basename "$tf_cli" | cut -d'-' -f1)
     log_info "Will run tests with ${xts}-tradefed from $TEST_DIR"
     log_info "Many ${xts^^} tests need WIFI connection, please make sure WIFI is connected before you run the test."
-    tf_cli+=" run commandAndExit ${xts} --skip-device-info --log-level-display info"
+    tf_cli+=" run commandAndExit ${xts} --log-level-display info"
     TEST_DIR=$(dirname "$testcases_path")
     unset_android_environment
 else
