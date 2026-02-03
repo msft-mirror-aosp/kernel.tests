@@ -483,6 +483,10 @@ function format_ab_kernel_build_string() {
     if [[ -z "$_build_target" ]]; then
         _build_target="kernel_aarch64"
     fi
+    if [[ "$_build_target" != kernel_aarch* ]]; then
+        log_error "The provided kernel build $KERNEL_BUILD is not an Android Common Kernel build target like kernel_aarch*"
+        exit 1
+    fi
     if [[ -z "$_build_id" ]]; then
         _build_id="latest"
     fi
@@ -954,7 +958,10 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     local _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 5"
     if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification"
+    else
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER oem enable-verification"
     fi
+
     if [[ -f "$KERNEL_BUILD/boot-lz4.img" ]]; then
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash boot $KERNEL_BUILD/boot-lz4.img"
     elif [[ -f "$KERNEL_BUILD/boot-gz.img" ]]; then
@@ -1311,6 +1318,8 @@ function flash_platform_build() {
         prepare_to_flash_platform_build_from_local_directory
 
         _flash_cmd="$LOCAL_FLASH_CLI --nointeractive --force_flash_partitions -w -s $DEVICE_SERIAL_NUMBER"
+        # A workaround when the local flash CLI in Android kernel tree doesn't work
+        #_flash_cmd="$COMMON_LIB_LOCAL_FLASH_CLI --nointeractive --force_flash_partitions -w -s $DEVICE_SERIAL_NUMBER"
         if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
             _flash_cmd+=" --disable_verity --disable_verification"
         fi
@@ -1832,6 +1841,10 @@ log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KER
 [[ "${VENDOR_KERNEL_BUILD,,}" == "none" ]] && VENDOR_KERNEL_BUILD=""
 
 # --- Platform Build Processing ---
+if [[ "$PLATFORM_BUILD" == ab:://* ]]; then
+    log_warn "The platform ab build string should start with 'ab://', not 'ab:://'. Remove the redundant ':'"
+    PLATFORM_BUILD="${PLATFORM_BUILD/::\/\//:\/\/}"
+fi
 if [[ "$PLATFORM_BUILD" == ab://* ]]; then
     format_ab_platform_build_string
 elif [[ -n "$PLATFORM_BUILD" && -d "$PLATFORM_BUILD" ]]; then
@@ -1886,7 +1899,7 @@ elif [[ -n "$PLATFORM_BUILD" && -d "$PLATFORM_BUILD" ]]; then
             log_info "Use platform build from $PLATFORM_BUILD"
         else
             log_error "Can't find valid image in $PLATFORM_BUILD"
-            exit
+            exit 1
         fi
     fi
 fi
@@ -1895,7 +1908,17 @@ log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KER
 
 find_flashstation_binary
 
+# --- Android Common Kernel Build (GKI) processing ---
+if [[ "$KERNEL_BUILD" == ab:://* ]]; then
+    log_warn "The kernel ab build string should start with 'ab://', not 'ab:://'. Remove the redundant ':'"
+    KERNEL_BUILD="${KERNEL_BUILD/::\/\//:\/\/}"
+fi
+
 if [[ "$KERNEL_BUILD" == ab://* ]]; then
+    if [[ "$KERNEL_BUILD" == *raviole* ]]; then
+        log_error "$KERNEL_BUILD is a vendor kernel build. Please use -vkb flag to specify a vendor kernel build"
+        exit 1
+    fi
     format_ab_kernel_build_string
     download_kernel_build
 elif [[ -n "$KERNEL_BUILD" && -d "$KERNEL_BUILD" ]]; then
@@ -1927,13 +1950,20 @@ elif [[ -n "$KERNEL_BUILD" && -d "$KERNEL_BUILD" ]]; then
     fi
 fi
 
+log_info "PLATFORM_BUILD=$PLATFORM_BUILD, KERNEL_BUILD=$KERNEL_BUILD, VENDOR_KERNEL_BUILD=$VENDOR_KERNEL_BUILD"
+
+# --- Vendor Kernel Build (processing ---
+if [[ "$VENDOR_KERNEL_BUILD" == ab:://* ]]; then
+    log_warn "The vendor kernel ab build string should start with 'ab://', not 'ab:://'. Remove the redundant ':'"
+    VENDOR_KERNEL_BUILD="${VENDOR_KERNEL_BUILD/::\/\//:\/\/}"
+fi
 if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     format_ab_vendor_kernel_build_string
     log_info "Downloading vendor kernel build $VENDOR_KERNEL_BUILD"
-    if [[ -z "$PLATFORM_BUILD" ]] || [[ "$PRODUCT" != "oriole" && "$PRODUCT" != "raven" ]]; then
-        download_vendor_kernel_for_direct_flash
-    else
+    if [[ -n "$PLATFORM_BUILD" ]] && [[ "$VENDOR_KERNEL_BUILD" == *raviole* ]]; then
         download_vendor_kernel_build
+    else
+        download_vendor_kernel_for_direct_flash
     fi
 elif [[ -n "$VENDOR_KERNEL_BUILD" && -d "$VENDOR_KERNEL_BUILD" ]]; then
     # Check if vendor kernel repo is provided
@@ -2046,7 +2076,7 @@ elif [[ -n "$GSI_BUILD" && -d "$GSI_BUILD" ]]; then
         fi
         if [[ ! -f "${GSI_BUILD}/system.img" ]]; then
             log_error "Can't find valid image in ${GSI_BUILD}"
-            exit
+            exit 1
         fi
     else
         gsi_image=$(find "$GSI_BUILD" -maxdepth 1 -type f -name "*_arm64-img-*.zip")
