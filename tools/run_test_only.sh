@@ -96,14 +96,15 @@ function run_atest_in_platform_repo() {
 
     local atest_cli=""
     if [[ "$USE_RBE" == false ]]; then
-        atest_cli+="USE_RBE=false RBE_ENABLED=false "
+        atest_cli+="USE_RBE=false RBE_ENABLED=false"
     fi
-    atest_cli+="atest ${TEST_NAMES[*]} -s $SERIAL_NUMBER --"
+    atest_cli+=" atest ${TEST_NAMES[*]} -s $SERIAL_NUMBER"
+    atest_cli+=" ${TEST_ARGS[*]} --"
     if $GCOV; then
         atest_cli+="$TRADEFED_GCOV_OPTIONS"
     fi
-    log_info "Running the test with ATest: $atest_cli ${TEST_ARGS[*]}"
-    eval "$atest_cli" "${TEST_ARGS[*]}"
+    log_info "Running the test with ATest: $atest_cli"
+    eval "$atest_cli"
     exit_code=$?
 
     if $GCOV; then
