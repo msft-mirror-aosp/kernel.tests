@@ -98,21 +98,35 @@ fi
 file_name="$file_path/${array[5]}"
 if [[ -f "$existing_file_name" ]]; then
     log_info "Use the existing $existing_file_name. Skipping download."
+    exit 0
+fi
+if [[ ! -d "$file_path" ]]; then
+    mkdir -p "$file_path"
+fi
+fetch_cli+=" --branch ${array[2]}"
+fetch_cli+=" --target ${array[3]}"
+if [[ "${array[4]}" != latest* ]]; then
+    fetch_cli+=" --bid ${array[4]}"
 else
-    if [[ ! -d "$file_path" ]]; then
-        mkdir -p "$file_path"
-    fi
-    fetch_cli+=" --branch ${array[2]}"
-    fetch_cli+=" --target ${array[3]}"
-    if [[ "${array[4]}" != latest* ]]; then
-        fetch_cli+=" --bid ${array[4]}"
-    else
-        fetch_cli+=" --latest"
-    fi
-    fetch_cli+="$EXTRA_OPTIONS"
-    fetch_cli+=" '${array[5]}'"
-    cd "$file_path"  || { log_error "Failed to go to $file_path"; exit 1; }
-    log_info "Downloading ${array[5]} to $file_path with command: $fetch_cli"
+    fetch_cli+=" --latest"
+fi
+fetch_cli+="$EXTRA_OPTIONS"
+fetch_cli+=" '${array[5]}'"
+cd "$file_path"  || { log_error "Failed to go to $file_path"; exit 1; }
+log_info "Running command: $fetch_cli"
+eval "$fetch_cli" 2>/tmp/err.txt
+exit_code=$?
+
+if (( exit_code == 0 )); then
+    log_info "Downloaded ${array[5]} to $file_path"
+    exit 0
+elif grep -q "BuildNotFound" /tmp/err.txt; then
+    log_error "$BUILD_INFO is not found in the ab build server."
+    exit 1
+elif grep -q "StatusCode.UNAVAILABLE" /tmp/err.txt; then
+    log_warn "The build server is not available. Try again"
+    sleep 5
     eval "$fetch_cli"
 fi
+
 
