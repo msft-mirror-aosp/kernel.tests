@@ -689,6 +689,28 @@ function download_platform_build() {
             exit 1
         fi
     done
+    if [[ "$PLATFORM_BUILD" == ab://git_sc* && "$PLATFORM_BUILD" != ab://git_sc-qpr3-release* ]] || \
+       [[ "$PLATFORM_BUILD" == ab://git_tm* && "$PLATFORM_BUILD" != ab://git_tm-qpr3-release* ]]; then
+        local _bootloader_path=""
+        if [[ "$PLATFORM_BUILD" == ab://git_sc* ]] && [[ "$PLATFORM_BUILD" != ab://git_sc-qpr3-release* ]]; then
+            _bootloader_path="git_sc-qpr3-release/$PRODUCT-userdebug/13458412/bootloader.img"
+        fi
+        if [[ "$PLATFORM_BUILD" == ab://git_tm* ]] && [[ "$PLATFORM_BUILD" != ab://git_tm-qpr3-release* ]]; then
+            _bootloader_path="git_tm-qpr3-release/$PRODUCT-userdebug/13458367/bootloader.img"
+        fi
+        log_info "Downloading bootloader.img from ab://$_bootloader_path"
+        eval "$FETCH_SCRIPT ab://$_bootloader_path"
+        exit_code=$?
+        if (( exit_code == 0 )); then
+            log_info "Downloaded ab://$_bootloader_path"
+        else
+            log_error "Fail to download ab://$_bootloader_path"
+            exit 1
+        fi
+        rm -rf "$_device_dir/bootloader.img" || { log_error "Failed to clean up $_device_dir/bootloader.img" && exit 1; }
+        create_soft_link "$DOWNLOAD_PATH/$_bootloader_path" "$_device_dir/bootloader.img"
+        SKIP_UPDATE_BOOTLOADER=true
+    fi
     PLATFORM_BUILD="$_device_dir"
     echo ""
 }
@@ -1004,7 +1026,8 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
         _flash_cmd+=" && $_bootloader_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
     else
         _flash_cmd="$_bootloader_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot"
-        _flash_cmd+=" && sleep 5 && $_fastbootd_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
+        _flash_cmd+=" && sleep 5 && $_fastbootd_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER  reboot bootloader"
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
     fi
 
     log_info "Flashing GKI kernel with: $_flash_cmd"
@@ -1302,7 +1325,9 @@ function find_flashstation_binary() {
 }
 
 function flash_platform_build() {
-    if [[ "$SKIP_UPDATE_BOOTLOADER" == "true" ]] && [[ "$PLATFORM_BUILD" == ab://* ]] || [[ -z "$CL_FLASH_CLI" ]]; then
+    if [[ "$SKIP_UPDATE_BOOTLOADER" == "true" ]] && [[ "$PLATFORM_BUILD" == ab://* ]] || \
+       [[ "$PLATFORM_BUILD" == ab://git_sc* && "$PLATFORM_BUILD" != ab://git_sc-qpr3-release* ]] || \
+       [[ "$PLATFORM_BUILD" == ab://git_tm* && "$PLATFORM_BUILD" != ab://git_tm-qpr3-release* ]] || [[ -z "$CL_FLASH_CLI" ]]; then
         download_platform_build
     fi
 
@@ -1487,6 +1512,7 @@ function prepare_to_flash_platform_build_from_local_directory () {
     fi
 
     if [[ "$SKIP_UPDATE_BOOTLOADER" == "true" ]]; then
+       log_info "Remove bootloader requirement in $PLATFORM_BUILD/android-info.txt"
         awk '! /bootloader/' "$PLATFORM_BUILD"/android-info.txt > temp && mv temp "$PLATFORM_BUILD"/android-info.txt
     fi
     # skip update radio.img
