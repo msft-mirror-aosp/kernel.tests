@@ -36,6 +36,7 @@ readonly REQUIRED_COMMANDS=("adb" "dirname" "fastboot")
 THROUGH_PONTIS=false
 USE_DSU=false
 FORCE_DEBUGGABLE=true
+ENABLE_RAMDUMP=false
 
 SERIAL_NUMBER=
 FASTBOOT_SERIAL_NUMBER=
@@ -65,6 +66,8 @@ function print_help() {
     echo "  --use-dsu             [Optional] Whether to use DSU to install GSI image"
     echo "  --no-disable-verification"
     echo "                        [Optional] Do not disable verification"
+    echo "  --enable-ramdump"
+    echo "                        [Optional] Enable ramdump"
     echo "  --no-force-debuggable"
     echo "                        [Optional] Do not force debuggable on user build"
     echo "  -pb <platform_build>, --platform-build=<platform_build>"
@@ -270,6 +273,10 @@ function parse_arg() {
                 ;;
             --no-force-debuggable)
                 FORCE_DEBUGGABLE=false
+                shift
+                ;;
+            --enable-ramdump)
+                ENABLE_RAMDUMP=true
                 shift
                 ;;
             *)
@@ -959,6 +966,13 @@ function reboot_device_into_bootloader() {
     if [[ -n "$ADB_SERIAL_NUMBER" ]] && (( $(adb devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
         if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
             eval "adb -s $ADB_SERIAL_NUMBER root && adb -s $ADB_SERIAL_NUMBER disable-verity"
+            exit_code=$?
+            if (( exit_code == 0 )); then
+                log_info "Applied disable-verity on $ADB_SERIAL_NUMBER"
+            else
+                log_error "Fail to disable-verity on $ADB_SERIAL_NUMBER"
+                exit 1
+            fi
         fi
         log_info "Reboot $ADB_SERIAL_NUMBER into bootloader"
         adb -s "$ADB_SERIAL_NUMBER" reboot bootloader
@@ -978,6 +992,11 @@ function reboot_device_into_bootloader() {
             log_info "Adding --disable-verification option in fastboot flash command"
             FASTBOOT_FLASH_OPTION=" --disable-verification"
         fi
+    fi
+    if [[ "$ENABLE_RAMDUMP" == "true" ]]; then
+        fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem ramdump enable
+    else
+        fastboot -s "$FASTBOOT_SERIAL_NUMBER" oem ramdump disable
     fi
 }
 
@@ -1036,6 +1055,7 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     if (( exit_code == 0 )); then
         echo "Flash GKI kernel succeeded"
         wait_for_device_in_adb
+        wait_for_device_boot_complete
         return
     else
         echo "Flash GKI kernel failed with exit code $exit_code"
@@ -1116,6 +1136,7 @@ function flash_vendor_kernel_build() {
     fi
 
     wait_for_device_in_adb
+    wait_for_device_boot_complete
 }
 
 function is_device_in_adb() {
@@ -1247,6 +1268,33 @@ function wait_for_device_in_adb() {
 
     log_error "Timed out while waiting for ${ADB_SERIAL_NUMBER:-${DEVICE_SERIAL_NUMBER:-$SERIAL_NUMBER}} \
 in adb mode"
+    exit 1
+}
+
+function wait_for_device_boot_complete() {
+    local timeout_seconds="${1:-300}"  # Timeout in seconds (equal to  5 minutes)
+    local warning_seconds=$(( timeout_seconds / 3 ))  # Start warning in seconds
+
+    local start_time
+    local end_time
+    start_time=$(date +%s)
+    end_time=$((start_time + timeout_seconds))
+    warning_time=$((start_time + warning_seconds))
+
+    while (( $(date +%s) < end_time )); do
+        local log_level=0
+        if (( $(date +%s) > warning_time )); then
+            log_level=1
+        fi
+        if is_device_boot_complete "$log_level"; then
+            log_info "Device $DEVICE_SERIAL_NUMBER is boot complete"
+            return 0 # Success
+        fi
+        sleep 10
+    done
+
+    log_error "Timed out while waiting for ${ADB_SERIAL_NUMBER:-${DEVICE_SERIAL_NUMBER:-$SERIAL_NUMBER}} \
+boot complete"
     exit 1
 }
 
@@ -1395,6 +1443,7 @@ function flash_platform_build() {
     if (( exit_code == 0 )); then
         log_info "Flashing platform build succeeded"
         wait_for_device_in_adb
+        wait_for_device_boot_complete
         return 0
     else
         log_error "Flashing platform build failed with exit code $exit_code"
@@ -1471,6 +1520,7 @@ function flash_gsi_build() {
     if (( exit_code == 0 )); then
         echo "Flash GSI succeeded"
         wait_for_device_in_adb
+        wait_for_device_boot_complete
         return
     else
         echo "Flash GSI failed with exit code $exit_code"
@@ -1730,6 +1780,18 @@ function is_device_ready_for_adb_command() {
         return 0 # Succeed. Device is ready for adb command
     fi
     log_warn "Device $ADB_SERIAL_NUMBER is not ready to take adb command yet"
+    return 1 # Failed. Device is not ready for adb command
+}
+
+function is_device_boot_complete() {
+    local _output
+    _sys_boot_output=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop sys.boot_completed)
+    if [[ "$_sys_boot_output" == "1" ]]; then
+        log_info "Device $ADB_SERIAL_NUMBER is sys.boot_completed."
+        return 0 # Succeed.
+    fi
+    log_warn "Device $ADB_SERIAL_NUMBER is not boot complete yet: \
+sys.boot_completed=$_sys_boot_output"
     return 1 # Failed. Device is not ready for adb command
 }
 
