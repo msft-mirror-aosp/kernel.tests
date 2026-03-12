@@ -339,7 +339,7 @@ function get_test_suite_base_dir() {
     if [[ -n "$CACHE_DIR" ]]; then
         echo "$(realpath "$CACHE_DIR")"
     else
-        echo "/tmp/bisect_builds"
+        echo "$DOWNLOAD_PATH"
     fi
 }
 
