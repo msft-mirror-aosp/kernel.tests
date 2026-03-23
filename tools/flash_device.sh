@@ -872,10 +872,6 @@ function download_vendor_kernel_build() {
     fi
     mkdir -p "$_vendor_kernel_dir" || { log_error "Failed to create $_vendor_kernel_dir folder" && exit 1; }
 
-    if [[ "$_build_info" == *6.6* ]]; then
-        _file_patterns+=("*vendor_dev_nodes_fragment.img")
-    fi
-
     case "$PRODUCT" in
         oriole | raven | bluejay)
             _file_patterns+=( "gs101-a0.dtb" "gs101-b0.dtb" )
@@ -901,12 +897,9 @@ function download_vendor_kernel_build() {
             _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "zuma-a0-foplp.dtb" "zuma-a0-ipop.dtb" "zuma-b0-foplp.dtb" "zuma-b0-ipop.dtb" \
             "zumapro-a0-foplp.dtb" "zumapro-a0-ipop.dtb" "zumapro-a1-foplp.dtb" "zumapro-a1-ipop.dtb" )
             ;;
-        frankel | blazer | mustang)
-            _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "lga-a0.dtb" "lga-b0.dtb" )
-            ;;
         *)
-            _file_pattern+=("vendor_dlkm.img" "system_dlkm.img" "*-a0-foplp.dtb" "*-a0-ipop.dtb" "*-a1-foplp.dtb" \
-            "*-a1-ipop.dtb" "*-a0.dtb" "*-b0.dtb")
+            log_info "Using default patterns for product '${PRODUCT}'."
+            _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "*-a0.dtb" "*-b0.dtb" )
             ;;
     esac
 
