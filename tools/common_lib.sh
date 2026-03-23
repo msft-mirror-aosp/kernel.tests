@@ -482,16 +482,46 @@ function set_platform_repo() {
 
 # Function to create softlink
 function create_soft_link() {
-    local original_file_name="$1"
-    local soft_link_name="$2"
-    ln -s "$original_file_name" "$soft_link_name"
-    exit_code=$?
-    if (( exit_code == 0 )); then
-        log_info "Linked $original_file_name to $soft_link_name"
-    else
-        log_error "Failed to link $original_file_name to $soft_link_name"
+    if [[ $# -ne 2 ]]; then
+        log_error "Usage: create_soft_link <file_name> <soft_link_target>"
         return 1
     fi
+    local file_name="$1"
+    local soft_link_name="$2"
+    local files=()
+
+    # Enable nullglob so that patterns that don't match any files expand to nothing.
+    shopt -s nullglob
+    # Expand the pattern and populate the 'files' array.
+    for f in ${file_name}; do
+        files+=("$f")
+    done
+    # Disable nullglob
+    shopt -u nullglob
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        log_error "create_soft_link: No files matched by pattern: '${file_name}'"
+        return 1
+    fi
+
+    for original_file in "${files[@]}"; do
+        local current_soft_link_name
+        if [[ "$soft_link_name" ==  *"*"* ]]; then
+            local dir_path=$(dirname "$soft_link_name")
+            local file_name=$(basename "${original_file}")
+            current_soft_link_name="${dir_path}/${file_name}"
+        else
+            current_soft_link_name="$soft_link_name"
+        fi
+        if ! ln -s "${original_file}" "${current_soft_link_name}"; then
+            local ln_exit_code=$?
+            log_error "Failed to create soft link from '${original_file}' to '${current_soft_link_name}'. \
+ln exited with code ${ln_exit_code}"
+            return 1 # Exit the function on the first failure.
+        fi
+        log_info "Successfully created soft link '${current_soft_link_name}' -> '${original_file}'"
+    done
+    return 0
 }
 
 # Function to convert/normalize an 'ab://' string
