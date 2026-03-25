@@ -37,6 +37,7 @@ THROUGH_PONTIS=false
 USE_DSU=false
 FORCE_DEBUGGABLE=true
 ENABLE_RAMDUMP=false
+FORCE_MIXED_BUILD=false
 
 SERIAL_NUMBER=
 FASTBOOT_SERIAL_NUMBER=
@@ -70,6 +71,8 @@ function print_help() {
     echo "                        [Optional] Enable ramdump"
     echo "  --no-force-debuggable"
     echo "                        [Optional] Do not force debuggable on user build"
+    echo "  --force-mixed-build"
+    echo "                        [Optional] Force mixed build approach. The vendor_kernel_build has to be provided"
     echo "  -pb <platform_build>, --platform-build=<platform_build>"
     echo "                        [Optional] The platform build path. Can be a local path or a remote build"
     echo "                        as ab://<branch>/<build_target>/<build_id>."
@@ -277,6 +280,10 @@ function parse_arg() {
                 ;;
             --enable-ramdump)
                 ENABLE_RAMDUMP=true
+                shift
+                ;;
+            --force-mixed-build)
+                FORCE_MIXED_BUILD=true
                 shift
                 ;;
             *)
@@ -865,10 +872,6 @@ function download_vendor_kernel_build() {
     fi
     mkdir -p "$_vendor_kernel_dir" || { log_error "Failed to create $_vendor_kernel_dir folder" && exit 1; }
 
-    if [[ "$_build_info" == *6.6* ]]; then
-        _file_patterns+=("*vendor_dev_nodes_fragment.img")
-    fi
-
     case "$PRODUCT" in
         oriole | raven | bluejay)
             _file_patterns+=( "gs101-a0.dtb" "gs101-b0.dtb" )
@@ -895,8 +898,8 @@ function download_vendor_kernel_build() {
             "zumapro-a0-foplp.dtb" "zumapro-a0-ipop.dtb" "zumapro-a1-foplp.dtb" "zumapro-a1-ipop.dtb" )
             ;;
         *)
-            _file_pattern+=("vendor_dlkm.img" "system_dlkm.img" "*-a0-foplp.dtb" "*-a0-ipop.dtb" "*-a1-foplp.dtb" \
-            "*-a1-ipop.dtb" "*-a0.dtb" "*-b0.dtb")
+            log_info "Using default patterns for product '${PRODUCT}'."
+            _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "*-a0.dtb" "*-b0.dtb" )
             ;;
     esac
 
@@ -2087,7 +2090,7 @@ fi
 if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     format_ab_vendor_kernel_build_string
     log_info "Downloading vendor kernel build $VENDOR_KERNEL_BUILD"
-    if [[ -n "$PLATFORM_BUILD" ]] && [[ "$VENDOR_KERNEL_BUILD" == *raviole* ]]; then
+    if [[ -n "$PLATFORM_BUILD" ]] && [[ "$VENDOR_KERNEL_BUILD" == *raviole* || "$FORCE_MIXED_BUILD" == "true" ]]; then
         download_vendor_kernel_build
     else
         download_vendor_kernel_for_direct_flash
@@ -2159,7 +2162,7 @@ else  # Platform build provided
         log_info "Flash platform build from $PLATFORM_BUILD"
         flash_platform_build
     elif [[ -z "$KERNEL_BUILD" && -n "$VENDOR_KERNEL_BUILD" ]]; then  # Vendor kernel build and platform build
-        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" ]]; then
+        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" || "$FORCE_MIXED_BUILD" == "true" ]]; then
             log_info "Mix vendor kernel and platform build"
             mixing_build
             flash_platform_build
@@ -2176,7 +2179,7 @@ else  # Platform build provided
         flash_platform_build
         flash_kernel_build
     elif [[ -n "$KERNEL_BUILD" && -n "$VENDOR_KERNEL_BUILD" ]]; then  # All three builds provided
-        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" ]]; then
+        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" || "$FORCE_MIXED_BUILD" == "true" ]]; then
             log_info "Mix common kernel, vendor kernel and platform build"
             mixing_build
             flash_platform_build
