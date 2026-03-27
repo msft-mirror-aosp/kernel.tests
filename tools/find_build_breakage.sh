@@ -9,9 +9,9 @@
 # --- Configuration Constants ---
 readonly DEFAULT_BISECT_CONFIG_FILENAME="bisect_builds.xml"
 readonly DEFAULT_OUTPUT_DIR="out/$(date +%Y%m%d_%H%M%S)"
-readonly DEFAULT_TEST_RETRY=3
-readonly DEFAULT_SETUP_RETRY=3
-readonly DEFAULT_DOWNLOAD_RETRY=3
+readonly DEFAULT_TEST_RETRY=2
+readonly DEFAULT_SETUP_RETRY=2
+readonly DEFAULT_DOWNLOAD_RETRY=2
 readonly -A BUILD_TYPE_MAP=(
     ["pb"]="PLATFORM_BUILD"
     ["kb"]="KERNEL_BUILD"
