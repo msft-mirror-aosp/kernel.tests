@@ -14,6 +14,8 @@ TEST_ARGS=()
 TEST_DIR=
 TEST_NAMES=()
 USE_RBE=false
+WIFI_NETWORK="Google-Guest"
+WIFI_PASSWORD=""
 readonly REQUIRED_COMMANDS=("adb" "dirname")
 
 function print_help() {
@@ -38,6 +40,10 @@ function print_help() {
     echo "                        If test is not specified, no tests will be run."
     echo "  -tf <tradefed_binary_path>, --tradefed-bin=<tradefed_binary_path>"
     echo "                        The alternative tradefed binary to run test with."
+    echo "  -wn <wifi_network>, --wifi-network=<wifi_network_name>"
+    echo "                        The WIFI network for the device under test."
+    echo "  -wp <wifi_password>, --wifi-password=<wifi_password>"
+    echo "                        The WIFI password for the device under test."
     echo "  --gcov                Collect coverage data from the test result"
     echo "  --use-rbe             Enable Remote Build Execution to speed up testing process."
     echo "                        Requires RBE service access; See go/build-fast for details."
@@ -85,6 +91,98 @@ function sync_platform_repo() {
         log_error "'lunch' tool failed to configure build variants. Please check."
         exit 1
     fi
+}
+
+function wait_for_wifi_status() {
+    local expected_status_substr="$1"
+    local timeout_sec="${2:-30}"
+    local interval_sec="${3:-2}"
+    local elapsed_time=0
+
+    log_info "Waiting for Wi-Fi status on ${SERIAL_NUMBER} to contain '${expected_status_substr}'..."
+
+    while (( elapsed_time < timeout_sec )); do
+        local wifi_status=$(adb -s "${SERIAL_NUMBER}" shell cmd wifi status 2>&1)
+        if [[ "${wifi_status}" == *"${expected_status_substr}"* ]]; then
+            log_info "Wi-Fi status on ${SERIAL_NUMBER} matched: ${wifi_status}"
+            return 0
+        fi
+        sleep "${interval_sec}"
+        (( elapsed_time += interval_sec ))
+        log_info "Retrying Wi-Fi status check... (${elapsed_time}/${timeout_sec}s)"
+    done
+
+    log_error "Timeout waiting for Wi-Fi status '${expected_status_substr}' on ${SERIAL_NUMBER}. \
+Current status: $(adb -s "${SERIAL_NUMBER}" shell cmd wifi status 2>&1)"
+    return 1
+}
+
+function connect_to_wifi() {
+    # 1. Ensure Wi-Fi is enabled.
+    local wifi_status=$(adb -s "${SERIAL_NUMBER}" shell cmd wifi status 2>&1)
+    if [[ "$wifi_status" == *"Wifi is disabled"* ]]; then
+        log_info "WiFi is currently disabled on ${SERIAL_NUMBER}. Attempting to enable..."
+        if ! adb -s "$SERIAL_NUMBER" shell svc wifi enable && ! adb -s "$SERIAL_NUMBER" shell cmd wifi set-wifi-enabled enabled; then
+            log_error "Unable to send command to enable WiFi on $SERIAL_NUMBER"
+            exit 1
+        fi
+        if ! wait_for_wifi_status "Wifi is enabled"; then
+            log_error "Unable to send command to enable WiFi on $SERIAL_NUMBER"
+            exit 1
+        fi
+    fi
+    # 2. Check if already connected.
+    wifi_status=$(adb -s "${SERIAL_NUMBER}" shell cmd wifi status 2>&1)
+    if [[ "${wifi_status}" == *"Wifi is connected"* ]]; then
+        log_info "${SERIAL_NUMBER} is already connected to Wi-Fi."
+        return 0
+    fi
+    # 3. Trying to connect to WiFi
+    local target_wifi_network="${WIFI_NETWORK}"
+    local connect_command=""
+    log_info "${SERIAL_NUMBER} is not currently connected to Wi-Fi. Attempting to connect..."
+    if [[ ("$BOARD" == "cutf" || "$PRODUCT" == "cf_"*) && "WIFI_NETWORK" == Google-Guest ]]; then
+        target_wifi_network="VirtWifi"
+    fi
+    if [ -z "$WIFI_PASSWORD" ]; then
+        connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network $WIFI_NETWORK open"
+    else
+        connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network $WIFI_NETWORK wpa2 ${target_wifi_network}"
+    fi
+    log_info "Trying to connect to WiFi with command $connect_command..."
+    if ! eval "${connect_command}"; then
+        log_error "Failed to execute ADB connect command: ${connect_command}"
+        exit 1
+    fi
+    # 4. Wait for WiFi connection to be established
+    if wait_for_wifi_status "Wifi is connected"; then
+        log_info "${SERIAL_NUMBER} successfully connected to Wi-Fi."
+        return 0
+    fi
+    # 5. Try different default network
+    if [[ "${target_wifi_network}" == "VirtWifi" ]]; then
+        log_warn "Failed to connect ${SERIAL_NUMBER} to 'VirtWifi'. Trying fallback network 'Android'..."
+        target_wifi_network="Android"
+    elif [[ "${target_wifi_network}" == "Google-Guest" ]]; then
+        log_warn "Failed to connect ${SERIAL_NUMBER} to '${target_wifi_network}'. Trying fallback network 'Google-Guest-Legacy'..."
+        target_wifi_network="Google-Guest-Legacy"
+    fi
+    connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network ${target_wifi_network} open"
+    if ! eval "${connect_command}"; then
+        log_error "Failed to execute fallback connect command: ${connect_command}"
+        exit 1
+    fi
+    if wait_for_wifi_status "Wifi is connected"; then
+        log_info "${SERIAL_NUMBER} successfully connected."
+        return 0
+    fi
+    # 6. Final Wifi connection failure
+    log_error "Unable to connect $SERIAL_NUMBER to ${target_wifi_network}"
+    if [[ "$WIFI_NETWORK" == "Google-Guest"* ]]; then
+        log_warn "Please specify WIFI network by -wn <wifi_network> or --wifi-network=<wifi_network> \
+and WIFI password by -wp <wifi_password> or --wifi-password=<wifi_password> if your WIFI network is not Google-Guest"
+    fi
+    exit 1
 }
 
 function run_atest_in_platform_repo() {
@@ -215,6 +313,32 @@ while (( $# > 0 )); do
             TEST_NAMES+=("$(echo "$1" | sed -e "s/^[^=]*=//g")")
             shift
             ;;
+        -wn)
+            shift
+            if (( $# > 0 )); then
+                WIFI_NETWORK="$1"
+            else
+                print_error "WIFI network is not specified"
+            fi
+            shift
+            ;;
+        --wifi-network*)
+            WIFI_NETWORK="$(echo "$1" | sed -e "s/^[^=]*=//g")"
+            shift
+            ;;
+        -wp)
+            shift
+            if (( $# > 0 )); then
+                WIFI_PASSWORD="$1"
+            else
+                print_error "WIFI password is not specified"
+            fi
+            shift
+            ;;
+        --wifi-password*)
+            WIFI_PASSWORD="$(echo "$1" | sed -e "s/^[^=]*=//g")"
+            shift
+            ;;
         -tf)
             shift
             if (( $# > 0 )); then
@@ -283,6 +407,14 @@ BOARD=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.board)
 ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
 PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.product.name)
 BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
+
+connect_to_wifi
+if [[ ! ("$BOARD" == "cutf" || "$PRODUCT" == "cf_"*) ]]; then
+    if [[ $(adb -s "$SERIAL_NUMBER" shell getprop ro.audio.silent) != "1" ]]; then
+        log_info "Diabling audio on $SERIAL_NUMBER"
+        adb -s "$SERIAL_NUMBER" root && adb -s "$SERIAL_NUMBER" shell setprop ro.audio.silent 1
+    fi
+fi
 
 if [[ -z "$TEST_DIR" ]]; then
     log_warn "Flag -td <test_dir> is not provided. Will use the default test directory"
@@ -422,7 +554,6 @@ testcases_path=$(find "$TEST_DIR" -type d -name "testcases")
 if [[ -n "$tf_cli" && -n "$testcases_path" ]]; then
     xts=$(basename "$tf_cli" | cut -d'-' -f1)
     log_info "Will run tests with ${xts}-tradefed from $TEST_DIR"
-    log_info "Many ${xts^^} tests need WIFI connection, please make sure WIFI is connected before you run the test."
     tf_cli+=" run commandAndExit ${xts} --log-level-display info"
     TEST_DIR=$(dirname "$testcases_path")
     unset_android_environment
