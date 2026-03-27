@@ -887,9 +887,6 @@ function download_vendor_kernel_build() {
                 fi
             fi
             ;;
-        felix | lynx | cheetah | tangorpro)
-            _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "gs201-a0.dtb" "gs201-a0.dtb" )
-            ;;
         shiba | husky | akita)
             _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "zuma-a0-foplp.dtb" "zuma-a0-ipop.dtb" "zuma-b0-foplp.dtb" "zuma-b0-ipop.dtb" )
             ;;
@@ -968,13 +965,10 @@ function download_vendor_kernel_for_direct_flash() {
 function reboot_device_into_bootloader() {
     if [[ -n "$ADB_SERIAL_NUMBER" ]] && (( $(adb devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
         if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
-            eval "adb -s $ADB_SERIAL_NUMBER root && adb -s $ADB_SERIAL_NUMBER disable-verity"
-            exit_code=$?
-            if (( exit_code == 0 )); then
+            if eval "adb -s $ADB_SERIAL_NUMBER root && adb -s $ADB_SERIAL_NUMBER disable-verity" &> /dev/null; then
                 log_info "Applied disable-verity on $ADB_SERIAL_NUMBER"
             else
-                log_error "Fail to disable-verity on $ADB_SERIAL_NUMBER"
-                exit 1
+                log_warn "Fail to disable-verity on $ADB_SERIAL_NUMBER"
             fi
         fi
         log_info "Reboot $ADB_SERIAL_NUMBER into bootloader"
