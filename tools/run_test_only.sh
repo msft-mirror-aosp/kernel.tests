@@ -16,6 +16,8 @@ TEST_NAMES=()
 USE_RBE=false
 WIFI_NETWORK="Google-Guest"
 WIFI_PASSWORD=""
+FORCE_WIFI_CONNECTION=true
+DISABLE_AUDIO=true
 readonly REQUIRED_COMMANDS=("adb" "dirname")
 
 function print_help() {
@@ -45,6 +47,9 @@ function print_help() {
     echo "  -wp <wifi_password>, --wifi-password=<wifi_password>"
     echo "                        The WIFI password for the device under test."
     echo "  --gcov                Collect coverage data from the test result"
+    echo "  --no-disable-audio    Whether to disable audio on the device under test"
+    echo "  --no-force-wifi-connection"
+    echo "                        Whether to force WIFI connection on DUT before testing"
     echo "  --use-rbe             Enable Remote Build Execution to speed up testing process."
     echo "                        Requires RBE service access; See go/build-fast for details."
     echo "  -h, --help            Display this help message and exit"
@@ -95,7 +100,7 @@ function sync_platform_repo() {
 
 function wait_for_wifi_status() {
     local expected_status_substr="$1"
-    local timeout_sec="${2:-30}"
+    local timeout_sec="${2:-20}"
     local interval_sec="${3:-2}"
     local elapsed_time=0
 
@@ -124,14 +129,16 @@ function connect_to_wifi() {
         log_info "WiFi is currently disabled on ${SERIAL_NUMBER}. Attempting to enable..."
         if ! adb -s "$SERIAL_NUMBER" shell svc wifi enable && ! adb -s "$SERIAL_NUMBER" shell cmd wifi set-wifi-enabled enabled; then
             log_error "Unable to send command to enable WiFi on $SERIAL_NUMBER"
-            exit 1
+            return 1
         fi
         if ! wait_for_wifi_status "Wifi is enabled"; then
             log_error "Unable to send command to enable WiFi on $SERIAL_NUMBER"
-            exit 1
+            return 1
         fi
     fi
     # 2. Check if already connected.
+    local check_timeout=60
+
     wifi_status=$(adb -s "${SERIAL_NUMBER}" shell cmd wifi status 2>&1)
     if [[ "${wifi_status}" == *"Wifi is connected"* ]]; then
         log_info "${SERIAL_NUMBER} is already connected to Wi-Fi."
@@ -141,28 +148,32 @@ function connect_to_wifi() {
     local target_wifi_network="${WIFI_NETWORK}"
     local connect_command=""
     log_info "${SERIAL_NUMBER} is not currently connected to Wi-Fi. Attempting to connect..."
-    if [[ ("$BOARD" == "cutf" || "$PRODUCT" == "cf_"*) && "WIFI_NETWORK" == Google-Guest ]]; then
+    if [[ "$BOARD" == "cutf" || "$PRODUCT" == *"cf_"* ]]; then
         target_wifi_network="VirtWifi"
     fi
     if [ -z "$WIFI_PASSWORD" ]; then
-        connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network $WIFI_NETWORK open"
+        connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network $target_wifi_network open"
     else
-        connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network $WIFI_NETWORK wpa2 ${target_wifi_network}"
+        connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network $target_wifi_network wpa2 ${WIFI_PASSWORD}"
     fi
     log_info "Trying to connect to WiFi with command $connect_command..."
     if ! eval "${connect_command}"; then
         log_error "Failed to execute ADB connect command: ${connect_command}"
-        exit 1
+        return 1
+    fi
+    # Cuttlefish needs a second connect attempt
+    if [[ "$BOARD" == "cutf" || "$PRODUCT" == *"cf_"* ]]; then
+        eval "${connect_command}"
     fi
     # 4. Wait for WiFi connection to be established
-    if wait_for_wifi_status "Wifi is connected"; then
+    if wait_for_wifi_status "Wifi is connected" check_timeout; then
         log_info "${SERIAL_NUMBER} successfully connected to Wi-Fi."
         return 0
     fi
     # 5. Try different default network
     if [[ "${target_wifi_network}" == "VirtWifi" ]]; then
-        log_warn "Failed to connect ${SERIAL_NUMBER} to 'VirtWifi'. Trying fallback network 'Android'..."
-        target_wifi_network="Android"
+        log_warn "Failed to connect ${SERIAL_NUMBER} to 'VirtWifi'. Trying fallback network 'AndroidWifi'..."
+        target_wifi_network="AndroidWifi"
     elif [[ "${target_wifi_network}" == "Google-Guest" ]]; then
         log_warn "Failed to connect ${SERIAL_NUMBER} to '${target_wifi_network}'. Trying fallback network 'Google-Guest-Legacy'..."
         target_wifi_network="Google-Guest-Legacy"
@@ -170,9 +181,13 @@ function connect_to_wifi() {
     connect_command="adb -s ${SERIAL_NUMBER} shell cmd wifi connect-network ${target_wifi_network} open"
     if ! eval "${connect_command}"; then
         log_error "Failed to execute fallback connect command: ${connect_command}"
-        exit 1
+        return 1
     fi
-    if wait_for_wifi_status "Wifi is connected"; then
+    # Cuttlefish needs a second connect attempt
+    if [[ "$BOARD" == "cutf" || "$PRODUCT" == *"cf_"* ]]; then
+        eval "${connect_command}"
+    fi
+    if wait_for_wifi_status "Wifi is connected" check_timeout; then
         log_info "${SERIAL_NUMBER} successfully connected."
         return 0
     fi
@@ -182,7 +197,7 @@ function connect_to_wifi() {
         log_warn "Please specify WIFI network by -wn <wifi_network> or --wifi-network=<wifi_network> \
 and WIFI password by -wp <wifi_password> or --wifi-password=<wifi_password> if your WIFI network is not Google-Guest"
     fi
-    exit 1
+    return 1
 }
 
 function run_atest_in_platform_repo() {
@@ -356,6 +371,14 @@ while (( $# > 0 )); do
             GCOV=true
             shift
             ;;
+        --no-disable-audio)
+            DISABLE_AUDIO=false
+            shift
+            ;;
+        --no-force-wifi-connection)
+            FORCE_WIFI_CONNECTION=false
+            shift
+            ;;
         --use-rbe)
             USE_RBE=true
             shift
@@ -408,9 +431,15 @@ ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
 PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.product.name)
 BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
 
-connect_to_wifi
-if [[ ! ("$BOARD" == "cutf" || "$PRODUCT" == "cf_"*) ]]; then
-    if [[ $(adb -s "$SERIAL_NUMBER" shell getprop ro.audio.silent) != "1" ]]; then
+log_info "Testing on device $SERIAL_NUMBER: BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE"
+
+if ! connect_to_wifi && [[ "$FORCE_WIFI_CONNECTION" == "true" ]]; then
+    log_error "--force-wifi-connection is set. Force exit upon Wifi connection failure"
+    exit 1
+fi
+
+if [[ ! ("$BOARD" == "cutf" || "$PRODUCT" == *"cf_"*) ]]; then
+    if [[ "$DISABLE_AUDIO" == true ]] && [[ $(adb -s "$SERIAL_NUMBER" shell getprop ro.audio.silent) != "1" ]]; then
         log_info "Diabling audio on $SERIAL_NUMBER"
         adb -s "$SERIAL_NUMBER" root && adb -s "$SERIAL_NUMBER" shell setprop ro.audio.silent 1
     fi
