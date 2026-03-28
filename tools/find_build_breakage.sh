@@ -653,8 +653,11 @@ function init_bisect_file() {
             fi
             # Read build IDs from the map string
             local -a build_ids_arr=(${BUILDS_TO_TEST_MAP[$type_code]})
-            for build_id in "${build_ids_arr[@]}"; do
+            for index in "${!build_ids_arr[@]}"; do
+                xpath_idx=$((index + 1))
+                build_id="${build_ids_arr[$index]}"
                 xml_util::add_element xml_edit_cmd "/bisect/$node_name" "build" "$build_id"
+                xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/build[${xpath_idx}]" "index" "$index"
             done
         else
             # This is a fixed build (single or local)
