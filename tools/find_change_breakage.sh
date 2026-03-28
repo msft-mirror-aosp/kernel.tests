@@ -1039,7 +1039,8 @@ function setup_and_test_combination() {
     if [[ "$DEVICE_TYPE" == "PHYSICAL" ]]; then
         setup_cmd_array=("$FLASH_DEVICE_SCRIPT" "-s" "$SERIAL_NUMBER")
     else
-        setup_cmd_array=("$LAUNCH_CVD_SCRIPT")
+        # Connect Cuttlefish with adb connection only. Skip webrtc autoconnect
+        setup_cmd_array=("$LAUNCH_CVD_SCRIPT" "--acloud-arg=--autoconnect" "--acloud-arg=adb")
     fi
 
     # Loop over all build types to construct command
