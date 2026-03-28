@@ -587,9 +587,7 @@ else
     acloud_cmd_parts+=("--local-kernel-image" "$KERNEL_BUILD")
 fi
 
-if [[ -z "$GSI_BUILD" ]]; then
-    log_warn "System build is not specified, will not launch Cuttlefish with GSI mixed build."
-elif [[ "$GSI_BUILD" == ab://* ]]; then
+if [[ "$GSI_BUILD" == ab://* ]]; then
     ab_branch="" ab_target="" ab_id=""
     parse_ab_url "$GSI_BUILD" ab_branch ab_target ab_id
     if (( $? != 0 )); then
@@ -600,7 +598,7 @@ elif [[ "$GSI_BUILD" == ab://* ]]; then
     if [[ "${ab_id}" != "latest" ]]; then
         acloud_cmd_parts+=("--system-build-id" "${ab_id}")
     fi
-else
+elif [[ -n "$GSI_BUILD" ]]; then
     acloud_cmd_parts+=("--local-system-image" "$GSI_BUILD")
 fi
 
