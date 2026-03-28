@@ -791,7 +791,8 @@ function perform_device_setup() {
         [[ -n "$kb" ]] && setup_cmd_array+=("-kb" "$kb")
         [[ -n "$vkb" ]] && setup_cmd_array+=("-vkb" "$vkb")
     elif [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        setup_cmd_array=("$LAUNCH_CVD_SCRIPT")
+        # Connect Cuttlefish with adb connection only. Skip webrtc autoconnect
+        setup_cmd_array=("$LAUNCH_CVD_SCRIPT" "--acloud-arg=--autoconnect" "--acloud-arg=adb")
         [[ -n "$pb" ]] && setup_cmd_array+=("-pb" "$pb")
         [[ -n "$kb" ]] && setup_cmd_array+=("-kb" "$kb")
         # launch_cvd does not support vkb
