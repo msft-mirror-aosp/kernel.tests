@@ -65,11 +65,6 @@ HAVE_RA_HONOR_PIO_LIFE = (os.path.isfile(RA_HONOR_PIO_LIFE_SYSCTL) or
 HAVE_RA_HONOR_PIO_PFLAG = (os.path.isfile(RA_HONOR_PIO_PFLAG) or
                            net_test.KernelAtLeast([(6, 12, 0)]))
 
-HAVE_USEROPT_PIO_FIX = net_test.KernelAtLeast([(5, 10, 224), (5, 15, 165),
-                                               (6, 1, 104), (6, 6, 45),
-                                               (6, 9, 13), (6, 10, 4),
-                                               (6, 11, 0)])
-
 
 class ConfigurationError(AssertionError):
   pass
