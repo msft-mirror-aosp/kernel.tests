@@ -200,7 +200,7 @@ BpfAttrProgAttach = cstruct.Struct(
 BpfAttrGetFdById = cstruct.Struct(
     "bpf_attr_get_fd_by_id", "=III", "id next_id open_flags")
 BpfAttrProgQuery = cstruct.Struct(
-    "bpf_attr_prog_query", "=IIIIQIQ", "target_fd attach_type query_flags attach_flags prog_ids_ptr prog_cnt prog_attach_flags")
+    "bpf_attr_prog_query", "=IIIIQI4xQ", "target_fd attach_type query_flags attach_flags prog_ids_ptr prog_cnt prog_attach_flags")
 BpfInsn = cstruct.Struct("bpf_insn", "=BBhi", "code dst_src_reg off imm")
 # pylint: enable=invalid-name
 
