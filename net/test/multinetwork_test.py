@@ -1073,7 +1073,7 @@ class RATest(multinetwork_base.MultiNetworkBaseTest):
     # expected option.
     csocket.SetSocketTimeout(s.sock, 100)
 
-    needPIO = multinetwork_base.HAVE_USEROPT_PIO_FIX
+    needPIO = True
     needPref64 = True
 
     while needPIO or needPref64:
