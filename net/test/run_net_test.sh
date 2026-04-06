@@ -20,6 +20,7 @@ OPTIONS="$OPTIONS IPV6 IPV6_ROUTER_PREF IPV6_MULTIPLE_TABLES IPV6_ROUTE_INFO"
 OPTIONS="$OPTIONS TUN SYN_COOKIES IP_ADVANCED_ROUTER IP_MULTIPLE_TABLES"
 OPTIONS="$OPTIONS NETFILTER NETFILTER_ADVANCED NETFILTER_XTABLES"
 OPTIONS="$OPTIONS NETFILTER_XT_MARK NETFILTER_XT_TARGET_MARK"
+OPTIONS="$OPTIONS NETFILTER_XTABLES_LEGACY IP_NF_IPTABLES_LEGACY IP6_NF_IPTABLES_LEGACY"
 OPTIONS="$OPTIONS IP_NF_IPTABLES IP_NF_MANGLE IP_NF_FILTER"
 OPTIONS="$OPTIONS IP6_NF_IPTABLES IP6_NF_MANGLE IP6_NF_FILTER INET6_IPCOMP"
 OPTIONS="$OPTIONS IPV6_OPTIMISTIC_DAD"
@@ -146,6 +147,8 @@ if [[ -z "${DEFCONFIG:-}" ]]; then
         export DEFCONFIG=gki_defconfig
       elif [[ -e arch/arm64/configs/cuttlefish_defconfig ]]; then
         export DEFCONFIG=cuttlefish_defconfig
+      else
+        export DEFCONFIG=defconfig
       fi
       ;;
     x86_64)
@@ -153,6 +156,8 @@ if [[ -z "${DEFCONFIG:-}" ]]; then
         export DEFCONFIG=gki_defconfig
       elif [[ -e arch/x86/configs/x86_64_cuttlefish_defconfig ]]; then
         export DEFCONFIG=x86_64_cuttlefish_defconfig
+      else
+        export DEFCONFIG=defconfig
       fi
   esac
 fi
