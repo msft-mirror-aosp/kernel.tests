@@ -585,7 +585,8 @@ if [[ -n "$tf_cli" && -n "$testcases_path" ]]; then
     log_info "Will run tests with ${xts}-tradefed from $TEST_DIR"
     tf_cli+=" run commandAndExit ${xts} --log-level-display info"
     TEST_DIR=$(dirname "$testcases_path")
-    unset_android_environment
+    # TODO(b/500346165): Temporarily commented out due to MobileHarnessException
+    # unset_android_environment
 else
     if [[ -n "$TRADEFED" ]]; then
         if [[ "$REPO_LIST_OUT" == *"kernel/common"* ]]; then
