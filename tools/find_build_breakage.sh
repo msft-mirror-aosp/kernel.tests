@@ -31,7 +31,6 @@ SERIAL_NUMBER=""
 TEST_NAME=()
 TEST_DIR=""
 TEST_SUITE_BUILD=""
-CACHE_DIR=""
 TEST_RETRY=$DEFAULT_TEST_RETRY
 SETUP_RETRY=$DEFAULT_SETUP_RETRY
 OUTPUT_DIR=""
@@ -41,7 +40,7 @@ SKIP_BUILD=false
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
 TEMP_DIRS=()
 CURRENT_TEST_SUITE_LOCATOR=""
-
+HAS_FLASHED_PB=false
 # --- Multi-Bisection State Variables ---
 # These associative arrays store the state for each build type being bisected.
 # They are keyed by the build type code (e.g., 'pb', 'kb').
@@ -143,7 +142,6 @@ function print_help() {
     echo "  -tr,  --test-retry <count>       Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] If set, pass '--skip-build' to underlying flash/launch scripts."
-    echo "  -cd,  --cache-dir <path>         [Optional] A persistent directory for downloaded test suites."
     echo "  -od,  --output-dir <path>        Path of Directory to store the bisection state XML file. Default: ${DEFAULT_OUTPUT_DIR}/${DEFAULT_BISECT_CONFIG_FILENAME}."
     echo "  -i,   --input-config-file <path> Resume bisection from the given state XML file."
     echo "  -h,   --help                     Display this help message."
@@ -230,11 +228,6 @@ function parse_args() {
                 ;;
             --skip-build)
                 SKIP_BUILD=true
-                shift
-                ;;
-            -cd|--cache-dir)
-                shift
-                CACHE_DIR="$1"
                 shift
                 ;;
             *)
@@ -336,11 +329,7 @@ function parse_build_string() {
 }
 
 function get_test_suite_base_dir() {
-    if [[ -n "$CACHE_DIR" ]]; then
-        echo "$(realpath "$CACHE_DIR")"
-    else
-        echo "$DOWNLOAD_PATH"
-    fi
+    echo "$DOWNLOAD_PATH"
 }
 
 function handle_test_suite_url() {
@@ -409,25 +398,16 @@ function handle_test_suite_url() {
 
     else # This branch handles numeric build IDs
         local suite_path="${base_dir}/${branch}/${target}/${build_id}"
-
-        if [[ -z "$CACHE_DIR" ]]; then
-            TEMP_DIRS+=("$suite_path")
-        fi
-        [[ -d "$suite_path" ]] && rm -rf "$suite_path"
-        mkdir -p "$suite_path" || fail_error "Could not create directory: ${suite_path}"
-
-        pushd "$suite_path" >/dev/null || fail_error "pushd failed: Could not enter suite directory."
         local download_success=false
         for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
             "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
-            if (( $? == 0 )) && [[ -f "$filename" ]]; then
+            if (( $? == 0 )) && [[ -f "${suite_path}/${filename}" ]]; then
                 download_success=true
                 break
             fi
             log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
             sleep 10
         done
-        popd >/dev/null || fail_error "popd failed: Could not return from suite directory."
 
         if ! "$download_success"; then
             fail_error "Failed to download test suite '${filename}'."
@@ -435,7 +415,6 @@ function handle_test_suite_url() {
 
         log_info "unzipping file: ${filename}..."
         unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip file."
-        rm -f "${suite_path}/${filename}"
 
         local unzipped_root_dir
         unzipped_root_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
@@ -627,7 +606,6 @@ function init_bisect_file() {
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "setup_retry"   "$SETUP_RETRY"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "serial_number" "$SERIAL_NUMBER"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
-    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "cache_dir"     "$CACHE_DIR"
     for test in "${TEST_NAME[@]}"; do
         xml_util::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
     done
@@ -684,7 +662,6 @@ function load_state_from_xml() {
     SETUP_RETRY=$(xml_util::read_value "/bisect/parameters/@setup_retry")
     SERIAL_NUMBER=$(xml_util::read_value "/bisect/parameters/@serial_number")
     SKIP_BUILD=$(xml_util::read_value "/bisect/parameters/@skip_build")
-    CACHE_DIR=$(xml_util::read_value "/bisect/parameters/@cache_dir")
     xml_util::read_values_to_array "/bisect/parameters/test" TEST_NAME
 
     # Load all build types from XML
@@ -772,7 +749,11 @@ function setup_and_test_combination() {
         esac
     done
 
-    # Prepare the required test suite, using the cache if possible.
+    local pb_type="${ID_TYPES[pb]}"
+    if [[ "$DEVICE_TYPE" == "PHYSICAL" && "$HAS_FLASHED_PB" == "true" && ("$pb_type" == "single" || "$pb_type" == "local") ]]; then
+        log_info "Optimization: PB is fixed and already flashed in this session. Setting current_pb to 'none' to skip re-flashing."
+        current_pb="none"
+    fi
     if ! is_test_suite_fixed "$current_tb_locator"; then
         prepare_test_suite "$current_tb_locator"
         CURRENT_TEST_SUITE_LOCATOR="$required_locator"
@@ -780,6 +761,11 @@ function setup_and_test_combination() {
     fi
 
     perform_device_setup "$current_pb" "$current_kb" "$current_vkb"
+    if [[ "$current_pb" != "none" && -n "$current_pb" ]]; then
+        HAS_FLASHED_PB=true
+        log_info "HAS_FLASHED_PB set to true for the current session."
+    fi
+
     run_tests_on_device
     return $?
 }
