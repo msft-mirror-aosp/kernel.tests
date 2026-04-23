@@ -74,6 +74,22 @@ required unpacking, file path corrections and ultimate `lcov` call.
 the kernel source. Otherwise, it shows the arguments for you to run
 `create-tracefile.py` in the kernel source tree.
 
+To use `create-tracefile.py`, which is located in the `kernel/tests` repository,
+you need to first make sure this repository is downloaded.
+
+By default, the `kernel/tests` project is commented out in the repository
+manifests of the kernel tree. To include it, please uncomment the following lines
+in your manifest file:
+```
+<project path="kernel/tests" name="kernel/tests" revision="main-kernel" clone-depth="1" />
+```
+
+After uncommenting, run `repo sync` to download the latest `kernel/tests` project
+to your root directory:
+```
+$ repo sync -j30
+```
+
 If you use `tradefed.sh`, you need to issue the `create-tracefile.py` command.
 The following is an example where we generate a tracefile named `cov.info`
 only including results from `net/socket.c`. (If no source files are specified
