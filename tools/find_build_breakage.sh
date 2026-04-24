@@ -16,10 +16,11 @@ readonly -A BUILD_TYPE_MAP=(
     ["pb"]="PLATFORM_BUILD"
     ["kb"]="KERNEL_BUILD"
     ["vkb"]="VENDOR_KERNEL_BUILD"
+    ["sb"]="GSI_BUILD"
     ["tb"]="TEST_SUITE_BUILD"
 )
 # Defines the order in which breaking builds are identified and bisected.
-readonly -a BISECT_ORDER=("kb" "vkb" "pb" "tb")
+readonly -a BISECT_ORDER=("kb" "vkb" "pb" "sb" "tb")
 
 # --- Global Variables ---
 ACLOUD_OUTPUT_FILE="/tmp/ACLOUD_OUTPUT.tmp"
@@ -27,6 +28,7 @@ DEVICE_TYPE=""
 PLATFORM_BUILD=""
 KERNEL_BUILD=""
 VENDOR_KERNEL_BUILD=""
+GSI_BUILD=""
 SERIAL_NUMBER=""
 TEST_NAME=()
 TEST_DIR=""
@@ -122,17 +124,19 @@ function print_help() {
     echo "     it uses their initial, known-good build as a stable baseline throughout the process."
     echo ""
     echo "Modes:"
-    echo "  New Bisection: Provide build ranges via -pb, -kb, -vkb, or -td, along with -t."
+    echo "  New Bisection: Provide build ranges via -pb, -kb (or -gki), -vkb, -sb (or -gsi), or -td, along with -t."
     echo "  Resume Bisection: Provide -i to resume a previously started bisection."
     echo ""
     echo "Options:"
     echo "  -pb,  --platform-build <url|path>"
     echo "                                   A platform build. To bisect, use a range format."
     echo "                                   Format: ab://<branch>/<target>/<id1>-<id2> OR ab://.../<id1,id2,...>"
-    echo "  -kb,  --kernel-build <url|path>"
+    echo "  -kb,  --kernel-build, -gki, --gki-build <url|path>"
     echo "                                   A kernel build. To bisect, use a range format."
     echo "  -vkb, --vendor-kernel-build <url|path>"
     echo "                                   A vendor kernel build. To bisect, use a range format."
+    echo "  -sb,  --system-build, -gsi, --gsi-build <url|path>"
+    echo "                                   A system (GSI) build. To bisect, use a range format."
     echo "  -s,   --serial-number <serial>   The physical device serial. If omitted, uses a Cuttlefish virtual device."
     echo "  -t,   --test <name>              [Required] The test name(s) to run. Can be repeated. (e.g., 'CtsMyModuleTest')"
     echo "  -td, --test-dir, -tb, --test-suite-build <url|path>"
@@ -188,7 +192,7 @@ function parse_args() {
                 has_new_bisect_args=true
                 shift
                 ;;
-            -kb|--kernel-build)
+            -kb|--kernel-build|-gki|--gki-build)
                 shift
                 KERNEL_BUILD="$1"
                 has_new_bisect_args=true
@@ -197,6 +201,12 @@ function parse_args() {
             -vkb|--vendor-kernel-build)
                 shift
                 VENDOR_KERNEL_BUILD="$1"
+                has_new_bisect_args=true
+                shift
+                ;;
+            -sb|--system-build|-gsi|--gsi-build)
+                shift
+                GSI_BUILD="$1"
                 has_new_bisect_args=true
                 shift
                 ;;
@@ -733,7 +743,7 @@ function setup_and_test_combination() {
         locators_to_use[$type_code]="$locator"
     done
 
-    local current_pb="" current_kb="" current_vkb="" current_tb_locator=""
+    local current_pb="" current_kb="" current_vkb="" current_sb="" current_tb_locator=""
 
     # Construct URLs for all provided build types
     for type_code in "${!locators_to_use[@]}"; do
@@ -745,6 +755,7 @@ function setup_and_test_combination() {
             pb) current_pb="$url" ;;
             kb) current_kb="$url" ;;
             vkb) current_vkb="$url" ;;
+            sb) current_sb="$url" ;;
             tb) current_tb_locator="$url" ;;
         esac
     done
@@ -760,7 +771,7 @@ function setup_and_test_combination() {
         xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
     fi
 
-    perform_device_setup "$current_pb" "$current_kb" "$current_vkb"
+    perform_device_setup "$current_pb" "$current_kb" "$current_vkb" "$current_sb"
     if [[ "$current_pb" != "none" && -n "$current_pb" ]]; then
         HAS_FLASHED_PB=true
         log_info "HAS_FLASHED_PB set to true for the current session."
@@ -771,7 +782,7 @@ function setup_and_test_combination() {
 }
 
 function perform_device_setup() {
-    local pb="$1" kb="$2" vkb="$3"
+    local pb="$1" kb="$2" vkb="$3" sb="$4"
 
     local -a setup_cmd_array=()
     if [[ "$DEVICE_TYPE" == "PHYSICAL" ]]; then
@@ -779,11 +790,13 @@ function perform_device_setup() {
         [[ -n "$pb" ]] && setup_cmd_array+=("-pb" "$pb")
         [[ -n "$kb" ]] && setup_cmd_array+=("-kb" "$kb")
         [[ -n "$vkb" ]] && setup_cmd_array+=("-vkb" "$vkb")
+        [[ -n "$sb" ]] && setup_cmd_array+=("-sb" "$sb")
     elif [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
         # Connect Cuttlefish with adb connection only. Skip webrtc autoconnect
         setup_cmd_array=("$LAUNCH_CVD_SCRIPT" "--acloud-arg=--autoconnect" "--acloud-arg=adb")
         [[ -n "$pb" ]] && setup_cmd_array+=("-pb" "$pb")
         [[ -n "$kb" ]] && setup_cmd_array+=("-kb" "$kb")
+        [[ -n "$sb" ]] && setup_cmd_array+=("-sb" "$sb")
         # launch_cvd does not support vkb
     else
         fail_error "The Device Type Option not supported: ${DEVICE_TYPE}"
