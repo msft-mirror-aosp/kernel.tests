@@ -12,7 +12,6 @@
 # sudo apt update && \
 # sudo apt install android-fetch-artifact#
 #
-DEFAULT_FETCH_ARTIFACT=/google/data/ro/projects/android/fetch_artifact
 BOLD="$(tput bold)"
 END="$(tput sgr0)"
 GREEN="$(tput setaf 2)"
@@ -59,6 +58,7 @@ fetch_cli="$FETCH_CMD"
 BUILD_INFO=
 BUILD_FORMAT="ab://<branch>/<build_target>/<build_id>/<file_name>"
 EXTRA_OPTIONS=
+IGNORE_CACHE=false
 
 MY_NAME="${0##*/}"
 
@@ -66,6 +66,9 @@ for i in "$@"; do
     case $i in
         "ab://"*)
         BUILD_INFO=$i
+        ;;
+        --ignore-cache)
+        IGNORE_CACHE=true
         ;;
         *)
         EXTRA_OPTIONS+=" $i"
@@ -89,6 +92,18 @@ branch="${array[2]}"
 build_target="${array[3]}"
 build_id="${array[4]}"
 
+if [[ "$build_id" == "latest" ]]; then
+    log_info "Build ID is 'latest', attempting to resolve numeric ID..."
+    resolved_id=$(query_latest_build_id "$branch" "$build_target")
+    if [[ $? -eq 0 && -n "$resolved_id" ]]; then
+        log_info "Resolved 'latest' to numeric build ID: $resolved_id"
+        build_id="$resolved_id"
+        array[4]="$resolved_id"
+    else
+        log_warn "Failed to resolve 'latest' build ID. Falling back to using 'latest'."
+    fi
+fi
+
 file_path="$DOWNLOAD_PATH/$branch/$build_target/$build_id"
 if [[ ! -d "$file_path" ]]; then
     existing_file_name=""
@@ -96,10 +111,17 @@ else
     existing_file_name=$(find "$file_path" -maxdepth 1 -type f -name "${array[5]}")
 fi
 file_name="$file_path/${array[5]}"
+
 if [[ -f "$existing_file_name" ]]; then
-    log_info "Use the existing $existing_file_name. Skipping download."
-    exit 0
+    if [[ "$IGNORE_CACHE" == true ]]; then
+        log_info "File $existing_file_name exists, but --ignore-cache is set. Removing and re-downloading."
+        rm -f "$existing_file_name"
+    else
+        log_info "Use the existing $existing_file_name. Skipping download."
+        exit 0
+    fi
 fi
+
 if [[ ! -d "$file_path" ]]; then
     mkdir -p "$file_path"
 fi
