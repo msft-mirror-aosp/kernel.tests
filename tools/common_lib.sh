@@ -17,6 +17,7 @@ readonly KERNEL_JDK_PATH="prebuilts/jdk/jdk11/linux-x86"
 readonly LOCAL_JDK_PATH="/usr/local/buildtools/java/jdk11"
 readonly PLATFORM_JDK_PATH="prebuilts/jdk/jdk21/linux-x86"
 readonly DEFAULT_BUILD_CHECKER=/google/data/ro/projects/android/ab
+readonly DEFAULT_FETCH_ARTIFACT="/google/data/ro/projects/android/fetch_artifact"
 
 # --- BinFS ---
 readonly COMMON_LIB_CL_FLASH_CLI="/google/bin/releases/android/flashstation/cl_flashstation"
@@ -622,6 +623,49 @@ function parse_ab_url() {
     fi
     return 0
 }
+
+function query_latest_build_id() {
+    local branch="$1"
+    local build_target="$2"
+
+    local file_path="${DOWNLOAD_PATH}/${branch}/${build_target}/latest"
+    local build_info="${file_path}/BUILD_INFO"
+
+    local fetch_cmd="fetch_artifact"
+    if ! command -v fetch_artifact &> /dev/null; then
+        if [[ -f "$DEFAULT_FETCH_ARTIFACT" ]]; then
+            fetch_cmd="$DEFAULT_FETCH_ARTIFACT"
+        else
+            log_error "fetch_artifact binary not found. Cannot query latest build ID."
+            return 1
+        fi
+    fi
+
+    mkdir -p "$file_path"
+    if [[ -f "$build_info" ]]; then
+        rm -f "$build_info"
+    fi
+    (
+        cd "$file_path" || exit 1
+        "$fetch_cmd" --branch "$branch" --target "$build_target" --latest 'BUILD_INFO' > /dev/null 2>&1
+    )
+    local fetch_status=$?
+    if (( fetch_status != 0 )) || [[ ! -f "$build_info" ]]; then
+        log_error "Failed to fetch the latest BUILD_INFO from ab://${branch}/${build_target}/latest"
+        return 1
+    fi
+
+    local build_id
+    build_id=$(grep -oP '"bid":\s*"\K[^"]+' "${build_info}")
+    if [[ -z "$build_id" ]]; then
+        log_error "Failed to parse 'bid' from ${build_info}"
+        return 1
+    fi
+
+    printf "%s" "$build_id"
+    return 0
+}
+
 
 function run_command() {
     local -a command_to_run=("$@")
