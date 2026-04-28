@@ -356,80 +356,28 @@ function handle_test_suite_url() {
     local base_dir
     base_dir=$(get_test_suite_base_dir)
 
-    if [[ "$build_id" == "latest" ]]; then
-        local staging_dir="${base_dir}/staging_$(date +%s%N)"
-        TEMP_DIRS+=("$staging_dir")
-        mkdir -p "$staging_dir" || fail_error "Could not create staging directory: ${staging_dir}"
-
-        log_info "Build ID is 'latest', downloading to staging area to resolve version..."
-
-        pushd "$staging_dir" >/dev/null || fail_error "pushd failed: Could not enter staging directory."
-        local download_success=false
-        for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
-            "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
-            if (( $? == 0 )) && [[ -f "$filename" ]]; then
-                download_success=true
-                break
-            fi
-            log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
-            sleep 10
-        done
-        popd >/dev/null || fail_error "popd failed: Could not return from staging directory."
-
-        if ! "$download_success"; then
-            fail_error "Failed to download 'latest' test suite."
+    local suite_path="${base_dir}/${branch}/${target}/${build_id}"
+    local download_success=false
+    for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
+        "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
+        if (( $? == 0 )) && [[ -f "${suite_path}/${filename}" ]]; then
+            download_success=true
+            break
         fi
+        log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
+        sleep 10
+    done
 
-        local zip_file_path="${staging_dir}/${filename}"
-        log_info "unzipping file: ${zip_file_path}..."
-        unzip -q "$zip_file_path" -d "$staging_dir" || fail_error "Failed to unzip staging file."
-
-        local unzipped_root_dir
-        unzipped_root_dir=$(find "$staging_dir" -mindepth 1 -maxdepth 1 -type d)
-
-        local version_file="${unzipped_root_dir}/tools/version.txt"
-        if [[ ! -f "$version_file" ]]; then
-            fail_error "Cannot resolve 'latest' build ID: 'tools/version.txt' not found."
-        fi
-
-        local resolved_build_id
-        resolved_build_id=$(<"$version_file")
-        if ! [[ "$resolved_build_id" =~ ^[0-9]+$ ]]; then
-            fail_error "Invalid build ID found in version.txt: '$resolved_build_id'"
-        fi
-        log_info "Resolved 'latest' build ID to: $resolved_build_id"
-
-        local final_suite_path="${base_dir}/${branch}/${target}/${resolved_build_id}"
-        [[ -d "$final_suite_path" ]] && rm -rf "$final_suite_path"
-        mkdir -p "$final_suite_path"
-
-        mv "$unzipped_root_dir" "$final_suite_path/" || fail_error "Failed to move test suite to final location."
-        TEST_DIR="${final_suite_path}/$(basename "$unzipped_root_dir")"
-
-    else # This branch handles numeric build IDs
-        local suite_path="${base_dir}/${branch}/${target}/${build_id}"
-        local download_success=false
-        for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
-            "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
-            if (( $? == 0 )) && [[ -f "${suite_path}/${filename}" ]]; then
-                download_success=true
-                break
-            fi
-            log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
-            sleep 10
-        done
-
-        if ! "$download_success"; then
-            fail_error "Failed to download test suite '${filename}'."
-        fi
-
-        log_info "unzipping file: ${filename}..."
-        unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip file."
-
-        local unzipped_root_dir
-        unzipped_root_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
-        TEST_DIR="$unzipped_root_dir"
+    if ! "$download_success"; then
+        fail_error "Failed to download test suite '${filename}'."
     fi
+
+    log_info "unzipping file: ${filename}..."
+    unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip file."
+
+    local unzipped_root_dir
+    unzipped_root_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
+    TEST_DIR="$unzipped_root_dir"
 
     if [[ -z "$TEST_DIR" || ! -d "$TEST_DIR" ]]; then
         fail_error "Test suite directory could not be prepared correctly."
@@ -469,11 +417,26 @@ function prepare_test_suite() {
     # For ab:// URLs, check the cache.
     local branch target build_id filename
     parse_build_string "$required_locator" branch target build_id _ filename
+
+    if [[ "${build_id[0]}" == "latest" ]]; then
+        log_info "Resolving 'latest' build ID for test suite..."
+        local resolved_id
+        if ! resolved_id=$(query_latest_build_id "$branch" "$target"); then
+            fail_error "Failed to query the latest build ID for ${branch}/${target}"
+        fi
+        if [[ -z "$resolved_id" ]]; then
+            fail_error "Queried latest build ID is empty for ${branch}/${target}"
+        fi
+        log_info "Resolved 'latest' to build ID: $resolved_id"
+        build_id[0]="$resolved_id"
+        # Update the required_locator so handle_test_suite_url uses the numeric ID
+        required_locator="ab://${branch}/${target}/${resolved_id}/${filename}"
+    fi
+
     local base_dir
     base_dir=$(get_test_suite_base_dir)
 
     local suite_base_path="${base_dir}/${branch}/${target}/${build_id[0]}"
-
     if [[ -d "$suite_base_path" ]]; then
         # The base directory exists, check for a single unzipped subdirectory.
         local unzipped_dir
