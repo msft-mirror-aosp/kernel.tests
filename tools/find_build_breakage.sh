@@ -128,15 +128,19 @@ function print_help() {
     echo "  Resume Bisection: Provide -i to resume a previously started bisection."
     echo ""
     echo "Options:"
-    echo "  -pb,  --platform-build <url|path>"
+    echo "  -pb,  --platform-build <url|path|none>"
     echo "                                   A platform build. To bisect, use a range format."
     echo "                                   Format: ab://<branch>/<target>/<id1>-<id2> OR ab://.../<id1,id2,...>"
-    echo "  -kb,  --kernel-build, -gki, --gki-build <url|path>"
+    echo "                                   Can be set to 'none' for physical devices to skip flashing."
+    echo "  -kb,  --kernel-build, -gki, --gki-build <url|path|none>"
     echo "                                   A kernel build. To bisect, use a range format."
-    echo "  -vkb, --vendor-kernel-build <url|path>"
+    echo "                                   Can be set to 'none' for physical devices to skip flashing."
+    echo "  -vkb, --vendor-kernel-build <url|path|none>"
     echo "                                   A vendor kernel build. To bisect, use a range format."
-    echo "  -sb,  --system-build, -gsi, --gsi-build <url|path>"
+    echo "                                   Can be set to 'none' for physical devices to skip flashing."
+    echo "  -sb,  --system-build, -gsi, --gsi-build <url|path|none>"
     echo "                                   A system (GSI) build. To bisect, use a range format."
+    echo "                                   Can be set to 'none' for physical devices to skip flashing."
     echo "  -s,   --serial-number <serial>   The physical device serial. If omitted, uses a Cuttlefish virtual device."
     echo "  -t,   --test <name>              [Required] The test name(s) to run. Can be repeated. (e.g., 'CtsMyModuleTest')"
     echo "  -td, --test-dir, -tb, --test-suite-build <url|path>"
@@ -268,8 +272,17 @@ function parse_build_string() {
     local -n branch_ref="$2"
     local -n target_ref="$3"
     local -n ids_ref="$4"
-    local -n type_ref="$5" # Will be 'range', 'list', 'single', or 'local'
+    local -n type_ref="$5" # Will be 'range', 'list', 'single', 'local', or 'none'
     local -n filename_ref="$6"
+
+    # Support for "none" to skip flashing specific build artifacts
+    if [[ "${build_str,,}" == "none" ]]; then
+        type_ref="none"
+        ids_ref=("none")
+        branch_ref="none"
+        target_ref="none"
+        return 0
+    fi
 
     if [[ "$build_str" != ab://* ]]; then
         if [[ -d "$build_str" ]]; then
@@ -465,6 +478,12 @@ function validate_args() {
         return 0
     fi
 
+    # Determine device type for validation
+    local current_device_type="VIRTUAL"
+    if [[ -n "$SERIAL_NUMBER" ]]; then
+        current_device_type="PHYSICAL"
+    fi
+
     # --- New Bisection Validations ---
     local bisect_arg_found=false
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
@@ -478,6 +497,15 @@ function validate_args() {
         local -a ids=()
         local id_type=""
         parse_build_string "$build_value" branch target ids id_type filename
+
+        if [[ "$id_type" == "none" ]]; then
+            if [[ "$type_code" == "tb" ]]; then
+                fail_error "Test suite ('tb') cannot be set to 'none'."
+            fi
+            if [[ "$current_device_type" != "PHYSICAL" ]]; then
+                fail_error "Setting build to 'none' is only supported for Physical Devices (with -s)."
+            fi
+        fi
 
         # Store details for all provided build types
         ID_TYPES[$type_code]="$id_type"
@@ -611,7 +639,7 @@ function init_bisect_file() {
                 xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/build[${xpath_idx}]" "index" "$index"
             done
         else
-            # This is a fixed build (single or local)
+            # This is a fixed build (single, local, or none)
             local single_node_name="${var_name,,}" # e.g., platform_build
             xml_util::add_node       xml_edit_cmd "/bisect" "$single_node_name"
             xml_util::add_attribute  xml_edit_cmd "/bisect/$single_node_name" "id_type" "${ID_TYPES[$type_code]}"
@@ -690,7 +718,7 @@ function resolve_build_locator() {
         fi
         echo "$url"
     else
-        # Otherwise, the locator is already a full URL or a local path. Return it directly.
+        # Otherwise, the locator is already a full URL, a local path, or 'none'. Return it directly.
         echo "$locator"
     fi
 }
@@ -724,7 +752,7 @@ function setup_and_test_combination() {
     done
 
     local pb_type="${ID_TYPES[pb]}"
-    if [[ "$DEVICE_TYPE" == "PHYSICAL" && "$HAS_FLASHED_PB" == "true" && ("$pb_type" == "single" || "$pb_type" == "local") ]]; then
+    if [[ "$DEVICE_TYPE" == "PHYSICAL" && "$HAS_FLASHED_PB" == "true" && ("$pb_type" == "single" || "$pb_type" == "local" || "$pb_type" == "none") ]]; then
         log_info "Optimization: PB is fixed and already flashed in this session. Setting current_pb to 'none' to skip re-flashing."
         current_pb="none"
     fi
@@ -995,7 +1023,7 @@ function bisect_single_build_type() {
                 local -a other_builds=(${BUILDS_TO_TEST_MAP[$other_type]})
                 test_combination+=("${other_type}:${other_builds[0]}")
             else
-                # It's a fixed build (single or local). Use its full value.
+                # It's a fixed build (single, local, or none). Use its full value.
                 local other_var_name="${BUILD_TYPE_MAP[$other_type]}"
                 if [[ -n "${!other_var_name}" ]]; then
                    test_combination+=("${other_type}:${!other_var_name}")
