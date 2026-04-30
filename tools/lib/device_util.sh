@@ -213,16 +213,23 @@ function device_util::skip_setup_wizard() {
     done
 
     log_info "Disabling Setup Wizard..."
+    device_util::run_adb shell settings put global setup_wizard_has_run 1
     device_util::run_adb shell settings put global device_provisioned 1
     device_util::run_adb shell settings put secure user_setup_complete 1
 
-    # Attempt to disable the wizard app directly
-    local wizard_pkg
-    wizard_pkg=$(device_util::run_adb shell pm list packages | grep -i 'setupwizard' | head -n 1 | cut -d':' -f2)
-    if [[ -n "$wizard_pkg" ]]; then
-        log_info "Disabling package $wizard_pkg"
-        device_util::run_adb shell pm disable-user --user 0 "$wizard_pkg"
-    fi
+    # Attempt to disable the wizard apps directly (Supports newer devices)
+    local wizard_pkgs
+    wizard_pkgs=$(device_util::run_adb shell pm list packages | grep -Ei 'setupwizard|setupwraith' | cut -d':' -f2 | tr -d '\r')
+
+    for pkg in $wizard_pkgs; do
+        if [[ -n "$pkg" ]]; then
+            log_info "Disabling package $pkg"
+            device_util::run_adb shell pm disable-user --user 0 "$pkg"
+        fi
+    done
+
+    log_info "Sending HOME intent to bypass the screen..."
+    device_util::run_adb shell am start -a android.intent.action.MAIN -c android.intent.category.HOME > /dev/null 2>&1
 }
 
 function device_util::unlock_screen() {
