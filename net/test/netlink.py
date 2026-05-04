@@ -240,18 +240,21 @@ class NetlinkSocket(object):
     nlmsghdr, data = cstruct.Read(data, NLMsgHdr)
     self._Debug("  %s" % nlmsghdr)
 
-    if nlmsghdr.type == NLMSG_ERROR or nlmsghdr.type == NLMSG_DONE:
-      print("done")
-      return (None, None), data
+    # Netlink messages are 4-byte aligned. The length in the header is the
+    # actual length of the message. Any padding to reach the next 4-byte
+    # boundary is not included in the length.
+    padlen = util.GetPadLength(NLA_ALIGNTO, nlmsghdr.length)
+    data, remainder = data[:nlmsghdr.length - len(nlmsghdr)], data[nlmsghdr.length - len(nlmsghdr) + padlen:]
 
-    nlmsg, data = cstruct.Read(data, msgtype)
+    if nlmsghdr.type == NLMSG_ERROR or nlmsghdr.type == NLMSG_DONE:
+      return (nlmsghdr, None), remainder
+
+    nlmsg, attr_data = cstruct.Read(data, msgtype)
     self._Debug("    %s" % nlmsg)
 
     # Parse the attributes in the nlmsg.
-    attrlen = nlmsghdr.length - len(nlmsghdr) - len(nlmsg)
-    attributes = self._ParseAttributes(nlmsghdr.type, nlmsg, data[:attrlen], [])
-    data = data[attrlen:]
-    return (nlmsg, attributes), data
+    attributes = self._ParseAttributes(nlmsghdr.type, nlmsg, attr_data, [])
+    return (nlmsg, attributes), remainder
 
   def _GetMsg(self, msgtype):
     data = self._Recv()
@@ -263,8 +266,13 @@ class NetlinkSocket(object):
     out = []
     while data:
       msg, data = self._ParseNLMsg(data, msgtype)
-      if msg is None:
-        break
+      if isinstance(msg[0], NLMsgHdr):
+        if msg[0].type == NLMSG_DONE:
+          expect_done = False
+          break
+        elif msg[0].type == NLMSG_ERROR:
+          # This should not happen in a dump, but let's be safe.
+          raise ValueError("Netlink error in message list")
       out.append(msg)
     if expect_done:
       self._ExpectDone()
@@ -296,15 +304,21 @@ class NetlinkSocket(object):
 
     # Keep reading netlink messages until we get a NLMSG_DONE.
     out = []
-    while True:
+    done = False
+    while not done:
       data = self._Recv()
-      response_type = NLMsgHdr(data).type
-      if response_type == NLMSG_DONE:
-        break
-      elif response_type == NLMSG_ERROR:
-        # Likely means that the kernel didn't like our dump request.
-        # Parse the error and throw an exception.
-        self._ParseAck(data)
-      out.extend(self._GetMsgList(msgtype, data, False))
+      while data:
+        msg_header = NLMsgHdr(data)
+        if msg_header.type == NLMSG_DONE:
+          done = True
+          break
+        elif msg_header.type == NLMSG_ERROR:
+          # Likely means that the kernel didn't like our dump request.
+          # Parse the error and throw an exception.
+          self._ParseAck(data)
+
+        # Parse one message and its attributes.
+        msg, data = self._ParseNLMsg(data, msgtype)
+        out.append(msg)
 
     return out
