@@ -187,20 +187,20 @@ BPF_F_WRONLY = 1 << 4
 #  variants of the union.
 # pylint: disable=invalid-name
 BpfAttrCreate = cstruct.Struct(
-    "bpf_attr_create", "=IIIII236x",
-    "map_type key_size value_size max_entries map_flags")
+    "bpf_attr_create", "=IIIII",
+    "map_type key_size value_size max_entries, map_flags")
 BpfAttrOps = cstruct.Struct(
-    "bpf_attr_ops", "=I4xQQQ224x",
+    "bpf_attr_ops", "=QQQQ",
     "map_fd key_ptr value_ptr flags")
 BpfAttrProgLoad = cstruct.Struct(
-    "bpf_attr_prog_load", "=IIQQIIQI212x", "prog_type insn_cnt insns"
+    "bpf_attr_prog_load", "=IIQQIIQI", "prog_type insn_cnt insns"
     " license log_level log_size log_buf kern_version")
 BpfAttrProgAttach = cstruct.Struct(
-    "bpf_attr_prog_attach", "=III244x", "target_fd attach_bpf_fd attach_type")
+    "bpf_attr_prog_attach", "=III", "target_fd attach_bpf_fd attach_type")
 BpfAttrGetFdById = cstruct.Struct(
-    "bpf_attr_get_fd_by_id", "=III244x", "id next_id open_flags")
+    "bpf_attr_get_fd_by_id", "=III", "id next_id open_flags")
 BpfAttrProgQuery = cstruct.Struct(
-    "bpf_attr_prog_query", "=IIIIQI4xQQQQ192x", "target_fd attach_type query_flags attach_flags prog_ids_ptr prog_cnt prog_attach_flags link_ids_ptr link_attach_flags revision")
+    "bpf_attr_prog_query", "=IIIIQI4xQ", "target_fd attach_type query_flags attach_flags prog_ids_ptr prog_cnt prog_attach_flags")
 BpfInsn = cstruct.Struct("bpf_insn", "=BBhi", "code dst_src_reg off imm")
 # pylint: enable=invalid-name
 
@@ -322,7 +322,7 @@ def BpfMapGetFdById(map_id):
 def BpfProgQuery(target_fd, attach_type, query_flags, attach_flags):
   prog_id = ctypes.c_uint32(-1)
   minus_one = prog_id.value   # but unsigned, so really 4294967295
-  attr = BpfAttrProgQuery((target_fd, attach_type, query_flags, attach_flags, ctypes.addressof(prog_id), 1, 0, 0, 0, 0))
+  attr = BpfAttrProgQuery((target_fd, attach_type, query_flags, attach_flags, ctypes.addressof(prog_id), 1, 0))
   if BpfSyscall(BPF_PROG_QUERY, attr) == 0:
     # to see kernel updates we have to convert back from the buffer that actually went to the kernel...
     attr._Parse(attr._buffer)
