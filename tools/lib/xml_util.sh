@@ -127,7 +127,7 @@ function xml_util::read_values_to_array() {
 
     _xml_util::check_file "$file" || return 1
 
-    mapfile -t _dest_array_ref < <(xmlstarlet sel -t -v "$xpath" -n "$file" 2>/dev/null)
+    mapfile -t _dest_array_ref < <(xmlstarlet sel -t -m "$xpath" -v . -n "$file" 2>/dev/null)
 }
 
 function xml_util::read_attributes_to_array() {
@@ -142,7 +142,7 @@ function xml_util::read_attributes_to_array() {
 
     _xml_util::check_file "$file" || return 1
 
-    mapfile -t _dest_array_ref < <(xmlstarlet sel -t -v "$xpath" -n "$file" 2>/dev/null)
+    mapfile -t _dest_array_ref < <(xmlstarlet sel -t -m "$xpath" -v . -n "$file" 2>/dev/null)
 }
 
 function xml_util::update_xml_node() {
