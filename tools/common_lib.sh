@@ -11,6 +11,16 @@ if [[ -n "${__COMMON_LIB_SOURCED__:-}" ]]; then
 fi
 readonly __COMMON_LIB_SOURCED__=1
 
+# --- Exit Codes & Status Constants ---
+# Standard exit codes
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+readonly EXIT_SETUP_FAILED=255
+
+# Test specific status codes (aliases for readability)
+readonly TEST_PASSED=0
+readonly TEST_FAILED=1
+
 # --- Constants ---
 readonly FETCH_SCRIPT_PATH_IN_REPO="kernel/tests/tools/fetch_artifact.sh"
 readonly KERNEL_JDK_PATH="prebuilts/jdk/jdk11/linux-x86"
@@ -50,12 +60,12 @@ fi
 
 if ! command -v repo &> /dev/null; then
     echo "[ERROR] common_lib.sh: Required command 'repo' not found. This library needs 'repo'." >&2
-    return 1
+    return $EXIT_FAILURE
 fi
 
 if ! command -v date &> /dev/null; then
     echo "[ERROR] common_lib.sh: Required command 'date' not found. Timestamping will fail." >&2
-    return 1
+    return $EXIT_FAILURE
 fi
 
 # --- Color Constants ---
@@ -92,11 +102,11 @@ function _timestamp() {
     ts=$(date +"%Y-%m-%d %H:%M:%S")
     if ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null); then
         printf "%s" "$ts"
-        return 0
+        return $EXIT_SUCCESS
     else
         # If date command fails entirely
         printf "TIMESTAMP_ERR" >&2 # Avoid calling log_error to prevent recursion
-        return 1
+        return $EXIT_FAILURE
     fi
 }
 
@@ -162,12 +172,12 @@ function log_info() {
 }
 
 # Accepts an optional second argument for context (e.g., an exit code).
-# Returns 0 (warnings don't indicate function failure).
+# Returns EXIT_SUCCESS (warnings don't indicate function failure).
 function log_warn() {
     local message="$1"
     local exit_code="${2:-}" # Optional context code
     _print_log "WARN" "${ORANGE}" "$message" "$exit_code"
-    return 0
+    return $EXIT_SUCCESS
 }
 
 
@@ -175,14 +185,14 @@ function log_warn() {
 # The caller should check the return status of functions using log_error.
 function log_error() {
     local message="$1"
-    local exit_code="${2:-1}" # defaults to 1
+    local exit_code="${2:-$EXIT_FAILURE}" # defaults to EXIT_FAILURE
     local caller_frame_offset="${3:-}" # Default to empty, _print_log handles the default logic
     _print_log "ERROR" "${RED}" "$message" "$exit_code" "$caller_frame_offset"
     # Indicate that an error occurred via return status, but don't exit.
     if [[ "$exit_code" =~ ^[0-9]+$ ]]; then
         return "$exit_code"
     else
-        return 1 # Default failure code if provided one was non-numeric
+        return $EXIT_FAILURE # Default failure code if provided one was non-numeric
     fi
 }
 
@@ -190,13 +200,13 @@ function check_command() {
     local cmd="$1"
     if [[ -z "$cmd" ]]; then
         log_error "Usage: check_command <cmd>"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     if command -v "$cmd" &> /dev/null; then
-        return 0
+        return $EXIT_SUCCESS
     else
-        return 1
+        return $EXIT_FAILURE
     fi
 }
 
@@ -205,7 +215,7 @@ function check_commands_available() {
     local -a commands_to_check=("$@")
     if (( ${#commands_to_check[@]} == 0 )); then
         log_warn "No commands provided to check_commands_available."
-        return 0 # Nothing to check
+        return $EXIT_SUCCESS # Nothing to check
     fi
 
     local all_available=true
@@ -220,13 +230,13 @@ function check_commands_available() {
     done
 
     if "$all_available"; then
-        return 0
+        return $EXIT_SUCCESS
     else
         local unavailable_list
         unavailable_list=$(printf "%s, " "${unavailable_commands[@]}")
         unavailable_list=${unavailable_list%, } # Remove trailing comma and space
-        log_error "The following required commands are not available: ${unavailable_list}" 1
-        return 1
+        log_error "The following required commands are not available: ${unavailable_list}" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 }
 
@@ -237,8 +247,8 @@ function find_repo_root() {
     # Resolve potential ~ and relative paths to absolute, physical path (-P)
     # Use '--' to handle start_dir potentially starting with '-'
     if ! current_dir=$(cd -- "$start_dir" &>/dev/null && pwd -P); then
-        log_error "Invalid or inaccessible starting directory: '$start_dir'" 1
-        return 1
+        log_error "Invalid or inaccessible starting directory: '$start_dir'" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     # Search upwards for .repo directory, stopping at root '/'
@@ -249,11 +259,11 @@ function find_repo_root() {
     # Check if found (must have .repo and not be the filesystem root itself)
     if [[ -d "${current_dir}/.repo" && "$current_dir" != "/" ]]; then
         printf "%s\n" "$current_dir" # Print the found path to stdout
-        return 0
+        return $EXIT_SUCCESS
     fi
 
-    log_warn "No .repo directory found in or above: '$start_dir'" 1
-    return 1
+    log_warn "No .repo directory found in or above: '$start_dir'" $EXIT_FAILURE
+    return $EXIT_FAILURE
 }
 
 function go_to_repo_root() {
@@ -266,14 +276,14 @@ function go_to_repo_root() {
     # Call find_repo_root, capture its output (the path) and exit status
     # Use process substitution or command substitution carefully
     if ! repo_root=$(find_repo_root "$start_dir"); then
-        log_error "Failed to find repo root directory. Cannot change directory." 1
-        return 1
+        log_error "Failed to find repo root directory. Cannot change directory." $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if [[ -z "$repo_root" ]]; then
-        # Should not happen if find_repo_root returns 0, but good safety check
-        log_error "find_repo_root succeeded but returned an empty path. Cannot change directory." 1
-        return 1
+        # Should not happen if find_repo_root returns EXIT_SUCCESS, but good safety check
+        log_error "find_repo_root succeeded but returned an empty path. Cannot change directory." $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if [[ $(pwd) == "$repo_root" ]]; then
@@ -289,7 +299,7 @@ function go_to_repo_root() {
             return "$cd_status"
         fi
         log_info "Successfully changed directory to repo root: $PWD"
-        return 0
+        return $EXIT_SUCCESS
     fi
 }
 
@@ -298,8 +308,8 @@ function is_in_repo_workspace() {
     local resolved_path
 
     if ! resolved_path=$(cd -- "$check_path" &>/dev/null && pwd -P); then
-        log_error "Invalid or inaccessible directory for repo check: '$check_path'" 1
-        return 1
+        log_error "Invalid or inaccessible directory for repo check: '$check_path'" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     # Run 'repo list' in a subshell to avoid affecting the main script's directory
@@ -320,29 +330,29 @@ function is_repo_root_dir() {
     local resolved_path
 
     if [[ -z "$root_path" ]]; then
-        log_error "Usage: is_repo_root_dir <path>" 1
-        return 1
+        log_error "Usage: is_repo_root_dir <path>" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     # Resolve path robustly first
     if ! resolved_path=$(cd -- "$root_path" &>/dev/null && pwd -P); then
         # Log as warning because non-existence isn't strictly an error in logic, just a state.
-        log_warn "Directory does not exist or is inaccessible: '$root_path'" 1
-        return 1
+        log_warn "Directory does not exist or is inaccessible: '$root_path'" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if [[ ! -d "${resolved_path}/.repo" ]]; then
-        log_warn "Directory exists but is missing '.repo' subdirectory: '${resolved_path}'" 1
-        return 1
+        log_warn "Directory exists but is missing '.repo' subdirectory: '${resolved_path}'" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if is_in_repo_workspace "$resolved_path"; then
         # Both .repo exists and 'repo list' works
         log_info "Confirmed valid repo root directory: '$resolved_path'"
-        return 0
+        return $EXIT_SUCCESS
     else
-        log_error "Directory '${resolved_path}' contains '.repo' but 'repo list' failed. May be an incomplete or corrupted checkout." 1
-        return 1
+        log_error "Directory '${resolved_path}' contains '.repo' but 'repo list' failed. May be an incomplete or corrupted checkout." $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 }
 
@@ -351,13 +361,13 @@ function is_platform_repo() {
     local resolved_path
 
     if [[ -z "$repo_path" ]]; then
-        log_error "Usage: is_platform_repo <path>" 1
-        return 1
+        log_error "Usage: is_platform_repo <path>" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if ! is_repo_root_dir "$repo_path"; then
-        log_error "'$repo_path' is not a valid repo root directory." 1
-        return 1
+        log_error "'$repo_path' is not a valid repo root directory." $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     resolved_path=$(cd -- "$repo_path" &>/dev/null && pwd -P) # Should succeed if is_repo_root_dir passed
@@ -368,7 +378,7 @@ function is_platform_repo() {
 
     if (( repo_status != 0 )); then
         log_error "'repo list -p' failed in '${resolved_path}' (Exit Code $repo_status):$(printf '\n%s' "$output")" "$repo_status"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     # --- Heuristic Check ---
@@ -376,13 +386,13 @@ function is_platform_repo() {
     # It might need adjustment if the platform layout changes significantly.
     log_info "Applying heuristic check based on 'repo list -p' output..."
     if [[ "$output" != *"build/make"* && "$output" != *"build/soong"* ]]; then
-        log_warn "Directory '${resolved_path}' may not be an Android Platform repository (heuristic check failed: missing 'build/make' or 'build/soong' in 'repo list -p' output)." 1
-        return 1
+        log_warn "Directory '${resolved_path}' may not be an Android Platform repository (heuristic check failed: missing 'build/make' or 'build/soong' in 'repo list -p' output)." $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
     # --- End Heuristic Check ---
 
     log_info "Confirmed Android Platform repository (based on heuristic): ${resolved_path}"
-    return 0
+    return $EXIT_SUCCESS
 }
 
 function set_platform_repo() {
@@ -395,16 +405,16 @@ function set_platform_repo() {
 
     # Validate arguments
     if [[ -z "$product" || -z "$device_variant" || -z "$platform_root" ]]; then
-        log_error "Usage: set_platform_repo <product> <variant> <platform_root>" 1
-        return 1
+        log_error "Usage: set_platform_repo <product> <variant> <platform_root>" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     # Validate platform_root is a usable platform repo directory
     # This also resolves the path internally via is_repo_root_dir
     if ! is_platform_repo "$platform_root"; then
         # is_platform_repo already logs details
-        log_error "Validation failed for platform root: '$platform_root'" 1
-        return 1
+        log_error "Validation failed for platform root: '$platform_root'" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     # Get the resolved absolute path (already validated)
@@ -413,8 +423,8 @@ function set_platform_repo() {
     # Check for envsetup.sh existence robustly
     envsetup_script="${resolved_root}/build/envsetup.sh"
     if [[ ! -f "$envsetup_script" ]]; then
-        log_error "Cannot find build/envsetup.sh in specified platform root: '${resolved_root}'" 1
-        return 1
+        log_error "Cannot find build/envsetup.sh in specified platform root: '${resolved_root}'" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if [[ -z "$lunch_target" ]]; then
@@ -431,7 +441,7 @@ function set_platform_repo() {
         # Use pushd/popd to manage directory changes reliably
         log_info "Changing directory to '${resolved_root}' for setup..."
 
-        pushd "$resolved_root" &> /dev/null || { log_error "Failed to pushd into platform root: '${resolved_root}'"; return 1; }
+        pushd "$resolved_root" &> /dev/null || { log_error "Failed to pushd into platform root: '${resolved_root}'"; return $EXIT_FAILURE; }
 
         log_info "Changed directory to '${resolved_root}' successfully."
     fi
@@ -443,7 +453,7 @@ function set_platform_repo() {
     local source_status=$?
     if (( source_status != 0 )); then
         log_error "Sourcing ${envsetup_script} failed." "$source_status"
-        popd > /dev/null || { log_error "'popd' failed after sourcing."; return 1; }
+        popd > /dev/null || { log_error "'popd' failed after sourcing."; return $EXIT_FAILURE; }
         return "$source_status"
     fi
 
@@ -451,9 +461,9 @@ function set_platform_repo() {
 
     # Run the lunch command (should be defined after sourcing envsetup.sh).
     if ! check_command "lunch"; then
-        log_error "'lunch' command not found after sourcing envsetup.sh. Setup failed." 1
-        popd > /dev/null || { log_error "'popd' failed after checking command."; return 1; }
-        return 1
+        log_error "'lunch' command not found after sourcing envsetup.sh. Setup failed." $EXIT_FAILURE
+        popd > /dev/null || { log_error "'popd' failed after checking command."; return $EXIT_FAILURE; }
+        return $EXIT_FAILURE
     fi
 
     log_info "Running: ${BOLD}lunch ${lunch_target}${END}"
@@ -471,21 +481,21 @@ function set_platform_repo() {
         log_info "Build environment successfully set for ${lunch_target}."
     else
         log_error "'lunch ${lunch_target}' failed. Output:$(printf '\n%s' "$lunch_output")" "$lunch_status"
-        popd > /dev/null || { log_error "'popd' failed after lunching target."; return 1; }
+        popd > /dev/null || { log_error "'popd' failed after lunching target."; return $EXIT_FAILURE; }
         return "$lunch_status"
     fi
 
     popd > /dev/null || log_warn "'popd' failed after successful setup. Current directory: $PWD"
 
     log_info "Setup complete. Returned to original directory via popd."
-    return 0
+    return $EXIT_SUCCESS
 }
 
 # Function to create softlink
 function create_soft_link() {
     if [[ $# -ne 2 ]]; then
         log_error "Usage: create_soft_link <file_name> <soft_link_target>"
-        return 1
+        return $EXIT_FAILURE
     fi
     local file_name="$1"
     local soft_link_name="$2"
@@ -502,7 +512,7 @@ function create_soft_link() {
 
     if [[ ${#files[@]} -eq 0 ]]; then
         log_error "create_soft_link: No files matched by pattern: '${file_name}'"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     for original_file in "${files[@]}"; do
@@ -518,11 +528,11 @@ function create_soft_link() {
             local ln_exit_code=$?
             log_error "Failed to create soft link from '${original_file}' to '${current_soft_link_name}'. \
 ln exited with code ${ln_exit_code}"
-            return 1 # Exit the function on the first failure.
+            return $EXIT_FAILURE # Exit the function on the first failure.
         fi
         log_info "Successfully created soft link '${current_soft_link_name}' -> '${original_file}'"
     done
-    return 0
+    return $EXIT_SUCCESS
 }
 
 # Function to convert/normalize an 'ab://' string
@@ -534,7 +544,7 @@ function convert_ab_string() {
 
     if [[ "$original_ab_string" != ab://* ]]; then
         log_error "$ab_string_error_message"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     local path_string="${original_ab_string#ab://}"
@@ -543,7 +553,7 @@ function convert_ab_string() {
     local array_len="${#array[@]}"
     if (( array_len < 3 || array_len > 4 )); then
         log_error "$ab_string_error_message"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     local branch="${array[0]}"
@@ -568,7 +578,7 @@ function convert_ab_string() {
             if [[ "$output" != *"$branch"* ]]; then
                 log_error "Command $DEFAULT_BUILD_CHECKER lkgb --branch $branch --target $build_target \
 returned: '$output'. Build target $branch/$build_target doesn't exist in go/ab"
-                return 1
+                return $EXIT_FAILURE
             fi
             build_id=$(echo "$output" | awk '{print $3}')
         fi
@@ -579,7 +589,7 @@ returned: '$output'. Build target $branch/$build_target doesn't exist in go/ab"
         log_info "Input: $original_ab_string -> Converted: $final_string"
     fi
     printf -v "$__result_var" "%s" "$final_string"
-    return 0
+    return $EXIT_SUCCESS
 }
 
 function parse_ab_url() {
@@ -589,8 +599,8 @@ function parse_ab_url() {
     local id_var="$4"
 
     if [[ "$url" != ab://* ]]; then
-        log_error "Invalid ab URL format: $url" 1
-        return 1
+        log_error "Invalid ab URL format: $url" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     local path_part="${url#ab://}"
@@ -599,18 +609,18 @@ function parse_ab_url() {
     read -r -a parts <<< "$path_part"
 
     if (( ${#parts[@]} < 2 )); then # Must have at least branch and target
-        log_error "Malformed ab URL (not enough parts): $url" 1
-        return 1
+        log_error "Malformed ab URL (not enough parts): $url" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if [[ -z "${parts[0]}" ]]; then
-        log_error "branch variable has no value, check url format: $url" 1
-        return 1
+        log_error "branch variable has no value, check url format: $url" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
 
     if [[ -z "${parts[1]}" ]]; then
-        log_error "target variable has no value, check url format: $url" 1
-        return 1
+        log_error "target variable has no value, check url format: $url" $EXIT_FAILURE
+        return $EXIT_FAILURE
     fi
     printf -v "$branch_var" "%s" "${parts[0]}"
     printf -v "$target_var" "%s" "${parts[1]}"
@@ -621,7 +631,7 @@ function parse_ab_url() {
         log_warn "id variable is empty, use 'latest' as default id"
         printf -v "$id_var" "%s" "latest"
     fi
-    return 0
+    return $EXIT_SUCCESS
 }
 
 function query_latest_build_id() {
@@ -637,7 +647,7 @@ function query_latest_build_id() {
             fetch_cmd="$DEFAULT_FETCH_ARTIFACT"
         else
             log_error "fetch_artifact binary not found. Cannot query latest build ID."
-            return 1
+            return $EXIT_FAILURE
         fi
     fi
 
@@ -646,24 +656,24 @@ function query_latest_build_id() {
         rm -f "$build_info"
     fi
     (
-        cd "$file_path" || exit 1
+        cd "$file_path" || exit $EXIT_FAILURE
         "$fetch_cmd" --branch "$branch" --target "$build_target" --latest 'BUILD_INFO' > /dev/null 2>&1
     )
     local fetch_status=$?
     if (( fetch_status != 0 )) || [[ ! -f "$build_info" ]]; then
         log_error "Failed to fetch the latest BUILD_INFO from ab://${branch}/${build_target}/latest"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     local build_id
     build_id=$(grep -oP '"bid":\s*"\K[^"]+' "${build_info}")
     if [[ -z "$build_id" ]]; then
         log_error "Failed to parse 'bid' from ${build_info}"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     printf "%s" "$build_id"
-    return 0
+    return $EXIT_SUCCESS
 }
 
 
@@ -691,10 +701,10 @@ function set_env_var() {
     # Validate variable name (POSIX-compliant)
     if ! [[ "$var_name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
         log_error "Invalid environment variable name '$var_name'"
-        return 1
+        return $EXIT_FAILURE
     fi
 
     export "$var_name=$var_value"
     log_info "Exported environment variable: ${var_name}='${var_value}'"
-    return 0
+    return $EXIT_SUCCESS
 }
