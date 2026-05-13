@@ -66,7 +66,7 @@ LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
 # Import common_lib
 if [[ ! -f "$LIB_PATH" ]]; then
     echo "FATAL ERROR: Cannot find required library '$LIB_PATH'" >&2
-    exit 1
+    exit 1 # common_lib is not loaded yet
 fi
 if ! . "$LIB_PATH"; then
     echo "FATAL ERROR: Failed to source library '$LIB_PATH'. Check common_lib.sh dependencies." >&2
@@ -124,7 +124,8 @@ function print_help() {
     echo "     it uses their initial, known-good build as a stable baseline throughout the process."
     echo ""
     echo "Modes:"
-    echo "  New Bisection: Provide build ranges via -pb, -kb (or -gki), -vkb, -sb (or -gsi), or -td, along with -t."
+    echo "  New Bisection: Provide build ranges via -pb, -kb (or -gki), -vkb, -sb (or -gsi), or -td."
+    echo "                 Use -t to specify a test. If -t is omitted, a boot test will be performed."
     echo "  Resume Bisection: Provide -i to resume a previously started bisection."
     echo ""
     echo "Options:"
@@ -142,11 +143,10 @@ function print_help() {
     echo "                                   A system (GSI) build. To bisect, use a range format."
     echo "                                   Can be set to 'none' for physical devices to skip flashing."
     echo "  -s,   --serial-number <serial>   The physical device serial. If omitted, uses a Cuttlefish virtual device."
-    echo "  -t,   --test <name>              [Required] The test name(s) to run. Can be repeated. (e.g., 'CtsMyModuleTest')"
+    echo "  -t,   --test <name>              [Optional] The test name(s) to run. Can be repeated. If omitted, runs a boot test."
     echo "  -td, --test-dir, -tb, --test-suite-build <url|path>"
-    echo "                                   [Required] Path to test artifacts or an ab:// URL to download or bisect them."
-    echo "                                   Bisection URL Format: ab://<branch>/<target>/<id-range>/<filename.zip>"
-    echo "                                   URL Format: ab://<branch>/<target>/<id>/<filename.zip>"
+    echo "                                   Path to test artifacts or an ab:// URL to download or bisect them."
+    echo "                                   Required only if -t is provided."
     echo "  -tr,  --test-retry <count>       Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] If set, pass '--skip-build' to underlying flash/launch scripts."
@@ -176,7 +176,7 @@ function parse_args() {
         case "$1" in
             -h|--help)
                 print_help
-                exit 0
+                exit $EXIT_SUCCESS
                 ;;
             -i|--input-config-file)
                 shift
@@ -247,7 +247,7 @@ function parse_args() {
             *)
                 log_error "Unsupported flag: $1"
                 print_help
-                exit 1
+                exit $EXIT_FAILURE
                 ;;
         esac
     done
@@ -261,8 +261,10 @@ function parse_args() {
     fi
 
     if ! "$has_input_file"; then
-        if [[ -z "$TEST_SUITE_BUILD" ]] || (( ${#TEST_NAME[@]} == 0 )); then
-             fail_error "For a new bisection, both --test (-t) and --test-dir|--test-suite-build (-td|-tb) must be specified."
+        if (( ${#TEST_NAME[@]} == 0 )); then
+             log_info "No -t parameter specified. Performing a boot test."
+        elif [[ -z "$TEST_SUITE_BUILD" ]]; then
+             fail_error "For a new test bisection, --test-dir|--test-suite-build (-td|-tb) must be specified when --test (-t) is provided."
         fi
     fi
 }
@@ -281,14 +283,14 @@ function parse_build_string() {
         ids_ref=("none")
         branch_ref="none"
         target_ref="none"
-        return 0
+        return $EXIT_SUCCESS
     fi
 
     if [[ "$build_str" != ab://* ]]; then
         if [[ -d "$build_str" ]]; then
             type_ref="local"
             ids_ref=("$build_str")
-            return 0
+            return $EXIT_SUCCESS
         else
             fail_error "Build string is not a valid 'ab://' URL or a local directory: $build_str"
         fi
@@ -348,7 +350,7 @@ function parse_build_string() {
         fi
         ids_ref=("$id_part")
     fi
-    return 0
+    return $EXIT_SUCCESS
 }
 
 function get_test_suite_base_dir() {
@@ -404,16 +406,19 @@ function is_test_suite_fixed() {
     local required_locator="$1"
 
     if [[ -z "$required_locator" ]]; then
+        if (( ${#TEST_NAME[@]} == 0 )); then
+            return $EXIT_SUCCESS
+        fi
         fail_error "Test suite is required for any combination."
     fi
 
     if [[ "$required_locator" != "$CURRENT_TEST_SUITE_LOCATOR" ]]; then
         log_info "The new ${required_locator} is different from the last one."
-        return 1
+        return $EXIT_FAILURE
     fi
 
     log_info "Required test suite is already prepared. Skipping."
-    return 0
+    return $EXIT_SUCCESS
 }
 
 function prepare_test_suite() {
@@ -424,7 +429,7 @@ function prepare_test_suite() {
     # If it's a local path, just update the state and return.
     if [[ "$required_locator" != ab://* ]]; then
         TEST_DIR="$required_locator"
-        return 0
+        return $EXIT_SUCCESS
     fi
 
     # For ab:// URLs, check the cache.
@@ -457,7 +462,7 @@ function prepare_test_suite() {
         if [[ -n "$unzipped_dir" && -d "$unzipped_dir" ]]; then
             log_info "Found existing test suite in cache: $unzipped_dir"
             TEST_DIR="$unzipped_dir"
-            return 0
+            return $EXIT_SUCCESS
         fi
     fi
 
@@ -475,7 +480,7 @@ function validate_args() {
     BISECT_CONFIG_FILE="${OUTPUT_DIR}/${DEFAULT_BISECT_CONFIG_FILENAME}"
 
     if [[ -n "$INPUT_CONFIG_FILE" ]]; then
-        return 0
+        return $EXIT_SUCCESS
     fi
 
     # Determine device type for validation
@@ -538,14 +543,14 @@ function validate_args() {
     fi
 
     # Handle a fixed test suite URL if we are NOT bisecting the test suite itself.
-    if [[ "${ID_TYPES[tb]}" != "range" && "${ID_TYPES[tb]}" != "list" && -n "$TEST_SUITE_BUILD" ]]; then
+    if [[ "${ID_TYPES[tb]}" != "range" && "${ID_TYPES[tb]}" != "list" && -n "$TEST_SUITE_BUILD" && ${#TEST_NAME[@]} > 0 ]]; then
         prepare_test_suite "$TEST_SUITE_BUILD"
     fi
 }
 
 function fail_error() {
     local message="$1"
-    local exit_code="${2:-1}"
+    local exit_code="${2:-$EXIT_FAILURE}"
     # Pass frame offset 2 to log_error to point to the caller of fail_error
     log_error "$message" "$exit_code" 2
     exit "$exit_code"
@@ -756,16 +761,30 @@ function setup_and_test_combination() {
         log_info "Optimization: PB is fixed and already flashed in this session. Setting current_pb to 'none' to skip re-flashing."
         current_pb="none"
     fi
-    if ! is_test_suite_fixed "$current_tb_locator"; then
-        prepare_test_suite "$current_tb_locator"
-        CURRENT_TEST_SUITE_LOCATOR="$required_locator"
-        xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
+
+    if (( ${#TEST_NAME[@]} > 0 )); then
+        if ! is_test_suite_fixed "$current_tb_locator"; then
+            prepare_test_suite "$current_tb_locator"
+            CURRENT_TEST_SUITE_LOCATOR="$current_tb_locator"
+            xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
+        fi
     fi
 
     perform_device_setup "$current_pb" "$current_kb" "$current_vkb" "$current_sb"
+    local setup_status=$?
+    if (( setup_status != 0 )); then
+        log_warn "Device setup failed. Returning error status $setup_status."
+        return $EXIT_SETUP_FAILED
+    fi
+
     if [[ "$current_pb" != "none" && -n "$current_pb" ]]; then
         HAS_FLASHED_PB=true
         log_info "HAS_FLASHED_PB set to true for the current session."
+    fi
+
+    if (( ${#TEST_NAME[@]} == 0 )); then
+        log_info "Boot test PASSED for this combination."
+        return $TEST_PASSED
     fi
 
     run_tests_on_device
@@ -817,10 +836,12 @@ function perform_device_setup() {
     done
 
     if ! "$setup_success"; then
-        fail_error "Device setup failed after $SETUP_RETRY attempts."
+        log_error "Device setup failed after $SETUP_RETRY attempts."
+        return $EXIT_SETUP_FAILED
     fi
 
     log_info "Device setup successful."
+    return $EXIT_SUCCESS
 }
 
 function run_tests_on_device() {
@@ -831,19 +852,19 @@ function run_tests_on_device() {
         fi
         if [[ -z "$input_serial_to_use" ]]; then
              log_error "Could not determine virtual device serial from output file."
-             return 1
+             return $EXIT_FAILURE
         fi
     fi
 
     if ! device_util::init "$input_serial_to_use"; then
-        return 1
+        return $EXIT_FAILURE
     fi
     if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        device_util::wait_for_boot_complete || return 1
+        device_util::wait_for_boot_complete || return $EXIT_FAILURE
     else
         # Physical devices
-        device_util::unlock_screen || return 1
-        device_util::skip_setup_wizard || return 1
+        device_util::unlock_screen || return $EXIT_FAILURE
+        device_util::skip_setup_wizard || return $EXIT_FAILURE
     fi
 
     local adb_serial
@@ -861,13 +882,13 @@ function run_tests_on_device() {
         "${test_cmd[@]}"
         if (( $? == 0 )); then
             log_info "Test SUCCEEDED."
-            return 0 # GOOD
+            return $TEST_PASSED
         fi
         log_warn "Test failed (Attempt $i/$TEST_RETRY). Retrying..."
     done
 
     log_warn "Test FAILED after $TEST_RETRY attempts."
-    return 1 # BAD
+    return $TEST_FAILED
 }
 
 function validate_initial_builds() {
@@ -900,8 +921,9 @@ function validate_initial_builds() {
 
     log_info "Testing with initial good combination: ${initial_good_combination[*]}"
     setup_and_test_combination "${initial_good_combination[@]}"
-    if (( $? != 0 )); then
-        fail_error "Validation failed: The combination of the FIRST builds in all ranges is FAILING the test."
+    local init_status=$?
+    if (( init_status != 0 )); then
+        fail_error "Validation failed: The combination of the FIRST builds in all ranges is FAILING the test (or setup)."
     fi
     log_info "Initial 'all good' combination PASSED."
 
@@ -955,6 +977,10 @@ function validate_initial_builds() {
             xml_util::update_xml_attribute "/bisect/$node_name" "good_index" "0"
             xml_util::update_xml_attribute "/bisect/$node_name" "bad_index" "${BAD_INDICES[$type_to_check]}"
             xml_util::update_xml_attribute "/bisect/$node_name" "is_breaking" "true"
+
+            if (( test_status == EXIT_SETUP_FAILED )) && (( ${#TEST_NAME[@]} > 0 )); then
+                fail_error "Setup failed. BAD_INDEX has been updated in the XML file before exiting."
+            fi
         else
             log_info "RESULT: Build type '${type_to_check}' is NOT identified as breaking."
             IS_BREAKING[$type_to_check]=false
@@ -1045,6 +1071,10 @@ function bisect_single_build_type() {
             bad_idx=$mid_idx
             BAD_INDICES[$type_code_to_bisect]=$bad_idx
             xml_util::update_xml_attribute "/bisect/$node_name" "bad_index" "$bad_idx"
+
+            if (( test_status == EXIT_SETUP_FAILED )) && (( ${#TEST_NAME[@]} > 0 )); then
+                fail_error "Setup failed. BAD_INDEX has been updated in the XML file before exiting."
+            fi
         fi
         log_info "New Range for $type_code_to_bisect: Index $good_idx (Good) to $bad_idx (Bad)"
     done
@@ -1111,7 +1141,7 @@ function main() {
     elif [[ "$BISECT_STATUS" == "complete" ]]; then
         log_info "Bisection is already complete according to state file. Showing final results."
         bisect_all_breaking_builds
-        exit 0
+        exit $EXIT_SUCCESS
     else
          log_info "--- Resuming bisection. Skipping initial validation. ---"
     fi
