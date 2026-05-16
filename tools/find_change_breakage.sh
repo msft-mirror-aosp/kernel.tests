@@ -691,13 +691,10 @@ function get_test_suite_base_dir() {
 
 function handle_test_suite_url() {
     local test_suite_url="$1"
-    log_info "Test suite provided as a URL. Preparing for download: $test_suite_url"
+    log_info "Test suite provided as a URL. Preparing for download..."
 
     local branch target build_id filename
-    if ! parse_ab_url "$test_suite_url" branch target build_id; then
-        fail_error "Could not parse test suite URL: $test_suite_url"
-    fi
-    filename="${test_suite_url##*/}"
+    parse_build_string "$test_suite_url" branch target build_id _ filename
 
     if [[ "${filename##*.}" != "zip" ]]; then
         fail_error "Test suite filename must be a .zip file. Got: ${filename}"
@@ -706,90 +703,28 @@ function handle_test_suite_url() {
     local base_dir
     base_dir=$(get_test_suite_base_dir)
 
-    if [[ "$build_id" == "latest" ]]; then
-        local staging_dir="${base_dir}/staging_$(date +%s%N)"
-        TEMP_DIRS+=("$staging_dir")
-        mkdir -p "$staging_dir" || fail_error "Could not create staging directory: ${staging_dir}"
-
-        log_info "Build ID is 'latest', downloading to staging area to resolve version..."
-
-        pushd "$staging_dir" >/dev/null || fail_error "pushd failed: Could not enter staging directory."
-        local download_success=false
-        for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
-            "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
-            if (( $? == 0 )) && [[ -f "$filename" ]]; then
-                download_success=true
-                break
-            fi
-            log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
-            sleep 10
-        done
-        popd >/dev/null || fail_error "popd failed: Could not return from staging directory."
-
-        if ! "$download_success"; then
-            fail_error "Failed to download 'latest' test suite."
+    local suite_path="${base_dir}/${branch}/${target}/${build_id}"
+    local download_success=false
+    for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
+        "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
+        if (( $? == 0 )) && [[ -f "${suite_path}/${filename}" ]]; then
+            download_success=true
+            break
         fi
+        log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
+        sleep 10
+    done
 
-        local zip_file_path="${staging_dir}/${filename}"
-        log_info "unzipping file: ${zip_file_path}..."
-        unzip -q "$zip_file_path" -d "$staging_dir" || fail_error "Failed to unzip staging file."
-
-        local unzipped_root_dir
-        unzipped_root_dir=$(find "$staging_dir" -mindepth 1 -maxdepth 1 -type d)
-
-        local version_file="${unzipped_root_dir}/tools/version.txt"
-        if [[ ! -f "$version_file" ]]; then
-            fail_error "Cannot resolve 'latest' build ID: 'tools/version.txt' not found."
-        fi
-
-        local resolved_build_id
-        resolved_build_id=$(<"$version_file")
-        if ! [[ "$resolved_build_id" =~ ^[0-9]+$ ]]; then
-            fail_error "Invalid build ID found in version.txt: '$resolved_build_id'"
-        fi
-        log_info "Resolved 'latest' build ID to: $resolved_build_id"
-
-        local final_suite_path="${base_dir}/${branch}/${target}/${resolved_build_id}"
-        [[ -d "$final_suite_path" ]] && rm -rf "$final_suite_path"
-        mkdir -p "$final_suite_path"
-
-        mv "$unzipped_root_dir" "$final_suite_path/" || fail_error "Failed to move test suite to final location."
-        TEST_DIR="${final_suite_path}/$(basename "$unzipped_root_dir")"
-
-    else # This branch handles numeric build IDs
-        local suite_path="${base_dir}/${branch}/${target}/${build_id}"
-
-        if [[ -z "$CACHE_DIR" ]]; then
-            TEMP_DIRS+=("$suite_path")
-        fi
-        [[ -d "$suite_path" ]] && rm -rf "$suite_path"
-        mkdir -p "$suite_path" || fail_error "Could not create directory: ${suite_path}"
-
-        pushd "$suite_path" >/dev/null || fail_error "pushd failed: Could not enter suite directory."
-        local download_success=false
-        for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
-            "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
-            if (( $? -eq 0 )) && [[ -f "$filename" ]]; then
-                download_success=true
-                break
-            fi
-            log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
-            sleep 10
-        done
-        popd >/dev/null || fail_error "popd failed: Could not return from suite directory."
-
-        if ! "$download_success"; then
-            fail_error "Failed to download test suite '${filename}'."
-        fi
-
-        log_info "unzipping file: ${filename}..."
-        unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip file."
-        rm -f "${suite_path}/${filename}"
-
-        local unzipped_root_dir
-        unzipped_root_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
-        TEST_DIR="$unzipped_root_dir"
+    if ! "$download_success"; then
+        fail_error "Failed to download test suite '${filename}'."
     fi
+
+    log_info "unzipping file: ${filename}..."
+    unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip file."
+
+    local unzipped_root_dir
+    unzipped_root_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
+    TEST_DIR="$unzipped_root_dir"
 
     if [[ -z "$TEST_DIR" || ! -d "$TEST_DIR" ]]; then
         fail_error "Test suite directory could not be prepared correctly."
@@ -800,55 +735,53 @@ function handle_test_suite_url() {
 }
 
 function prepare_test_suite() {
-    local locator="$1"
-    log_info "Preparing test suite: $locator"
+    local required_locator="$1"
 
-    # We only need to *prepare* if it's an 'ab' URL.
-    # 'local' or 'fixed_commit' paths are used directly.
-    if [[ "$locator" == ab://* ]]; then
-        # --- Caching logic ---
-        local branch target build_id filename
-        if ! parse_ab_url "$locator" branch target build_id; then
-            fail_error "Could not parse test suite URL: $locator"
-        fi
-        filename="${locator##*/}" # Get filename from the URL itself
-        local base_dir
-        base_dir=$(get_test_suite_base_dir)
-        local suite_path="${base_dir}/${branch}/${target}/${build_id}"
+    log_info "Checking for required test suite: $required_locator"
 
-        if [[ -d "$suite_path" ]]; then
-            # Check for the unzipped directory inside
-            local unzipped_dir
-            unzipped_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
-            if [[ -n "$unzipped_dir" && -d "$unzipped_dir" ]]; then
-                log_info "Found existing test suite in cache: $unzipped_dir"
-                TEST_DIR="$unzipped_dir"
-                CURRENT_TEST_SUITE_LOCATOR="$locator"
-                if [[ -f "$BISECT_CONFIG_FILE" ]]; then
-                    xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
-                fi
-                return 0
-            fi
-        fi
-        # --- End caching logic ---
-
-        log_info "Test suite not found in cache. Downloading..."
-        handle_test_suite_url "$locator"
-
-    elif [[ "${ID_TYPES[tb]}" == "fixed_commit" ]]; then
-        # Check out the fixed_commit for the test suite
-        log_info "Test suite is fixed_commit. Checking out..."
-        checkout_commit "tb" "${COMMITS_TO_TEST_MAP[tb]}" || fail_error "Failed to checkout fixed_commit for test suite."
-        TEST_DIR="${TREE_PATHS[tb]}" # Use the whole tree as the test dir
-    else
-        TEST_DIR="$locator" # It's a local path
+    # If it's a local path, just update the state and return.
+    if [[ "$required_locator" != ab://* ]]; then
+        TEST_DIR="$required_locator"
+        return $EXIT_SUCCESS
     fi
 
-    # TODO
-    CURRENT_TEST_SUITE_LOCATOR="$locator"
-    if [[ -f "$BISECT_CONFIG_FILE" ]]; then
-        xml_util::update_xml_attribute "/bisect/parameters" "test_dir" "$TEST_DIR"
+    # For ab:// URLs, check the cache.
+    local branch target build_id filename
+    parse_build_string "$required_locator" branch target build_id _ filename
+
+    if [[ "${build_id[0]}" == "latest" ]]; then
+        log_info "Resolving 'latest' build ID for test suite..."
+        local resolved_id
+        if ! resolved_id=$(query_latest_build_id "$branch" "$target"); then
+            fail_error "Failed to query the latest build ID for ${branch}/${target}"
+        fi
+        if [[ -z "$resolved_id" ]]; then
+            fail_error "Queried latest build ID is empty for ${branch}/${target}"
+        fi
+        log_info "Resolved 'latest' to build ID: $resolved_id"
+        build_id[0]="$resolved_id"
+        # Update the required_locator so handle_test_suite_url uses the numeric ID
+        required_locator="ab://${branch}/${target}/${resolved_id}/${filename}"
     fi
+
+    local base_dir
+    base_dir=$(get_test_suite_base_dir)
+
+    local suite_base_path="${base_dir}/${branch}/${target}/${build_id[0]}"
+    if [[ -d "$suite_base_path" ]]; then
+        # The base directory exists, check for a single unzipped subdirectory.
+        local unzipped_dir
+        unzipped_dir=$(find "$suite_base_path" -mindepth 1 -maxdepth 1 -type d)
+        if [[ -n "$unzipped_dir" && -d "$unzipped_dir" ]]; then
+            log_info "Found existing test suite in cache: $unzipped_dir"
+            TEST_DIR="$unzipped_dir"
+            return $EXIT_SUCCESS
+        fi
+    fi
+
+    # If not cached, download it.
+    log_info "Test suite not found in cache. Downloading..."
+    handle_test_suite_url "$required_locator"
 }
 
 # --- Core Bisection and Testing Logic ---
