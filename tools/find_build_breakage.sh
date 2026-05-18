@@ -58,6 +58,9 @@ declare -A IS_BREAKING
 # Holds the list of build type codes that were identified as breaking.
 BISECT_BUILD_TYPES=()
 BISECT_STATUS=""
+# Holds the project commit ranges for the breaking builds.
+declare -A PROJECT_COMMIT_RANGES
+PROJECTS_WITH_CHANGES=()
 
 # --- Library Import ---
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
@@ -96,6 +99,7 @@ readonly LAUNCH_CVD_SCRIPT="${SCRIPT_DIR}/launch_cvd.sh"
 readonly FLASH_DEVICE_SCRIPT="${SCRIPT_DIR}/flash_device.sh"
 readonly RUN_TEST_SCRIPT="${SCRIPT_DIR}/run_test_only.sh"
 readonly QUERY_BUILD_SCRIPT="${SCRIPT_DIR}/query_build.sh"
+readonly QUERY_CHANGE_SCRIPT="${SCRIPT_DIR}/query_change.sh"
 readonly FETCH_ARTIFACT_SCRIPT="${SCRIPT_DIR}/fetch_artifact.sh"
 
 # --- Functions ---
@@ -1080,6 +1084,62 @@ function bisect_single_build_type() {
     done
 }
 
+function print_commit_ranges_for_build() {
+    local build_id="$1"
+    if [[ -z "$build_id" ]]; then
+        return
+    fi
+
+    local changes_csv="$OUTPUT_DIR/changes_${build_id}.csv"
+    log_info "Querying changes for bad build ${build_id}..."
+    if "$QUERY_CHANGE_SCRIPT" -bid "$build_id" -o "$changes_csv" &>/dev/null; then
+        if [[ -f "$changes_csv" ]]; then
+            log_info "Commit ID range for each project in build ${build_id}:"
+            while IFS='|' read -r project range; do
+                if [[ -z "$project" ]]; then
+                    continue
+                fi
+                PROJECTS_WITH_CHANGES+=("$project")
+                PROJECT_COMMIT_RANGES["$project"]="$range"
+                if [[ "$range" == *"-"* ]]; then
+                    log_info "  Project: $project, Commit Range: $range"
+                else
+                    log_info "  Project: $project, Commit: $range"
+                fi
+                if [[ "$project" == "kernel/common" ]]; then
+                    log_info " Please try kernel/tests/tools/find_change_breakage.sh with -kb <your_local_source_code>/common:$range"
+                fi
+            done < <(awk -F',' '
+                NR > 1 {
+                    gsub(/"/, "", $2);
+                    gsub(/"/, "", $4);
+                    commit = $2;
+                    project = $4;
+                    if (project != "" && commit != "") {
+                        if (!(project in first_commit)) {
+                            first_commit[project] = commit;
+                            projects[num_projects++] = project;
+                        }
+                        last_commit[project] = commit;
+                    }
+                }
+                END {
+                    for (i = 0; i < num_projects; i++) {
+                        p = projects[i];
+                        if (first_commit[p] == last_commit[p]) {
+                            printf "%s|%s\n", p, first_commit[p];
+                        } else {
+                            printf "%s|%s-%s\n", p, first_commit[p], last_commit[p];
+                        }
+                    }
+                }
+            ' "$changes_csv")
+        fi
+    else
+        log_warn "Failed to query changes for build ${build_id}."
+    fi
+}
+
 function bisect_all_breaking_builds() {
     # Bisect each breaking build type in the specified order
     for type_code in "${BISECT_ORDER[@]}"; do
@@ -1108,6 +1168,8 @@ function bisect_all_breaking_builds() {
         log_info "--- Results for ${BUILD_TYPE_MAP[$type_code]} ($type_code) ---"
         log_info "Last known good build: $last_good_url"
         log_info "${RED}First known bad build: $first_bad_url${END}"
+
+        print_commit_ranges_for_build "$first_bad_id"
     done
 }
 
