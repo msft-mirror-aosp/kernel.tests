@@ -18,6 +18,7 @@ WIFI_NETWORK="Google-Guest"
 WIFI_PASSWORD=""
 FORCE_WIFI_CONNECTION=true
 DISABLE_AUDIO=true
+IS_VIRTUAL_DEVICE=false
 readonly REQUIRED_COMMANDS=("adb" "dirname")
 
 function print_help() {
@@ -148,7 +149,7 @@ function connect_to_wifi() {
     local target_wifi_network="${WIFI_NETWORK}"
     local connect_command=""
     log_info "${SERIAL_NUMBER} is not currently connected to Wi-Fi. Attempting to connect..."
-    if [[ "$BOARD" == "cutf" || "$PRODUCT" == *"cf_"* ]]; then
+    if [[ "$IS_VIRTUAL_DEVICE" == true ]]; then
         target_wifi_network="VirtWifi"
     fi
     if [ -z "$WIFI_PASSWORD" ]; then
@@ -162,7 +163,7 @@ function connect_to_wifi() {
         return 1
     fi
     # Cuttlefish needs a second connect attempt
-    if [[ "$BOARD" == "cutf" || "$PRODUCT" == *"cf_"* ]]; then
+    if [[ "$IS_VIRTUAL_DEVICE" == true ]]; then
         eval "${connect_command}"
     fi
     # 4. Wait for WiFi connection to be established
@@ -184,7 +185,7 @@ function connect_to_wifi() {
         return 1
     fi
     # Cuttlefish needs a second connect attempt
-    if [[ "$BOARD" == "cutf" || "$PRODUCT" == *"cf_"* ]]; then
+    if [[ "$IS_VIRTUAL_DEVICE" == true ]]; then
         eval "${connect_command}"
     fi
     if wait_for_wifi_status "Wifi is connected" check_timeout; then
@@ -231,15 +232,11 @@ function run_atest_in_platform_repo() {
 }
 
 function unset_android_environment() {
-    for var in $(env); do
-      # Extract the variable name
-      var_name="${var%%=*}"
-      # Check if the variable name starts with "ANDROID"
-      if [[ "$var_name" == "ANDROID"* ]]; then
-        # Unset the variable
-        unset "$var_name"
-      fi
-    done
+    if [[ -z "${ANDROID_BUILD_TOP}" ]]; then
+        return
+    fi
+    log_info "Unsetting ANDROID_BUILD_TOP environment variable."
+    unset ANDROID_BUILD_TOP
 }
 
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
@@ -431,6 +428,10 @@ ABI=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
 PRODUCT=$(adb -s "$SERIAL_NUMBER" shell getprop ro.product.product.name)
 BUILD_TYPE=$(adb -s "$SERIAL_NUMBER" shell getprop ro.build.type)
 
+if [[ "$BOARD" == "cutf" || "$PRODUCT" == *"cf_"* ]]; then
+    IS_VIRTUAL_DEVICE=true
+fi
+
 log_info "Testing on device $SERIAL_NUMBER: BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE"
 
 if ! connect_to_wifi && [[ "$FORCE_WIFI_CONNECTION" == "true" ]]; then
@@ -585,8 +586,7 @@ if [[ -n "$tf_cli" && -n "$testcases_path" ]]; then
     log_info "Will run tests with ${xts}-tradefed from $TEST_DIR"
     tf_cli+=" run commandAndExit ${xts} --log-level-display info"
     TEST_DIR=$(dirname "$testcases_path")
-    # TODO(b/500346165): Temporarily commented out due to MobileHarnessException
-    # unset_android_environment
+    unset_android_environment
 else
     if [[ -n "$TRADEFED" ]]; then
         if [[ "$REPO_LIST_OUT" == *"kernel/common"* ]]; then
@@ -615,6 +615,19 @@ For example -tf ab://tradefed/tradefed/latest/tradefed.zip"
     fi
     log_info "Use Tradefed from $TRADEFED"
     tf_cli+=" template/local_min --template:map test=suite/test_mapping_suite --tests-dir=$TEST_DIR"
+fi
+
+# Do not run Cuttlefish unsupported tests
+if [[ "$IS_VIRTUAL_DEVICE" == true ]]; then
+    tf_cli+=" --test-arg com.android.tradefed.testtype.AndroidJUnitTest:exclude-annotation:android.support.test.filters.RequiresDevice"
+    tf_cli+=" --test-arg com.android.tradefed.testtype.AndroidJUnitTest:exclude-annotation:androidx.test.filters.RequiresDevice"
+    tf_cli+=" --test-arg com.android.tradefed.testtype.AndroidJUnitTest:exclude-annotation:android.platform.test.annotations.RequiresDevice"
+    tf_cli+=" --test-arg com.android.compatibility.testtype.LibcoreTest:exclude-annotation:android.support.test.filters.RequiresDevice"
+    tf_cli+=" --test-arg com.android.compatibility.testtype.LibcoreTest:exclude-annotation:androidx.test.filters.RequiresDevice"
+    tf_cli+=" --test-arg com.android.compatibility.testtype.LibcoreTest:exclude-annotation:android.platform.test.annotations.RequiresDevice"
+    tf_cli+=" --test-arg com.android.tradefed.testtype.HostTest:exclude-annotation:android.platform.test.annotations.RequiresDevice"
+    tf_cli+=" --test-arg com.android.compatibility.common.tradefed.testtype.JarHostTest:exclude-annotation:android.platform.test.annotations.RequiresDevice"
+    tf_cli+=" --test-arg com.android.tradefed.testtype.junit4.BaseHostJUnit4Test:exclude-annotation:android.platform.test.annotations.RequiresDevice"
 fi
 
 tf_cli+=" $TEST_FILTERS --log-level-display info --log-file-path=$LOG_DIR -s $SERIAL_NUMBER"
