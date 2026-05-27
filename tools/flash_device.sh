@@ -12,7 +12,8 @@ MIX_SCRIPT_NAME="build_mixed_kernels_ramdisk"
 MIN_FASTBOOT_VERSION="35.0.2-12583183"
 VENDOR_KERNEL_IMGS=("boot.img" "initramfs.img" "dtb.img" "dtbo.img" "vendor_dlkm.img")
 # For Pixel kernel branches like kernel-pixel-android*-gs-pixel*
-VENDOR_KERNEL_IMGS_PIXEL_BRANCH=("boot.img" "vendor_kernel_boot.img" "dtbo.img" "vendor_dlkm.img" "system_dlkm.img")
+VENDOR_KERNEL_IMGS_PIXEL=("boot.img" "vendor_kernel_boot.img" "dtbo.img" "vendor_dlkm.img" "system_dlkm.img")
+VENDOR_KERNEL_IMGS_PIXEL6=("dtbo.img" "dtb.img" "initramfs.img")
 SKIP_UPDATE_BOOTLOADER=false
 SKIP_BUILD=false
 GCOV=false
@@ -23,6 +24,7 @@ EXTRA_OPTIONS=()
 DEVICE_VARIANT="userdebug"
 DEVICE_LUNCH_TARGET=
 FLASH_LOGICAL_PARTITION_FIRST=false
+DISABLE_PKVM=false
 
 ABI=
 PRODUCT=
@@ -625,6 +627,9 @@ function format_ab_vendor_kernel_build_string() {
             exit 1
             ;;
     esac
+    if [[ "$_branch" =~ "6.1" ]] && [[ "$_build_target" =~ "16k" ]]; then
+        DISABLE_PKVM=true
+    fi
     if [[ -z "$_build_target" ]]; then
         case "$PRODUCT" in
             caiman | komodo | tokay )
@@ -930,8 +935,10 @@ function download_vendor_kernel_for_direct_flash() {
     local _vendor_kernel_dir="$VENDOR_KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
     local _image_patterns=("${VENDOR_KERNEL_IMGS[@]}")
 
-    if [[ "$_build_info" == *kernel-pixel-android*-gs-pixel* ]]; then
-        _image_patterns=("${VENDOR_KERNEL_IMGS_PIXEL_BRANCH[@]}")
+    if [[ "$_build_info" == *kernel-pixel-android*-gs-pixel* && "${PRODUCT}" != "raven" && "${PRODUCT}" != "oriole"  && "${PRODUCT}" != "bluejay" ]]; then
+        _image_patterns=("${VENDOR_KERNEL_IMGS_PIXEL[@]}")
+    elif [[ "${PRODUCT}" == "raven" || "${PRODUCT}" == "oriole" || "${PRODUCT}" == "bluejay" ]]; then
+        _image_patterns=("${VENDOR_KERNEL_IMGS_PIXEL6[@]}")
     fi
 
     log_info "Downloading vendor kernel artifacts ${_image_patterns[*]} from $VENDOR_KERNEL_BUILD"
@@ -1096,8 +1103,13 @@ function flash_vendor_kernel_build() {
     reboot_device_into_bootloader
 
     local _bootloader_flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w && sleep 2"
-    _bootloader_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION boot $VENDOR_KERNEL_BUILD/boot.img"
-    if [[ -f "$VENDOR_KERNEL_BUILD/dtb.img" && -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]]; then
+    if [[ "$DISABLE_PKVM" == "true" ]]; then
+        _bootloader_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER oem pkvm disable"
+    fi
+    if [[ -f "$VENDOR_KERNEL_BUILD/boot.img" ]]; then
+        _bootloader_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION boot $VENDOR_KERNEL_BUILD/boot.img"
+    fi
+    if [[ ! -f "$VENDOR_KERNEL_BUILD/vendor_dlkm.img" ]] && [[ -f "$VENDOR_KERNEL_BUILD/dtb.img" && -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]]; then
         _bootloader_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION "
         _bootloader_flash_cmd+="--dtb $VENDOR_KERNEL_BUILD/dtb.img vendor_boot:dlkm $VENDOR_KERNEL_BUILD/initramfs.img"
     fi
@@ -1111,15 +1123,26 @@ function flash_vendor_kernel_build() {
     if [[ -f "$VENDOR_KERNEL_BUILD/system_dlkm.img" ]]; then
         _fastbootd_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION system_dlkm $VENDOR_KERNEL_BUILD/system_dlkm.img"
     fi
-    _fastbootd_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION vendor_dlkm $VENDOR_KERNEL_BUILD/vendor_dlkm.img"
+    if [[ -f "$VENDOR_KERNEL_BUILD/vendor_dlkm.img" ]]; then
+        _fastbootd_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION vendor_dlkm $VENDOR_KERNEL_BUILD/vendor_dlkm.img"
+    fi
     _fastbootd_flash_cmd+=" && sleep 2"
 
     if [[ "$FLASH_LOGICAL_PARTITION_FIRST" == "true" ]]; then
-        _flash_cmd="$_fastbootd_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot bootloader && sleep 2"
+        if [[ -n "$_fastbootd_flash_cmd" ]]; then
+            _flash_cmd="$_fastbootd_flash_cmd && "
+        else
+            _flash_cmd=""
+        fi
+        _flash_cmd+="fastboot -s $FASTBOOT_SERIAL_NUMBER reboot bootloader && sleep 2"
         _flash_cmd+=" && $_bootloader_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
     else
-        _flash_cmd="$_bootloader_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot"
-        _flash_cmd+=" && sleep 5 && $_fastbootd_flash_cmd && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
+        _flash_cmd="$_bootloader_flash_cmd"
+        if [[ -n "$_fastbootd_flash_cmd" ]]; then
+            _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot fastboot"
+            _flash_cmd+=" && sleep 5 && $_fastbootd_flash_cmd"
+        fi
+        _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
     fi
 
     log_info "Executing vendor kernel flash command: $_flash_cmd"
@@ -2084,7 +2107,11 @@ fi
 if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     format_ab_vendor_kernel_build_string
     log_info "Downloading vendor kernel build $VENDOR_KERNEL_BUILD"
-    if [[ -n "$PLATFORM_BUILD" ]] && [[ "$VENDOR_KERNEL_BUILD" == *raviole* || "$FORCE_MIXED_BUILD" == "true" ]]; then
+    if [[ -n "$PLATFORM_BUILD" && -n "$KERNEL_BUILD" ]] && 
+    [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" || "$PRODUCT" == "bluejay" ]]; then
+        FORCE_MIXED_BUILD=true
+    fi
+    if [[ "$FORCE_MIXED_BUILD" == "true" ]]; then
         download_vendor_kernel_build
     else
         download_vendor_kernel_for_direct_flash
@@ -2156,7 +2183,7 @@ else  # Platform build provided
         log_info "Flash platform build from $PLATFORM_BUILD"
         flash_platform_build
     elif [[ -z "$KERNEL_BUILD" && -n "$VENDOR_KERNEL_BUILD" ]]; then  # Vendor kernel build and platform build
-        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" || "$FORCE_MIXED_BUILD" == "true" ]]; then
+        if [[ "$FORCE_MIXED_BUILD" == "true" ]]; then
             log_info "Mix vendor kernel and platform build"
             mixing_build
             flash_platform_build
@@ -2173,7 +2200,7 @@ else  # Platform build provided
         flash_platform_build
         flash_kernel_build
     elif [[ -n "$KERNEL_BUILD" && -n "$VENDOR_KERNEL_BUILD" ]]; then  # All three builds provided
-        if [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" || "$FORCE_MIXED_BUILD" == "true" ]]; then
+        if [[ "$FORCE_MIXED_BUILD" == "true" ]]; then
             log_info "Mix common kernel, vendor kernel and platform build"
             mixing_build
             flash_platform_build
