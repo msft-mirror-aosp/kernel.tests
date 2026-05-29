@@ -21,7 +21,7 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
 usage() {
-  echo -n "usage: $0 [-h] [-s bullseye|bullseye-cuttlefish|bullseye-rockpi|bullseye-server] "
+  echo -n "usage: $0 [-h] [-s bullseye] "
   echo -n "[-a i386|amd64|armhf|arm64] -k /path/to/kernel "
   echo -n "-i /path/to/initramfs.gz [-d /path/to/dtb:subdir] "
   echo "[-m http://mirror/debian] [-n rootfs|disk] [-r initrd] [-e] [-g]"
@@ -284,27 +284,10 @@ if [[ "${install_grub}" = 1 ]]; then
   # assumes all partitions are 1MB aligned
   truncate -s "$((1 + 128 + 10 * 1024 + 1))M" "${disk}"
   /sbin/sgdisk --zap-all "${disk}" >/dev/null 2>&1
-  # On RockPi devices, steal a bit of space at the start of the disk for
-  # some special bootloader partitions. Some of these have to start/end
-  # at specific offsets as well
-  if [[ "${suite#*-}" = "rockpi" ]]; then
-    # See https://opensource.rock-chips.com/wiki_Boot_option
-    # Keep in sync with rootfs/*-rockpi.sh
-    sgdisk "64:8127"   "8301"        "idbloader" "true"
-    sgdisk "8128:+64"  "8301"        "uboot_env" "true"
-    sgdisk "8M:+4M"    "8301"        "uboot"
-    sgdisk "12M:+4M"   "8301"        "trust"
-    sgdisk "16M:+1M"   "8301"        "misc"
-    sgdisk "17M:+128M" "ef00"        "esp"       ""     "0"
-    sgdisk "145M:0"    "8305"        "rootfs"    ""     "2"
-    system_partition="6"
-    rootfs_partition="7"
-  else
-    sgdisk "0:+128M"   "ef00"        "esp"       ""     "0"
-    sgdisk "0:0"       "${partguid}" "rootfs"    ""     "2"
-    system_partition="1"
-    rootfs_partition="2"
-  fi
+  sgdisk "0:+128M"   "ef00"        "esp"       ""     "0"
+  sgdisk "0:0"       "${partguid}" "rootfs"    ""     "2"
+  system_partition="1"
+  rootfs_partition="2"
 
   # Create an empty EFI system partition; it will be initialized later
   system_partition_start=$(partx -g -o START -s -n "${system_partition}" "${disk}" | xargs)
