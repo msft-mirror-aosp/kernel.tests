@@ -19,7 +19,6 @@
 
 iptables=iptables-1.8.7
 debian_iptables=1.8.7-1
-cuttlefish=android-cuttlefish
 
 setup_and_build_iptables() {
   get_installed_packages >/root/originally-installed
@@ -94,47 +93,6 @@ install_and_cleanup_iptables() {
     # Tidy up the mess we left behind, leaving just the source tarballs
     rm -rf $iptables *.{buildinfo,changes,deb,dsc}
   cd -
-}
-
-setup_and_build_cuttlefish() {
-  if [ "$(uname -m)" = "aarch64" ]; then
-    apt-get install -y libc6:amd64
-  fi
-
-  get_installed_packages >/root/originally-installed
-
-  # Install everything needed from bullseye to build android-cuttlefish
-  apt-get install -y \
-    cdbs \
-    debhelper \
-    devscripts \
-    dpkg-dev \
-    equivs \
-    git
-
-  # Fetch android-cuttlefish and build it
-  git clone https://github.com/google/android-cuttlefish.git /usr/src/$cuttlefish
-  for subdir in base frontend; do
-    cd /usr/src/$cuttlefish/$subdir
-      mk-build-deps --install --tool='apt-get -o Debug::pkgProblemResolver=yes --no-install-recommends --yes' debian/control
-      dpkg-buildpackage -d -uc -us
-    cd -
-  done
-
-  get_installed_packages >/root/installed
-  remove_installed_packages /root/originally-installed /root/installed
-  apt-get clean
-}
-
-install_and_cleanup_cuttlefish() {
-  # Install and clean up cuttlefish host packages
-  cd /usr/src/$cuttlefish
-    apt-get install -y -f ./cuttlefish-base_*.deb
-    apt-get install -y -f ./cuttlefish-user_*.deb
-    apt-get install -y -f ./cuttlefish-integration_*.deb
-    apt-get install -y -f ./cuttlefish-common_*.deb
-  cd -
-  rm -rf /usr/src/$cuttlefish
 }
 
 bullseye_cleanup() {
