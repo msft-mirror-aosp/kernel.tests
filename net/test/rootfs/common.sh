@@ -97,18 +97,6 @@ EOF
   fi
 }
 
-setup_cuttlefish_user() {
-  # Add a default user and put them in the right group
-  addgroup --system cvdnetwork
-  useradd -m -G cvdnetwork,kvm,render,sudo,video \
-    -d /home/vsoc-01 --shell /bin/bash vsoc-01
-  echo -e "cuttlefish\ncuttlefish" | passwd vsoc-01
-
-  # Enable unlimited memory locking for vsoc-01, which is needed by protected
-  # KVM, which is enabled by default on arm64 devices
-  echo "vsoc-01 - memlock unlimited" >>/etc/security/limits.conf
-}
-
 # $* - One or more device names for getty spawns
 create_systemd_getty_symlinks() {
   for device in $*; do
