@@ -13,7 +13,7 @@ MIN_FASTBOOT_VERSION="35.0.2-12583183"
 VENDOR_KERNEL_IMGS=("boot.img" "initramfs.img" "dtb.img" "dtbo.img" "vendor_dlkm.img")
 # For Pixel kernel branches like kernel-pixel-android*-gs-pixel*
 VENDOR_KERNEL_IMGS_PIXEL=("boot.img" "vendor_kernel_boot.img" "dtbo.img" "vendor_dlkm.img" "system_dlkm.img")
-VENDOR_KERNEL_IMGS_PIXEL6=("dtbo.img" "dtb.img" "initramfs.img")
+VENDOR_KERNEL_IMGS_PIXEL6=("boot.img" "dtbo.img" "dtb.img" "initramfs.img" "vendor_dlkm.img")
 SKIP_UPDATE_BOOTLOADER=false
 SKIP_BUILD=false
 GCOV=false
@@ -415,6 +415,10 @@ function format_ab_platform_build_string() {
         elif (( array_len == 2 )); then
             PLATFORM_BUILD+="/latest"
         fi
+    fi
+    if [[ "$PLATFORM_BUILD" != *"$PRODUCT"* ]]; then
+        log_error "$PLATFORM_BUILD build target doesn't match to device $PRODUCT"
+        exit 1
     fi
     local updated_ab_string=""
     if ! convert_ab_string "$PLATFORM_BUILD" updated_ab_string; then
@@ -849,7 +853,7 @@ function download_kernel_build() {
         local _new_file_name="$_pattern"
         if [[ "$_pattern" == "boot-lz4.img" ]]; then
             _new_file_name="boot.img"
-        elif [[ "$_pattern" == system_dlkm* ]]; then
+        elif [[ "$_pattern" == system_dlkm* && "$_pattern" != system_dlkm_staging_* ]]; then
             _new_file_name="system_dlkm.img"
         fi
         if [[ "$_pattern" == "gsi_arm64-img-*.zip" ]]; then
@@ -885,7 +889,7 @@ function download_vendor_kernel_build() {
             else
                 _file_patterns+=("vendor_dlkm_staging_archive.tar.gz" "vendor_dlkm.props" "vendor_dlkm_file_contexts" \
                 "kernel_aarch64_Module.symvers" "abi_gki_aarch64_pixel")
-                if [[ "$_build_info" == *android15* && "$_build_info" == *6.6* ]]; then
+                if [[ "$_build_info" == *android1[5-9]* ]]; then
                     _file_patterns+=("vendor_dev_nodes_fragment.img" 'vendor-bootconfig.img')
                 elif [[ "$_build_info" == *pixel-mainline* ]]; then
                     _file_patterns+=("vendor-bootconfig.img")
@@ -922,9 +926,10 @@ function download_vendor_kernel_build() {
         if [[ "$_pattern" == "vendor_dev_nodes_fragment.img" ]]; then
             _new_file_name="vendor_ramdisk_fragment_extra.img"
         elif [[ "$_pattern" == "abi_gki_aarch64_pixel" ]]; then
-            _new_file_name="abi_gki_aarch64_pixel extracted_symbols"
+            _new_file_name="extracted_symbols"
         fi
         create_soft_link "$_full_file_name" "$_vendor_kernel_dir/$_new_file_name"
+
     done
     VENDOR_KERNEL_BUILD=$_vendor_kernel_dir
     echo ""
@@ -978,6 +983,7 @@ function reboot_device_into_bootloader() {
                 log_warn "Fail to disable-verity on $ADB_SERIAL_NUMBER"
             fi
         fi
+        sleep 5
         log_info "Reboot $ADB_SERIAL_NUMBER into bootloader"
         adb -s "$ADB_SERIAL_NUMBER" reboot bootloader
         FLASH_LOGICAL_PARTITION_FIRST=true
@@ -1109,7 +1115,7 @@ function flash_vendor_kernel_build() {
     if [[ -f "$VENDOR_KERNEL_BUILD/boot.img" ]]; then
         _bootloader_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION boot $VENDOR_KERNEL_BUILD/boot.img"
     fi
-    if [[ ! -f "$VENDOR_KERNEL_BUILD/vendor_dlkm.img" ]] && [[ -f "$VENDOR_KERNEL_BUILD/dtb.img" && -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]]; then
+    if [[ -f "$VENDOR_KERNEL_BUILD/dtb.img" && -f "$VENDOR_KERNEL_BUILD/initramfs.img" ]]; then
         _bootloader_flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER flash $FASTBOOT_FLASH_OPTION "
         _bootloader_flash_cmd+="--dtb $VENDOR_KERNEL_BUILD/dtb.img vendor_boot:dlkm $VENDOR_KERNEL_BUILD/initramfs.img"
     fi
@@ -2107,7 +2113,7 @@ fi
 if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     format_ab_vendor_kernel_build_string
     log_info "Downloading vendor kernel build $VENDOR_KERNEL_BUILD"
-    if [[ -n "$PLATFORM_BUILD" && -n "$KERNEL_BUILD" ]] && 
+    if [[ -n "$PLATFORM_BUILD" ]] && [[ -n "$KERNEL_BUILD" || "$VENDOR_KERNEL_BUILD" =~ "5.15" ]] &&
     [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" || "$PRODUCT" == "bluejay" ]]; then
         FORCE_MIXED_BUILD=true
     fi
