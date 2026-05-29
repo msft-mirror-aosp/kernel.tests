@@ -145,8 +145,6 @@ if [[ -z "${DEFCONFIG:-}" ]]; then
     arm64)
       if [[ -e arch/arm64/configs/gki_defconfig ]]; then
         export DEFCONFIG=gki_defconfig
-      elif [[ -e arch/arm64/configs/cuttlefish_defconfig ]]; then
-        export DEFCONFIG=cuttlefish_defconfig
       else
         export DEFCONFIG=defconfig
       fi
@@ -154,8 +152,6 @@ if [[ -z "${DEFCONFIG:-}" ]]; then
     x86_64)
       if [[ -e arch/x86/configs/gki_defconfig ]]; then
         export DEFCONFIG=gki_defconfig
-      elif [[ -e arch/x86/configs/x86_64_cuttlefish_defconfig ]]; then
-        export DEFCONFIG=x86_64_cuttlefish_defconfig
       else
         export DEFCONFIG=defconfig
       fi
