@@ -584,6 +584,7 @@ testcases_path=$(find "$TEST_DIR" -type d -name "testcases")
 if [[ -n "$tf_cli" && -n "$testcases_path" ]]; then
     xts=$(basename "$tf_cli" | cut -d'-' -f1)
     log_info "Will run tests with ${xts}-tradefed from $TEST_DIR"
+    tf_cli="IGNORE_JAVA_VERSION_ERROR=y $tf_cli"
     tf_cli+=" run commandAndExit ${xts} --log-level-display info"
     TEST_DIR=$(dirname "$testcases_path")
     unset_android_environment
@@ -591,10 +592,10 @@ else
     if [[ -n "$TRADEFED" ]]; then
         if [[ "$REPO_LIST_OUT" == *"kernel/common"* ]]; then
             # In Android kernel tree
-            tf_cli="JAVA_HOME=$KERNEL_JDK_PATH PATH=$KERNEL_JDK_PATH/bin:$PATH $TRADEFED run commandAndExit"
+            tf_cli="JAVA_HOME=$KERNEL_JDK_PATH PATH=$KERNEL_JDK_PATH/bin:$PATH $TRADEFED IGNORE_JAVA_VERSION_ERROR=y run commandAndExit"
         elif [[ "$REPO_LIST_OUT" == *"build/make"* ]]; then
             # In Android platform tree
-            tf_cli="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $TRADEFED run commandAndExit"
+            tf_cli="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $TRADEFED IGNORE_JAVA_VERSION_ERROR=y run commandAndExit"
         else
             tf_cli="$TRADEFED run commandAndExit"
         fi
@@ -603,10 +604,10 @@ else
         tf_cli="$TRADEFED run commandAndExit"
     elif [[ -f "$PLATFORM_TF_PREBUILT" ]]; then
         TRADEFED="$PLATFORM_TF_PREBUILT"
-        tf_cli="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $TRADEFED run commandAndExit"
+        tf_cli="JAVA_HOME=$PLATFORM_JDK_PATH PATH=$PLATFORM_JDK_PATH/bin:$PATH $TRADEFED IGNORE_JAVA_VERSION_ERROR=y run commandAndExit"
     elif [[ -f "${TRADEFED_DIR}/tradefed.sh" ]]; then
         TRADEFED="${TRADEFED_DIR}/tradefed.sh"
-        tf_cli="$TRADEFED run commandAndExit"
+        tf_cli="IGNORE_JAVA_VERSION_ERROR=y $TRADEFED run commandAndExit"
     # No Tradefed found
     else
         log_error "Can not find Tradefed binary. Please use flag -tf to specify the binary path. \
