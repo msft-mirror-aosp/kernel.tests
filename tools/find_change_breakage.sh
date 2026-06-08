@@ -136,14 +136,16 @@ function print_help() {
     echo "    ab://<branch>/<target>/<build_id>"
     echo "  For Fixed Local Tree:"
     echo "    /path/to/local/android/tree"
+    echo "  For Skipping specific build (Physical Device Only):"
+    echo "    none"
     echo ""
     echo "Options:"
     echo "  -pb,  --platform-build <string>"
-    echo "                                   Platform build definition."
+    echo "                                   Platform build definition. Can be set to 'none' for physical devices to skip flashing."
     echo "  -kb,  --kernel-build <string>"
-    echo "                                   Kernel build definition."
+    echo "                                   Kernel build definition. Can be set to 'none' for physical devices to skip flashing."
     echo "  -vkb, --vendor-kernel-build <string>"
-    echo "                                   Vendor kernel build definition."
+    echo "                                   Vendor kernel build definition. Can be set to 'none' for physical devices to skip flashing."
     echo "  -s,   --serial-number <serial>   The physical device serial. If omitted, uses a Cuttlefish virtual device."
     echo "  -t,   --test <name>              [Required] The test name(s) to run. Can be repeated."
     echo "  -td, --test-dir, -tb, --test-suite-build <string>"
@@ -307,7 +309,16 @@ function parse_change_string() {
     local -n tree_path_ref="$2"
     local -n project_ref="$3"
     local -n commits_ref="$4"
-    local -n type_ref="$5" # 'range', 'list', 'local', 'ab', 'fixed_commit'
+    local -n type_ref="$5" # 'range', 'list', 'local', 'ab', 'fixed_commit', 'none'
+
+    # Support for "none" to skip flashing specific build artifacts
+    if [[ "${build_str,,}" == "none" ]]; then
+        type_ref="none"
+        commits_ref=("none")
+        tree_path_ref="none"
+        project_ref="none"
+        return 0
+    fi
 
     # Check for ab:// URL first
     if [[ "$build_str" == ab://* ]]; then
@@ -400,6 +411,12 @@ function validate_and_process_args() {
         return 0
     fi
 
+    # Determine device type for validation
+    local current_device_type="VIRTUAL"
+    if [[ -n "$SERIAL_NUMBER" ]]; then
+        current_device_type="PHYSICAL"
+    fi
+
     # --- New Run Validations ---
     IS_BISECT_MODE=false # Assume single run mode unless a range/list is found
     local script_root_dir
@@ -418,6 +435,16 @@ function validate_and_process_args() {
         parse_change_string "$build_value" tree_path project commits id_type
 
         ID_TYPES[$type_code]="$id_type"
+
+        if [[ "$id_type" == "none" ]]; then
+            if [[ "$type_code" == "tb" ]]; then
+                fail_error "Test suite ('tb') cannot be set to 'none'."
+            fi
+            if [[ "$current_device_type" != "PHYSICAL" ]]; then
+                fail_error "Setting build to 'none' is only supported for Physical Devices (with -s)."
+            fi
+            continue # Skip git validation for 'none'
+        fi
 
         if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
             # --- Shared validation for all git-based types ---
@@ -574,7 +601,7 @@ function init_bisect_file() {
                 xml_util::add_element_with_attr xml_edit_cmd "/bisect/$node_name" "change" "$commit" "status" "unknown"
             done
         else
-            # This handles "ab", "local", and "fixed_commit" types
+            # This handles "ab", "local", "fixed_commit", and "none" types
             local single_node_name="${var_name,,}" # e.g., platform_build
             xml_util::add_node       xml_edit_cmd "/bisect" "$single_node_name"
             xml_util::add_attribute  xml_edit_cmd "/bisect/$single_node_name" "id_type" "${ID_TYPES[$type_code]}"
@@ -681,6 +708,90 @@ function xml_util::update_change_status_by_index() {
 }
 
 # --- Test Suite Caching ---
+function parse_build_string() {
+    local build_str="$1"
+    local -n branch_ref="$2"
+    local -n target_ref="$3"
+    local -n ids_ref="$4"
+    local -n type_ref="$5" # Will be 'range', 'list', 'single', 'local', or 'none'
+    local -n filename_ref="$6"
+
+    # Support for "none" to skip flashing specific build artifacts
+    if [[ "${build_str,,}" == "none" ]]; then
+        type_ref="none"
+        ids_ref=("none")
+        branch_ref="none"
+        target_ref="none"
+        return $EXIT_SUCCESS
+    fi
+
+    if [[ "$build_str" != ab://* ]]; then
+        if [[ -d "$build_str" ]]; then
+            type_ref="local"
+            ids_ref=("$build_str")
+            return $EXIT_SUCCESS
+        else
+            fail_error "Build string is not a valid 'ab://' URL or a local directory: $build_str"
+        fi
+    fi
+
+    local path_part="${build_str#ab://}"
+    local -a parts=()
+    local IFS='/'
+    read -r -a parts <<< "$path_part"
+
+    if (( ${#parts[@]} < 3 )); then
+        fail_error "Malformed ab URL. Expected at least 3 parts: ab://<branch>/<target>/<ids>[/<filename>]. Got: ${build_str}"
+    fi
+
+    if [[ -z "${parts[0]}" || -z "${parts[1]}" || -z "${parts[2]}" ]]; then
+        fail_error "The branch, target, or ids cannot be empty string. Got: ${build_str}"
+    fi
+
+    branch_ref="${parts[0]}"
+    target_ref="${parts[1]}"
+    local id_part
+    id_part=$(echo "${parts[2]}" | tr -d '[:space:]')
+
+    if (( ${#parts[@]} >= 4 )); then
+        filename_ref="${parts[3]}"
+    fi
+
+    if [[ "$id_part" == *","* ]]; then
+        type_ref="list"
+        local old_ifs=$IFS; IFS=','
+        read -r -a ids_ref <<< "$id_part"
+        IFS=$old_ifs
+        for id in "${ids_ref[@]}"; do
+            if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+                fail_error "Invalid build ID in list. All IDs must be numeric: $id"
+            fi
+        done
+        mapfile -t sorted_ids < <(printf "%s\n" "${ids_ref[@]}" | sort -n)
+        ids_ref=("${sorted_ids[@]}")
+    elif [[ "$id_part" == *"-"* ]]; then
+        type_ref="range"
+        local id1 id2
+        id1=$(echo "$id_part" | cut -d'-' -f1)
+        id2=$(echo "$id_part" | cut -d'-' -f2)
+        if ! [[ "$id1" =~ ^[0-9]+$ && "$id2" =~ ^[0-9]+$ ]]; then
+            fail_error "Invalid range format. IDs must be numeric: $id_part"
+        fi
+        if (( id1 >= id2 )); then
+            fail_error "Invalid range: start ID ($id1) must be less than end ID ($id2)."
+        fi
+        ids_ref=("$id1" "$id2")
+    else
+        type_ref="single"
+        # A single ID can be numeric or "latest"
+        if ! [[ "$id_part" =~ ^[0-9]+$ || "$id_part" == "latest" ]]; then
+            fail_error "Invalid build ID. Must be numeric or 'latest': $id_part"
+        fi
+        ids_ref=("$id_part")
+    fi
+    return $EXIT_SUCCESS
+}
+
 function get_test_suite_base_dir() {
     if [[ -n "$CACHE_DIR" ]]; then
         echo "$(realpath "$CACHE_DIR")"
@@ -984,7 +1095,9 @@ function setup_and_test_combination() {
         fi
 
         local arg_val=""
-        if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
+        if [[ "$id_type" == "none" ]]; then
+            arg_val="none"
+        elif [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
             # For all git-based types, we pass the path to the Android tree
             arg_val="${TREE_PATHS[$type_code]}"
         else
