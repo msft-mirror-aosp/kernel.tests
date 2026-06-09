@@ -9,7 +9,7 @@
 
 # --- Configuration Constants ---
 readonly DEFAULT_BISECT_CONFIG_FILENAME="bisect_changes.xml"
-readonly DEFAULT_OUTPUT_DIR="/tmp/out/$(date +%Y%m%d_%H%M%S)"
+readonly DEFAULT_OUTPUT_DIR="out/$(date +%Y%m%d_%H%M%S)"
 readonly DEFAULT_TEST_RETRY=2
 readonly DEFAULT_SETUP_RETRY=2
 readonly DEFAULT_DOWNLOAD_RETRY=2
@@ -32,7 +32,6 @@ SERIAL_NUMBER=""
 TEST_NAME=()
 TEST_DIR=""
 TEST_SUITE_BUILD=""
-CACHE_DIR=""
 TEST_RETRY=$DEFAULT_TEST_RETRY
 SETUP_RETRY=$DEFAULT_SETUP_RETRY
 OUTPUT_DIR=""
@@ -155,7 +154,6 @@ function print_help() {
     echo "  --skip-build                     [Optional] Pass '--skip-build' to underlying flash/launch scripts."
     echo "  --non-interactive                [Optional] Disable interactive mode on build failures."
     echo "  --with-setup <script_path>       [Optional] Path to a custom script to run after checkout, before build."
-    echo "  -cd,  --cache-dir <path>         [Optional] A persistent directory for downloaded test suites."
     echo "  -od,  --output-dir <path>        Directory to store the state XML file. Default: ${DEFAULT_OUTPUT_DIR}/${DEFAULT_BISECT_CONFIG_FILENAME}."
     echo "  -i,   --input-config-file <path> Resume bisection from the given state XML file."
     echo "  -h,   --help                     Display this help message."
@@ -271,11 +269,6 @@ function parse_args() {
                 shift
                 WITH_SETUP_SCRIPT="$1"
                 has_new_bisect_args=true
-                shift
-                ;;
-            -cd|--cache-dir)
-                shift
-                CACHE_DIR="$1"
                 shift
                 ;;
             *)
@@ -576,7 +569,6 @@ function init_bisect_file() {
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "non_interactive" "$NON_INTERACTIVE"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "with_setup_script" "$WITH_SETUP_SCRIPT"
-    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "cache_dir"     "$CACHE_DIR"
     for test in "${TEST_NAME[@]}"; do
         xml_util::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
     done
@@ -625,7 +617,6 @@ function load_state_from_xml() {
     SKIP_BUILD=$(xml_util::read_value "/bisect/parameters/@skip_build")
     NON_INTERACTIVE=$(xml_util::read_value "/bisect/parameters/@non_interactive")
     WITH_SETUP_SCRIPT=$(xml_util::read_value "/bisect/parameters/@with_setup_script")
-    CACHE_DIR=$(xml_util::read_value "/bisect/parameters/@cache_dir")
     xml_util::read_values_to_array "/bisect/parameters/test" TEST_NAME
 
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
@@ -793,11 +784,7 @@ function parse_build_string() {
 }
 
 function get_test_suite_base_dir() {
-    if [[ -n "$CACHE_DIR" ]]; then
-        echo "$(realpath "$CACHE_DIR")"
-    else
-        echo "/tmp/bisect_changes_cache"
-    fi
+    echo "$DOWNLOAD_PATH"
 }
 
 function handle_test_suite_url() {
