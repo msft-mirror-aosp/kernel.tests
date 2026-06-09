@@ -17,10 +17,11 @@ readonly -A BUILD_TYPE_MAP=(
     ["pb"]="PLATFORM_BUILD"
     ["kb"]="KERNEL_BUILD"
     ["vkb"]="VENDOR_KERNEL_BUILD"
+    ["sb"]="GSI_BUILD"
     ["tb"]="TEST_SUITE_BUILD"
 )
 # Defines the order in which breaking projects are identified and bisected.
-readonly -a BISECT_ORDER=("kb" "vkb" "pb" "tb")
+readonly -a BISECT_ORDER=("kb" "vkb" "pb" "sb" "tb")
 
 # --- Global Variables ---
 ACLOUD_OUTPUT_FILE="/tmp/ACLOUD_OUTPUT.tmp"
@@ -28,6 +29,7 @@ DEVICE_TYPE=""
 PLATFORM_BUILD=""
 KERNEL_BUILD=""
 VENDOR_KERNEL_BUILD=""
+GSI_BUILD=""
 SERIAL_NUMBER=""
 TEST_NAME=()
 TEST_DIR=""
@@ -122,7 +124,7 @@ function print_help() {
     echo "  project(s) are responsible for the failure before starting the bisection."
     echo ""
     echo "Modes:"
-    echo "  New Bisection: Provide build ranges via -pb, -kb, -vkb, or -tb, along with -t."
+    echo "  New Bisection: Provide build ranges via -pb, -kb, -vkb, -sb, or -tb, along with -t."
     echo "  Resume Bisection: Provide -i to resume a previously started bisection."
     echo ""
     echo "Build String Format:"
@@ -141,10 +143,12 @@ function print_help() {
     echo "Options:"
     echo "  -pb,  --platform-build <string>"
     echo "                                   Platform build definition. Can be set to 'none' for physical devices to skip flashing."
-    echo "  -kb,  --kernel-build <string>"
+    echo "  -kb,  --kernel-build, -gki, --gki-build <string>"
     echo "                                   Kernel build definition. Can be set to 'none' for physical devices to skip flashing."
     echo "  -vkb, --vendor-kernel-build <string>"
     echo "                                   Vendor kernel build definition. Can be set to 'none' for physical devices to skip flashing."
+    echo "  -sb,  --system-build, -gsi, --gsi-build <string>"
+    echo "                                   System (GSI) build definition. Can be set to 'none' for physical devices to skip flashing."
     echo "  -s,   --serial-number <serial>   The physical device serial. If omitted, uses a Cuttlefish virtual device."
     echo "  -t,   --test <name>              [Required] The test name(s) to run. Can be repeated."
     echo "  -td, --test-dir, -tb, --test-suite-build <string>"
@@ -219,7 +223,7 @@ function parse_args() {
                 has_new_bisect_args=true
                 shift
                 ;;
-            -kb|--kernel-build)
+            -kb|--kernel-build|-gki|--gki-build)
                 shift
                 KERNEL_BUILD="$1"
                 has_new_bisect_args=true
@@ -228,6 +232,12 @@ function parse_args() {
             -vkb|--vendor-kernel-build)
                 shift
                 VENDOR_KERNEL_BUILD="$1"
+                has_new_bisect_args=true
+                shift
+                ;;
+            -sb|--system-build|-gsi|--gsi-build)
+                shift
+                GSI_BUILD="$1"
                 has_new_bisect_args=true
                 shift
                 ;;
@@ -336,7 +346,7 @@ function parse_change_string() {
     local commit_part="${build_str#*:}"
 
     tree_path_ref="${path_part%/*}"
-    # If tree_path is '.', resolve it to the full path
+    # If tree_path is '.' , resolve it to the full path
     if [[ "$tree_path_ref" == "." ]]; then
         tree_path_ref=$PWD
     fi
@@ -1075,7 +1085,7 @@ function setup_and_test_combination() {
     fi
 
     # Loop over all build types to construct command
-    for type_code in pb kb vkb; do
+    for type_code in pb kb vkb sb; do
         local id_type="${ID_TYPES[$type_code]}"
         if [[ -z "$id_type" ]]; then
             continue
