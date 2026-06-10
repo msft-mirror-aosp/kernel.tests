@@ -9,6 +9,9 @@
 #
 
 # --- Configuration Constants ---
+readonly DEFAULT_TEST_RETRY=2
+readonly DEFAULT_SETUP_RETRY=2
+readonly DEFAULT_DOWNLOAD_RETRY=2
 readonly -A BUILD_TYPE_MAP=(
     ["pb"]="PLATFORM_BUILD"
     ["sb"]="GSI_BUILD"
@@ -31,8 +34,13 @@ TEST_NAME=()
 TEST_DIR=""
 TEST_SUITE_BUILD=""
 OUTPUT_DIR=""
+TEST_RETRY=$DEFAULT_TEST_RETRY
+SETUP_RETRY=$DEFAULT_SETUP_RETRY
 SKIP_BUILD=false
 RESTORE_GIT_STATE=false
+NON_INTERACTIVE=false
+WITH_SETUP_SCRIPT=""
+CURRENT_TEST_SUITE_LOCATOR=""
 
 # Mappings for execution
 declare -A ID_TYPES
@@ -92,8 +100,12 @@ function print_help() {
     echo "  -t,   --test <name>                [Required] Test name(s) to run."
     echo "  -s,   --serial-number <serial>     Physical device serial. Default: Cuttlefish."
     echo "  -od,  --output-dir <path>          Directory for logs/artifacts."
+    echo "  -tr,  --test-retry <count>         Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
+    echo "  -sr,  --setup-retry <count>        Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --restore                          Restore git repositories to their original state after testing."
     echo "  --skip-build                       Skip the build/flash step, just run tests."
+    echo "  --non-interactive                  Disable interactive mode on build failures."
+    echo "  --with-setup <script_path>         Path to a custom script to run after checkout, before build."
     echo "  -h,   --help                       Display this message."
     echo ""
     echo "Examples:"
@@ -188,6 +200,25 @@ function parse_args() {
                 TEST_SUITE_BUILD="$1"
                 shift
                 ;;
+            -tr|--test-retry)
+                shift
+                TEST_RETRY="$1"
+                shift
+                ;;
+            -sr|--setup-retry)
+                shift
+                SETUP_RETRY="$1"
+                shift
+                ;;
+            --non-interactive)
+                NON_INTERACTIVE=true
+                shift
+                ;;
+            --with-setup)
+                shift
+                WITH_SETUP_SCRIPT="$1"
+                shift
+                ;;
             --restore)
                 RESTORE_GIT_STATE=true
                 shift
@@ -205,6 +236,9 @@ function parse_args() {
     if (( ${#TEST_NAME[@]} == 0 )); then
          fail_error "At least one test must be specified with -t."
     fi
+    if [[ -n "$WITH_SETUP_SCRIPT" && ! -x "$WITH_SETUP_SCRIPT" ]]; then
+        fail_error "The --with-setup script '$WITH_SETUP_SCRIPT' is not executable or does not exist."
+    fi
 }
 
 function parse_change_string() {
@@ -213,6 +247,15 @@ function parse_change_string() {
     local -n project_ref="$3"
     local -n commits_ref="$4"
     local -n type_ref="$5"
+
+    # Support for "none" to skip flashing specific build artifacts
+    if [[ "${build_str,,}" == "none" ]]; then
+        type_ref="none"
+        commits_ref=("none")
+        tree_path_ref="none"
+        project_ref="none"
+        return 0
+    fi
 
     # Check for ab:// URL
     if [[ "$build_str" == ab://* ]]; then
@@ -274,6 +317,231 @@ function parse_change_string() {
         fail_error "Invalid format. Commit hash missing for: $build_str"
     fi
     return 0
+}
+
+function parse_build_string() {
+    local build_str="$1"
+    local -n branch_ref="$2"
+    local -n target_ref="$3"
+    local -n ids_ref="$4"
+    local -n type_ref="$5"
+    local -n filename_ref="$6"
+
+    if [[ "${build_str,,}" == "none" ]]; then
+        type_ref="none"
+        ids_ref=("none")
+        branch_ref="none"
+        target_ref="none"
+        return $EXIT_SUCCESS
+    fi
+
+    if [[ "$build_str" != ab://* ]]; then
+        if [[ -d "$build_str" ]]; then
+            type_ref="local"
+            ids_ref=("$build_str")
+            return $EXIT_SUCCESS
+        else
+            fail_error "Build string is not a valid 'ab://' URL or a local directory: $build_str"
+        fi
+    fi
+
+    local path_part="${build_str#ab://}"
+    local -a parts=()
+    local IFS='/'
+    read -r -a parts <<< "$path_part"
+
+    if (( ${#parts[@]} < 3 )); then
+        fail_error "Malformed ab URL. Expected at least 3 parts: ab://<branch>/<target>/<ids>[/<filename>]. Got: ${build_str}"
+    fi
+
+    if [[ -z "${parts[0]}" || -z "${parts[1]}" || -z "${parts[2]}" ]]; then
+        fail_error "The branch, target, or ids cannot be empty string. Got: ${build_str}"
+    fi
+
+    branch_ref="${parts[0]}"
+    target_ref="${parts[1]}"
+    local id_part
+    id_part=$(echo "${parts[2]}" | tr -d '[:space:]')
+
+    if (( ${#parts[@]} >= 4 )); then
+        filename_ref="${parts[3]}"
+    fi
+
+    if [[ "$id_part" == *","* ]]; then
+        fail_error "Error: List format (comma-separated) is NOT supported in this script."
+    elif [[ "$id_part" == *"-"* ]]; then
+        fail_error "Error: Range format (hyphen-separated) is NOT supported in this script."
+    else
+        type_ref="single"
+        if ! [[ "$id_part" =~ ^[0-9]+$ || "$id_part" == "latest" ]]; then
+            fail_error "Invalid build ID. Must be numeric or 'latest': $id_part"
+        fi
+        ids_ref=("$id_part")
+    fi
+    return $EXIT_SUCCESS
+}
+
+function get_test_suite_base_dir() {
+    echo "$DOWNLOAD_PATH"
+}
+
+function handle_test_suite_url() {
+    local test_suite_url="$1"
+    log_info "Test suite provided as a URL. Preparing for download..."
+
+    local branch target build_id filename
+    parse_build_string "$test_suite_url" branch target build_id _ filename
+
+    if [[ "${filename##*.}" != "zip" ]]; then
+        fail_error "Test suite filename must be a .zip file. Got: ${filename}"
+    fi
+
+    local base_dir
+    base_dir=$(get_test_suite_base_dir)
+
+    local suite_path="${base_dir}/${branch}/${target}/${build_id}"
+    local download_success=false
+    for i in $(seq 1 "$DEFAULT_DOWNLOAD_RETRY"); do
+        "$FETCH_ARTIFACT_SCRIPT" "$test_suite_url"
+        if (( $? == 0 )) && [[ -f "${suite_path}/${filename}" ]]; then
+            download_success=true
+            break
+        fi
+        log_warn "Download failed (Attempt ${i}/${DEFAULT_DOWNLOAD_RETRY}). Retrying..."
+        sleep 10
+    done
+
+    if ! "$download_success"; then
+        fail_error "Failed to download test suite '${filename}'."
+    fi
+
+    log_info "unzipping file: ${filename}..."
+    unzip -q "${suite_path}/${filename}" -d "${suite_path}" || fail_error "Failed to unzip file."
+
+    local unzipped_root_dir
+    unzipped_root_dir=$(find "$suite_path" -mindepth 1 -maxdepth 1 -type d)
+    TEST_DIR="$unzipped_root_dir"
+
+    if [[ -z "$TEST_DIR" || ! -d "$TEST_DIR" ]]; then
+        fail_error "Test suite directory could not be prepared correctly."
+    fi
+
+    TEST_DIR=$(realpath "$TEST_DIR")
+    log_info "Test suite is ready at: ${TEST_DIR}"
+}
+
+function prepare_test_suite() {
+    local required_locator="$1"
+
+    log_info "Checking for required test suite: $required_locator"
+
+    if [[ "$required_locator" != ab://* ]]; then
+        TEST_DIR="$required_locator"
+        return $EXIT_SUCCESS
+    fi
+
+    local branch target build_id filename
+    parse_build_string "$required_locator" branch target build_id _ filename
+
+    if [[ "${build_id[0]}" == "latest" ]]; then
+        log_info "Resolving 'latest' build ID for test suite..."
+        local resolved_id
+        if ! resolved_id=$(query_latest_build_id "$branch" "$target"); then
+            fail_error "Failed to query the latest build ID for ${branch}/${target}"
+        fi
+        if [[ -z "$resolved_id" ]]; then
+            fail_error "Queried latest build ID is empty for ${branch}/${target}"
+        fi
+        log_info "Resolved 'latest' to build ID: $resolved_id"
+        build_id[0]="$resolved_id"
+        required_locator="ab://${branch}/${target}/${resolved_id}/${filename}"
+    fi
+
+    local base_dir
+    base_dir=$(get_test_suite_base_dir)
+
+    local suite_base_path="${base_dir}/${branch}/${target}/${build_id[0]}"
+    if [[ -d "$suite_base_path" ]]; then
+        local unzipped_dir
+        unzipped_dir=$(find "$suite_base_path" -mindepth 1 -maxdepth 1 -type d)
+        if [[ -n "$unzipped_dir" && -d "$unzipped_dir" ]]; then
+            log_info "Found existing test suite in cache: $unzipped_dir"
+            TEST_DIR="$unzipped_dir"
+            return $EXIT_SUCCESS
+        fi
+    fi
+
+    log_info "Test suite not found in cache. Downloading..."
+    handle_test_suite_url "$required_locator"
+}
+
+function enter_interactive_fix_mode() {
+    local prompt_message="$1"
+    if "$NON_INTERACTIVE"; then
+        log_error "${prompt_message} Failed in non-interactive mode."
+        return 5
+    fi
+
+    local rv=5
+    cat <<-EOF 1>&2
+    ${YELLOW}${prompt_message}${END}
+    Spawning a new shell.
+    You can attempt to fix the issue (e.g., resolve merge conflicts).
+    Once done, exit this shell with one of the following codes:
+      ${GREEN}exit 0${END}:     Retry the operation.
+      ${RED}exit 1-124${END}:   Mark this operation as bad/failed.
+      ${RED}exit 128-255${END}:  Abort the process immediately.
+EOF
+    bash -i
+    rv=$?
+    return "${rv}"
+}
+
+function perform_custom_setup_script() {
+    if [[ -z "$WITH_SETUP_SCRIPT" ]]; then
+        return 0
+    fi
+
+    local main_repo_root=""
+    for type_code in "${!ID_TYPES[@]}"; do
+        if [[ "${ID_TYPES[$type_code]}" == "fixed_commit" ]]; then
+            main_repo_root="${TREE_PATHS[$type_code]}"
+            break
+        fi
+    done
+
+    if [[ -z "$main_repo_root" ]]; then
+         log_warn "Could not determine main repo root for custom setup script. Skipping."
+         return 0
+    fi
+
+    log_info "--- Running custom setup script: $WITH_SETUP_SCRIPT ---"
+
+    while true; do
+        (
+            cd "$main_repo_root" || exit 1
+            "$WITH_SETUP_SCRIPT"
+        )
+        local setup_status=$?
+        if (( setup_status == 0 )); then
+            log_info "Custom setup script succeeded."
+            return 0
+        fi
+
+        log_warn "Custom setup script failed (exit code $setup_status)."
+
+        enter_interactive_fix_mode "Custom setup script failed."
+        local user_choice=$?
+
+        if (( user_choice == 0 )); then
+            log_info "User chose to retry setup script..."
+            continue
+        elif (( user_choice >= 128 )); then
+            fail_error "Process aborted by user (exit code $user_choice)." "$user_choice"
+        else
+            return "$user_choice"
+        fi
+    done
 }
 
 function validate_args() {
@@ -374,6 +642,20 @@ function setup_and_run() {
         fi
     done
 
+    # Run custom setup script
+    local custom_setup_result
+    perform_custom_setup_script
+    custom_setup_result=$?
+    if (( custom_setup_result != 0 )); then
+        fail_error "Setup aborted/failed in custom script." "$custom_setup_result"
+    fi
+
+    # Prepare test suite
+    if [[ -n "$TEST_SUITE_BUILD" && "$TEST_SUITE_BUILD" != "$CURRENT_TEST_SUITE_LOCATOR" ]]; then
+        prepare_test_suite "$TEST_SUITE_BUILD"
+        CURRENT_TEST_SUITE_LOCATOR="$TEST_SUITE_BUILD"
+    fi
+
     local -a setup_cmd_array=()
     if [[ "$DEVICE_TYPE" == "PHYSICAL" ]]; then
         setup_cmd_array=("$FLASH_DEVICE_SCRIPT" "-s" "$SERIAL_NUMBER")
@@ -404,19 +686,40 @@ function setup_and_run() {
 
     log_info "Executing device setup: ${setup_cmd_array[*]}"
 
-    local setup_status=0
-    if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-        # We need to capture stdout to find the virtual serial
-        unbuffer "${setup_cmd_array[@]}" | tee "$ACLOUD_OUTPUT_FILE"
-        setup_status=${PIPESTATUS[0]}
-    else
-        "${setup_cmd_array[@]}"
-        setup_status=$?
-    fi
+    local setup_status=1
+    while true; do
+        for i in $(seq 1 "$SETUP_RETRY"); do
+            if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
+                unbuffer "${setup_cmd_array[@]}" | tee "$ACLOUD_OUTPUT_FILE"
+                setup_status=${PIPESTATUS[0]}
+            else
+                "${setup_cmd_array[@]}"
+                setup_status=$?
+            fi
 
-    if (( setup_status != 0 )); then
-        fail_error "Device setup failed." 2
-    fi
+            if (( setup_status == 0 )); then
+                log_info "Device setup successful."
+                break 2 # Break out of both the retry loop and the interactive while loop
+            fi
+
+            log_warn "Device setup failed (Attempt $i/$SETUP_RETRY). Retrying..."
+        done
+
+        if [[ "$NON_INTERACTIVE" == "false" ]]; then
+            enter_interactive_fix_mode "Device setup (build/flash) failed after $SETUP_RETRY attempts."
+            local interactive_status=$?
+            if (( interactive_status == 0 )); then
+                log_info "User requested retry. Re-running setup..."
+                continue
+            elif (( interactive_status >= 128 )); then
+                fail_error "Process aborted by user (exit code $interactive_status)." "$interactive_status"
+            else
+                fail_error "Device setup marked as failed by user." 2
+            fi
+        else
+            fail_error "Device setup failed in non-interactive mode." 2
+        fi
+    done
 
     # 4. Run Tests
     run_tests_on_device
@@ -450,7 +753,7 @@ function run_tests_on_device() {
     adb_serial=$(device_util::get_adb_serial)
 
     # Ensure test logs dir exists
-    local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_SUITE_BUILD")
+    local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_DIR")
     test_cmd+=("-s" "$adb_serial")
 
     if [[ -n "$OUTPUT_DIR" ]]; then
@@ -463,15 +766,17 @@ function run_tests_on_device() {
     done
 
     log_info "Executing test command: ${test_cmd[*]}"
-    "${test_cmd[@]}"
-    local test_status=$?
+    for i in $(seq 1 "$TEST_RETRY"); do
+        "${test_cmd[@]}"
+        local test_status=$?
+        if (( test_status == 0 )); then
+            log_info "Tests PASSED."
+            exit 0
+        fi
+        log_warn "Test failed (Attempt $i/$TEST_RETRY). Retrying..."
+    done
 
-    if (( test_status == 0 )); then
-        log_info "Tests PASSED."
-        exit 0
-    else
-        fail_error "Tests FAILED." 1
-    fi
+    fail_error "Tests FAILED after $TEST_RETRY attempts." 1
 }
 
 function main() {
