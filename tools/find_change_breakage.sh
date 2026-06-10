@@ -63,7 +63,6 @@ declare -A IS_BREAKING
 # Holds the list of build type codes that were identified as breaking.
 BISECT_BUILD_TYPES=()
 BISECT_STATUS=""
-IS_BISECT_MODE=true # Default to bisection mode
 
 # --- Library Import ---
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
@@ -109,14 +108,6 @@ function print_help() {
     echo "A tool to perform git commit-level bisection OR a single test run."
     echo "This version supports bisecting multiple git projects simultaneously."
     echo ""
-    echo "Modes:"
-    echo "  Bisection Mode (default):"
-    echo "    Run if at least one 'range' or 'list' argument is provided."
-    echo "    Performs a full bisection to find a breaking change."
-    echo ""
-    echo "  Single Test Run Mode:"
-    echo "    Run if ONLY 'fixed_commit', 'ab', or 'local' arguments are provided."
-    echo "    Performs one test run with the specified fixed combination and exits."
     echo "To start a new bisection, specify one or more build arguments with a commit range or list."
     echo ""
     echo "Multi-Project Bisection Workflow:"
@@ -169,9 +160,7 @@ function print_help() {
     echo "  # Bisect one project while pinning another to a specific commit"
     echo "  $0 -pb ~/main/frameworks/base:a1b2c3d-e4f5a6b -kb ~/main/kernel/common:abc1234 -t MyTest -td /path/to/android-cts"
     echo ""
-    echo "  # Single Run Mode: Test a specific combination of fixed builds"
-    echo "  $0 -pb ~/main/frameworks/base:abc1234 -kb ab://git_main/kernel/12345 -t MyTest -td /path/to/android-cts"
-    echo ""
+
     echo "  # Resume an interrupted bisection"
     echo "  $0 -i out/20250910_153000/bisect_changes.xml"
 }
@@ -421,7 +410,7 @@ function validate_and_process_args() {
     fi
 
     # --- New Run Validations ---
-    IS_BISECT_MODE=false # Assume single run mode unless a range/list is found
+    local has_bisection_target=false
     local script_root_dir
     script_root_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -484,7 +473,7 @@ function validate_and_process_args() {
 
             # --- Type-specific validation ---
             if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
-                IS_BISECT_MODE=true # Found a bisection argument
+                has_bisection_target=true
                 local -a commits_to_test=()
                 if [[ "$id_type" == "range" ]]; then
                     local start_commit="${commits[0]}"
@@ -518,8 +507,8 @@ function validate_and_process_args() {
         fi
     done
 
-    if ! "$IS_BISECT_MODE"; then
-        log_warn "No bisection arguments (range/list) found. Switching to single test run mode."
+    if ! "$has_bisection_target"; then
+        fail_error "No bisection arguments (range/list) found. Bisection requires at least one commit range or list."
     fi
 
     # We only need to prepare it if it's a fixed 'ab' or 'local' type.
@@ -616,7 +605,7 @@ function init_bisect_file() {
 function load_state_from_xml() {
     log_info "Loading state from ${BISECT_CONFIG_FILE}..."
     BISECT_STATUS=$(xml_util::read_value "/bisect/state/@status")
-    IS_BISECT_MODE=false # Assume single run unless a bisection node is found
+    local has_bisection_node=false
 
     # Parameters
     TEST_DIR=$(xml_util::read_value "/bisect/parameters/@test_dir")
@@ -636,7 +625,7 @@ function load_state_from_xml() {
 
         local id_type=$(xml_util::read_value "/bisect/$plural_node_name/@id_type")
         if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
-            IS_BISECT_MODE=true # Found a bisection node
+            has_bisection_node=true
             ID_TYPES[$type_code]="$id_type"
             TREE_PATHS[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@path")
             PROJECTS[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@project")
@@ -692,7 +681,11 @@ function load_state_from_xml() {
         prepare_test_suite "$TEST_SUITE_BUILD"
     fi
 
-    log_info "State loaded successfully. Status: $BISECT_STATUS. Bisection Mode: $IS_BISECT_MODE"
+    if ! "$has_bisection_node"; then
+        fail_error "Loaded XML state does not contain any bisection nodes."
+    fi
+
+    log_info "State loaded successfully. Status: $BISECT_STATUS."
 }
 
 function xml_util::update_change_status_by_index() {
@@ -1208,48 +1201,6 @@ function run_tests_on_device() {
     return 1 # BAD (test fail)
 }
 
-function run_single_test() {
-    log_info "========================================="
-    log_info "Starting Single Test Run (non-bisection mode)"
-    log_info "========================================="
-
-    local -a combination=()
-    for type_code in "${!ID_TYPES[@]}"; do
-        local id_type="${ID_TYPES[$type_code]}"
-        local var_name="${BUILD_TYPE_MAP[$type_code]}"
-
-        if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
-             log_error "Bisection-type argument found in single-run mode for $type_code. This is an internal error."
-             continue
-        fi
-
-        # We pass the raw build string (ab://, local/path, or fixed_commit string)
-        if [[ -n "${!var_name}" ]]; then
-            combination+=("${type_code}:${!var_name}")
-        fi
-    done
-
-    log_info "Testing with fixed combination: ${combination[*]}"
-    setup_and_test_combination "${combination[@]}"
-    local test_status=$?
-
-    echo ""
-    if (( test_status == 0 )); then
-        log_info "${GREEN}--- Test PASSED ---${END}"
-        xml_util::update_xml_node "/bisect/state/@status" "complete_pass"
-    elif (( test_status == 125 )); then
-        log_warn "${ORANGE}--- Test SKIPPED ---${END}"
-        xml_util::update_xml_node "/bisect/state/@status" "complete_skip"
-    elif (( test_status > 0 && test_status < 128 )); then
-        log_error "${RED}--- Test FAILED (Status: $test_status) ---${END}"
-        xml_util::update_xml_node "/bisect/state/@status" "complete_fail"
-    else # 128+
-        # This case should be handled by fail_error inside the setup functions
-        log_error "${RED}--- Test ABORTED (Status: $test_status) ---${END}"
-        xml_util::update_xml_node "/bisect/state/@status" "complete_abort"
-    fi
-    return "$test_status"
-}
 
 function validate_and_identify_breakage() {
     log_info "--- Step 1: Validating the initial 'all good' commit combination ---"
@@ -1490,7 +1441,7 @@ function main() {
         xml_util::load "$BISECT_CONFIG_FILE" || fail_error "Failed to load XML file: $BISECT_CONFIG_FILE"
     else
         validate_and_process_args
-        log_info "Starting new run (Bisection Mode: $IS_BISECT_MODE)..."
+        log_info "Starting new bisection run..."
         init_bisect_file
     fi
 
@@ -1502,26 +1453,6 @@ function main() {
         DEVICE_TYPE="PHYSICAL"
     fi
     log_info "Device Type set to: $DEVICE_TYPE"
-
-    if ! "$IS_BISECT_MODE"; then
-        # --- Single Test Run Mode ---
-        log_info "Executing in Single Test Run mode."
-        if [[ "$BISECT_STATUS" == "new" ]]; then
-            run_single_test
-            local test_result=$?
-            # The single test run is complete, exit with its status
-            exit $test_result
-        else
-            # Resuming a single-run test. Just report the saved status.
-            log_warn "This was a single-run test which already completed."
-            log_info "Final status of previous run: $BISECT_STATUS"
-            if [[ "$BISECT_STATUS" == "complete_pass" ]]; then
-                exit 0
-            else
-                exit 1
-            fi
-        fi
-    fi
 
     # --- Bisection Mode ---
     log_info "Executing in Bisection mode."
