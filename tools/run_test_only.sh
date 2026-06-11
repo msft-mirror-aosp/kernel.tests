@@ -381,7 +381,8 @@ while (( $# > 0 )); do
             shift
             ;;
         *)
-            print_error "Unsupported flag: $1" >&2
+            log_error "Unsupported flag: $1"
+            exit 1
             ;;
     esac
 done
@@ -435,7 +436,8 @@ fi
 log_info "Testing on device $SERIAL_NUMBER: BOARD=$BOARD, ABI=$ABI, PRODUCT=$PRODUCT, BUILD_TYPE=$BUILD_TYPE"
 
 if ! connect_to_wifi && [[ "$FORCE_WIFI_CONNECTION" == "true" ]]; then
-    log_error "--force-wifi-connection is set. Force exit upon Wifi connection failure"
+    log_error "--force-wifi-connection is set. Force exit upon Wifi connection failure. \
+Add flag --no-force-wifi-connection to skip wifi connection"
     exit 1
 fi
 
