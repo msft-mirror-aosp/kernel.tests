@@ -1325,7 +1325,7 @@ boot complete"
 }
 
 function wait_for_device_in_fastboot() {
-    local timeout_seconds="${1:-120}"  # Timeout in seconds (equal to  2 minutes)
+    local timeout_seconds="${1:-300}"  # Timeout in seconds (equal to  5 minutes)
     local warning_seconds=$(( timeout_seconds / 3 )) # Start warning message after half timeout elapsed
 
     local start_time
