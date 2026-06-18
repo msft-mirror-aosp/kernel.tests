@@ -727,11 +727,7 @@ function restore_all_git_states() {
         local original_manifest="${ORIGINAL_MANIFESTS[$type_code]}"
         local tree_path="${TREE_PATHS[$type_code]}"
         if [[ -n "$original_manifest" && -d "$tree_path/.repo" ]]; then
-            log_info "Restoring manifest for '$tree_path' to '$original_manifest'..."
-            pushd "$tree_path" > /dev/null || fail_error "Failed to cd into $tree_path"
-            repo init -m "$original_manifest" || fail_error "Failed to restore manifest '$original_manifest' via repo init"
-            repo sync -c -j"$(nproc)" || fail_error "Failed to repo sync after restoring manifest '$original_manifest'"
-            popd > /dev/null || fail_error "Failed to popd from $tree_path"
+            common_lib::sync_tree_to_manifest "$tree_path" "$original_manifest" "$type_code" || fail_error "Failed to restore manifest '$original_manifest' for $type_code"
         fi
     done
 }
