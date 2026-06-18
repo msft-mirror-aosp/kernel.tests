@@ -41,6 +41,7 @@ INPUT_CONFIG_FILE=""
 BISECT_CONFIG_FILE=""
 SKIP_BUILD=false
 NON_INTERACTIVE=false
+CLEAN_GIT=false
 WITH_SETUP_SCRIPT=""
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
 TEMP_DIRS=()
@@ -150,7 +151,8 @@ function print_help() {
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] Pass '--skip-build' to underlying flash/launch scripts."
     echo "  --sync-manifest <type>=<url>...  [Optional] Lock workspace to a manifest. Supports multiple (e.g. kb=ab://... pb=ab://...)"
-    echo "  --non-interactive                [Optional] Disable interactive mode on build failures."
+    echo "  --clean                          [Optional] Run 'git clean -fdx' before checking out commits to ensure a clean state.
+  --non-interactive                [Optional] Disable interactive mode on build failures."
     echo "  --with-setup <script_path>       [Optional] Path to a custom script to run after checkout, before build."
     echo "  -od,  --output-dir <path>        Directory to store the state XML file. Default: ${DEFAULT_OUTPUT_DIR}/${DEFAULT_BISECT_CONFIG_FILENAME}."
     echo "  -i,   --input-config-file <path> Resume bisection from the given state XML file."
@@ -261,6 +263,10 @@ function parse_args() {
                 ;;
             --skip-build)
                 SKIP_BUILD=true
+                shift
+                ;;
+            --clean)
+                CLEAN_GIT=true
                 shift
                 ;;
             --non-interactive)
@@ -420,6 +426,43 @@ function get_commits_in_range() {
     log_info "Found ${#result_array_ref[@]} commits to test for ${project_path}."
 }
 
+function check_disk_space() {
+    local min_required_kb=157286400 # 150 GB
+    local -a dirs_to_check=("$OUTPUT_DIR" "/tmp")
+
+    # Check if DOWNLOAD_PATH is defined and different from /tmp
+    if [[ -n "${DOWNLOAD_PATH:-}" && "${DOWNLOAD_PATH}" != "/tmp"* ]]; then
+        dirs_to_check+=("$DOWNLOAD_PATH")
+    fi
+
+    for dir in "${dirs_to_check[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            continue
+        fi
+
+        local free_space_kb
+        free_space_kb=$(df -k "$dir" | awk 'NR==2 {print $4}')
+
+        if (( free_space_kb < min_required_kb )); then
+            local free_space_gb=$(( free_space_kb / 1024 / 1024 ))
+            local required_gb=$(( min_required_kb / 1024 / 1024 ))
+            local error_msg="Insufficient disk space on partition hosting '$dir'. Found ${free_space_gb}GB, required ${required_gb}GB."
+
+            # Add specific hint for /tmp
+            if [[ "$dir" == "/tmp" || "$dir" == "/tmp/"* ]]; then
+                error_msg+="\n[HINT] Downloaded test suites (e.g. android-cts.zip) can be huge. "
+                error_msg+="If /tmp is a tmpfs (RAM disk), you can expand it by running:\n"
+                error_msg+="    sudo mount -o remount,size=${required_gb}G /tmp\n"
+                error_msg+="Alternatively, modify DOWNLOAD_PATH in common_lib.sh to point to a physical disk."
+            fi
+
+            fail_error "$error_msg"
+        else
+            log_info "Disk space check passed for '$dir' ($(( free_space_kb / 1024 / 1024 ))GB free)."
+        fi
+    done
+}
+
 function validate_input_flags() {
     OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
     if [[ ! -d "$OUTPUT_DIR" ]]; then
@@ -525,6 +568,7 @@ function verify_git_commit_ranges() {
 
 function validate_and_process_args() {
     validate_input_flags
+    check_disk_space
 
     if [[ -n "$INPUT_CONFIG_FILE" ]]; then
         return 0
@@ -551,7 +595,7 @@ function validate_and_process_args() {
         local tree_path project
         local -a commits=()
         local id_type=""
-        parse_change_string "$build_value" tree_path project commits id_type
+        common_lib::parse_change_string "$build_value" tree_path project commits id_type || fail_error "Failed to parse change string: $build_value"
 
         ID_TYPES[$type_code]="$id_type"
 
@@ -709,6 +753,7 @@ function init_bisect_file() {
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "serial_number" "$SERIAL_NUMBER"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "non_interactive" "$NON_INTERACTIVE"
+    xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "clean_git" "$CLEAN_GIT"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "with_setup_script" "$WITH_SETUP_SCRIPT"
     for type_code in "${!ORIGINAL_MANIFESTS[@]}"; do
         xml_util::add_element_with_attr xml_edit_cmd "/bisect/parameters" "parameter" "" "name" "original_manifest_${type_code}"
@@ -764,6 +809,7 @@ function load_state_from_xml() {
     SERIAL_NUMBER=$(xml_util::read_value "/bisect/parameters/@serial_number")
     SKIP_BUILD=$(xml_util::read_value "/bisect/parameters/@skip_build")
     NON_INTERACTIVE=$(xml_util::read_value "/bisect/parameters/@non_interactive")
+    CLEAN_GIT=$(xml_util::read_value "/bisect/parameters/@clean_git")
     WITH_SETUP_SCRIPT=$(xml_util::read_value "/bisect/parameters/@with_setup_script")
     xml_util::read_values_to_array "/bisect/parameters/test" TEST_NAME
 
@@ -964,6 +1010,12 @@ function checkout_commit() {
     local type_code="$1"
     local commit_hash="$2"
     local project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$type_code]}"
+
+    if "$CLEAN_GIT"; then
+        log_info "Cleaning project '$project_path' with git clean -fdx..."
+        (cd "$project_path" && git clean -fdx) || log_warn "Failed to clean '$project_path'. Proceeding anyway."
+    fi
+
     log_info "Checking out commit '$commit_hash' in project '$project_path'..."
     (cd "$project_path" && git checkout "$commit_hash")
     if (( $? != 0 )); then

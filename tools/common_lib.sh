@@ -940,3 +940,94 @@ function common_lib::parse_artifact_url() {
     fi
     return $EXIT_SUCCESS
 }
+
+function common_lib::parse_change_string() {
+    local build_str="$1"
+    local -n tree_path_ref="$2"
+    local -n project_ref="$3"
+    local -n commits_ref="$4"
+    local -n type_ref="$5" # 'range', 'list', 'local', 'ab', 'fixed_commit', 'none'
+
+    # Support for "none" to skip flashing specific build artifacts
+    if [[ "${build_str,,}" == "none" ]]; then
+        type_ref="none"
+        commits_ref=("none")
+        tree_path_ref="none"
+        project_ref="none"
+        return $EXIT_SUCCESS
+    fi
+
+    # Check for ab:// URL first
+    if [[ "$build_str" == ab://* ]]; then
+        type_ref="ab"
+        return $EXIT_SUCCESS
+    fi
+
+    # Separate path and commit parts
+    local path_part
+    local commit_part=""
+    if [[ "$build_str" == *:* ]]; then
+        path_part="${build_str%%:*}"
+        commit_part="${build_str#*:}"
+    else
+        path_part="$build_str"
+    fi
+
+    # Improved logic to find the true Android tree root by searching for .repo
+    local expanded_path="${path_part/#\~/$HOME}"
+    local abs_path
+    abs_path=$(realpath -m "$expanded_path" 2>/dev/null || echo "$expanded_path")
+
+    local found_tree=""
+    if found_tree=$(find_repo_root "$abs_path" 2>/dev/null); then
+        tree_path_ref="$found_tree"
+        if [[ "$abs_path" == "$found_tree" ]]; then
+            project_ref=""
+        else
+            project_ref="${abs_path#$found_tree/}"
+        fi
+    else
+        log_error "Could not find .repo directory for path: $path_part"
+        return $EXIT_FAILURE
+    fi
+
+    # Check for local path without project/commit part
+    if [[ -z "$commit_part" ]]; then
+        type_ref="local"
+        return $EXIT_SUCCESS
+    fi
+
+    if [[ "$commit_part" == *","* ]]; then
+        type_ref="list"
+        local old_ifs=$IFS; IFS=','
+        read -r -a commits_ref <<< "$commit_part"
+        IFS=$old_ifs
+        for c in "${commits_ref[@]}"; do
+            if [[ ! "$c" =~ ^[a-fA-F0-9]+$ ]]; then
+                log_error "Invalid git commit hash format in list: $c"
+                return $EXIT_FAILURE
+            fi
+        done
+    elif [[ "$commit_part" == *"-"* ]]; then
+        type_ref="range"
+        local c1 c2
+        c1=$(echo "$commit_part" | cut -d'-' -f1)
+        c2=$(echo "$commit_part" | cut -d'-' -f2)
+        if [[ ! "$c1" =~ ^[a-fA-F0-9]+$ || ! "$c2" =~ ^[a-fA-F0-9]+$ ]]; then
+            log_error "Invalid git commit hash format in range: $commit_part"
+            return $EXIT_FAILURE
+        fi
+        commits_ref=("$c1" "$c2")
+    elif [[ -n "$commit_part" ]]; then
+        type_ref="fixed_commit"
+        if [[ ! "$commit_part" =~ ^[a-fA-F0-9]+$ ]]; then
+            log_error "Invalid git commit hash format: $commit_part"
+            return $EXIT_FAILURE
+        fi
+        commits_ref=("$commit_part")
+    else
+        log_error "Invalid commit format. Commit part is empty for: $build_str"
+        return $EXIT_FAILURE
+    fi
+    return $EXIT_SUCCESS
+}
