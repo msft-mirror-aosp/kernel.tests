@@ -282,9 +282,31 @@ function greater_than_or_equal_to() {
     fi
 }
 
+function parse_kernel_version() {
+    local manifest_output="$1"
+    local version=""
+    version=$(grep -oP 'common-modules/virtual-device.*revision="\K[^"]*' <(echo "$manifest_output") | head -n 1)
+
+    if [[ "$version" =~ ^[0-9a-f]{40}$ ]]; then
+        local fallback_version=$(grep -oP 'kernel/superproject.*revision="\K[^"]*' <(echo "$manifest_output") | head -n 1)
+        if [[ -z "$fallback_version" ]]; then
+            fallback_version=$(grep -oP 'default revision="(refs/tags/)?\K[^"]*' <(echo "$manifest_output") | head -n 1)
+        fi
+
+        if [[ -n "$fallback_version" ]]; then
+            version="$fallback_version"
+        fi
+    fi
+    echo "$version"
+}
+
 function find_repo() {
+    local active_manifest=$(common_lib::get_active_manifest_name "$PWD")
+    local manifest_path=".repo/manifests/$active_manifest"
+    log_info "Using active manifest: $active_manifest"
+
     manifest_output=$(grep -e "superproject" -e "common-modules/virtual-device" -e "default revision" \
-        .repo/manifests/default.xml)
+        "$manifest_path" 2>/dev/null || true)
     case "$manifest_output" in
         *platform/superproject*)
             PLATFORM_REPO_ROOT="$PWD"
@@ -302,8 +324,7 @@ function find_repo() {
         *kernel/superproject*)
             if [[ "$manifest_output" == *common-modules/virtual-device* ]]; then
                 CF_KERNEL_REPO_ROOT="$PWD"
-                CF_KERNEL_VERSION=$(grep -e "common-modules/virtual-device" \
-                .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
+                CF_KERNEL_VERSION=$(parse_kernel_version "$manifest_output")
                 log_info "CF_KERNEL_REPO_ROOT=$CF_KERNEL_REPO_ROOT, CF_KERNEL_VERSION=$CF_KERNEL_VERSION"
             fi
             ;;
@@ -477,8 +498,13 @@ if  [[ -n "$KERNEL_BUILD" && "$KERNEL_BUILD" != ab://* ]]; then
     if is_in_repo_workspace; then
         go_to_repo_root "$PWD"
         target_kernel_repo_root="$PWD"
-        target_cf_kernel_version=$(grep -e "common-modules/virtual-device" \
-        .repo/manifests/default.xml | grep -oP 'revision="\K[^"]*')
+        target_active_manifest=$(common_lib::get_active_manifest_name "$PWD")
+        target_manifest_path=".repo/manifests/$target_active_manifest"
+        log_info "Using target active manifest: $target_active_manifest"
+
+        target_manifest_output=$(grep -e "superproject" -e "common-modules/virtual-device" -e "default revision" \
+        "$target_manifest_path" 2>/dev/null || true)
+        target_cf_kernel_version=$(parse_kernel_version "$target_manifest_output")
 
         log_info "target_kernel_repo_root=$target_kernel_repo_root, target_cf_kernel_version=$target_cf_kernel_version"
 

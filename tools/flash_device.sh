@@ -297,8 +297,12 @@ function parse_arg() {
 }
 
 function find_repo() {
+    local active_manifest=$(common_lib::get_active_manifest_name "$PWD")
+    local manifest_path=".repo/manifests/$active_manifest"
+    log_info "Using active manifest: $active_manifest"
+
     manifest_output=$(grep -e "platform/system/core" -e "gs-pixel" -e "kernel/common" \
-     -e "common-modules/virtual-device" -e "private/google-modules/soc/gs" .repo/manifests/default.xml)
+     -e "common-modules/virtual-device" -e "private/google-modules/soc/gs" "$manifest_path" 2>/dev/null || true)
     if [[ -d "system/core" && "$manifest_output" == *platform/system/core* ]]; then
         log_info "I am in an Android platform tree"
         PLATFORM_REPO_ROOT="$PWD"
@@ -311,7 +315,7 @@ function find_repo() {
         VENDOR_KERNEL_REPO_ROOT="$PWD"
         log_info "I am in an Android vendor kernel tree"
         if [[ -z "$VENDOR_KERNEL_BUILD" ]]; then
-            VENDOR_KERNEL_VERSION=$(grep -e "default revision" .repo/manifests/default.xml | \
+            VENDOR_KERNEL_VERSION=$(grep -e "default revision" "$manifest_path" 2>/dev/null | \
             grep -oP 'revision="\K[^"]*')
             log_info "VENDOR_KERNEL_REPO_ROOT=$VENDOR_KERNEL_REPO_ROOT"
             log_info "VENDOR_KERNEL_VERSION=$VENDOR_KERNEL_VERSION"
@@ -323,7 +327,7 @@ function find_repo() {
         KERNEL_REPO_ROOT="$PWD"
         if [[ -z "$KERNEL_BUILD" ]]; then
             KERNEL_VERSION=$(grep -e "kernel/superproject" \
-            .repo/manifests/default.xml | grep -oP 'revision="common-\K[^"]*')
+            "$manifest_path" 2>/dev/null | grep -oP 'revision="common-\K[^"]*')
             log_info "KERNEL_REPO_ROOT=$KERNEL_REPO_ROOT, KERNEL_VERSION=$KERNEL_VERSION"
             KERNEL_BUILD="$KERNEL_REPO_ROOT"
         fi

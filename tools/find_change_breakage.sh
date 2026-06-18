@@ -159,6 +159,10 @@ function print_help() {
     echo "  -i,   --input-config-file <path> Resume bisection from the given state XML file."
     echo "  -h,   --help                     Display this help message."
     echo ""
+    echo "Environment Variables:"
+    echo "  REPO_INIT_MANIFEST_URL           Override the default manifest URL used during workspace initialization."
+    echo "                                   (Default: sso://android/platform/manifest or sso://android/kernel/manifest)"
+    echo ""
     echo "Examples:"
     echo "  # Bisection Mode: Bisect a commit range in a specific project"
     echo "  $0 -pb ~/main/vendor/xts:c1d2e3f-a7b8c9d -t MyTest -td /path/to/android-cts"
@@ -583,10 +587,8 @@ function apply_custom_manifest() {
     local manifest_filename=$(basename "$cache_file")
 
     if [[ "$is_resume" != "true" ]]; then
-        local original_manifest="default.xml"
-        if [[ -L "${tree_path}/.repo/manifest.xml" ]]; then
-            original_manifest=$(basename "$(readlink "${tree_path}/.repo/manifest.xml")")
-        fi
+        local original_manifest
+        original_manifest=$(common_lib::get_active_manifest_name "$tree_path")
         ORIGINAL_MANIFESTS[$type_code]="$original_manifest"
     fi
 
@@ -602,8 +604,9 @@ function restore_workspace_state() {
 }
 
 function validate_and_process_args() {
+    log_info "Starting argument validation and processing..."
     validate_input_flags
-    common_lib::check_disk_space 90 "$OUTPUT_DIR" "/tmp" || fail_error "Aborting due to insufficient disk space."
+    common_lib::check_disk_space 90 "$OUTPUT_DIR" "/tmp" || log_warn "Insufficient disk space detected. Proceeding anyway, but you may encounter issues."
 
     if [[ -n "$INPUT_CONFIG_FILE" ]]; then
         return 0
@@ -615,6 +618,7 @@ function validate_and_process_args() {
     fi
 
     # --- New Run Validations ---
+    log_info "Validating inputs for a new bisection run..."
     local has_bisection_target=false
     local script_root_dir
     script_root_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
@@ -626,6 +630,8 @@ function validate_and_process_args() {
         if [[ -z "$build_value" ]]; then
             continue
         fi
+
+        log_info "Processing configuration for component: ${type_code}"
 
         local tree_path project
         local -a commits=()
@@ -657,7 +663,7 @@ function validate_and_process_args() {
                             matched_tree="$potential_tree"
                         fi
                     fi
-                done < <(grep -o 'path="[^"]*"' "$cache_file" | cut -d'"' -f2)
+                done < <(xmlstarlet sel -t -m "//project" -v "@path" -n "$cache_file")
 
                 if [[ -n "$matched_tree" ]]; then
                     log_info "[$type_code] Deduced tree_path: $matched_tree, project: $matched_proj"
@@ -700,8 +706,33 @@ function validate_and_process_args() {
             local manifest_filename
             manifest_filename=$(basename "$cache_file")
 
+            local manifest_url
+            if [[ "$type_code" == "vkb" ]]; then
+                # Vendor Kernel builds use partner-android
+                manifest_url="https://partner-android.googlesource.com/kernel-pixel/manifest"
+            elif [[ "$type_code" == "kb" ]]; then
+                # Kernel builds
+                manifest_url="sso://android/kernel/manifest"
+            else
+                # Platform (pb), System/GSI (sb), and Test (tb) builds default to platform manifest
+                manifest_url="sso://android/platform/manifest"
+            fi
+
+            # Allow override via environment variable
+            manifest_url="${REPO_INIT_MANIFEST_URL:-$manifest_url}"
+
             pushd "$tree_path" > /dev/null || fail_error "[$type_code] Failed to cd into $tree_path"
-            repo init -u sso://android/platform/manifest || fail_error "[$type_code] Initial repo init failed"
+            if ! repo init -u "$manifest_url"; then
+                log_info "[$type_code] Initial repo init with '$manifest_url' failed."
+                local public_url="${manifest_url/sso:\/\/android\//https:\/\/android.googlesource.com\/}"
+                if [[ "$public_url" != "$manifest_url" ]]; then
+                    log_info "[$type_code] Retrying with public AOSP URL: $public_url"
+                    rm -rf ".repo"
+                    repo init -u "$public_url" || fail_error "[$type_code] Initial repo init failed with public URL: $public_url"
+                else
+                    fail_error "[$type_code] Initial repo init failed"
+                fi
+            fi
             cp "$cache_file" ".repo/manifests/" || fail_error "[$type_code] Failed to copy manifest"
             popd > /dev/null || fail_error "[$type_code] Failed to popd from $tree_path"
 
@@ -722,10 +753,12 @@ function validate_and_process_args() {
                 fail_error "[$type_code] Android source tree path cannot be the same as the script's root directory."
             fi
 
+            log_info "[$type_code] Checking for uncommitted changes in ${tree_path}..."
             check_uncommitted_changes "$type_code" "$tree_path" checked_trees
         fi
 
         if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
+            log_info "[$type_code] Verifying git commit ranges..."
             verify_git_commit_ranges "$type_code" "$id_type" "$tree_path" "$project" commits has_bisection_target
         fi
 
@@ -747,6 +780,8 @@ function validate_and_process_args() {
             prepare_test_suite "$TEST_SUITE_BUILD"
         fi
     fi
+
+    log_info "Argument validation and processing completed successfully."
 }
 
 

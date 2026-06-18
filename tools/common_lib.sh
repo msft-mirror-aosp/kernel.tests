@@ -823,6 +823,26 @@ EOF2
     return "${rv}"
 }
 
+function common_lib::get_active_manifest_name() {
+    local tree_path="${1:-.}"
+    local manifest_file="$tree_path/.repo/manifest.xml"
+    local manifest_name="default.xml"
+
+    if [[ -L "$manifest_file" ]]; then
+        manifest_name=$(basename "$(readlink "$manifest_file")")
+    elif [[ -f "$manifest_file" ]]; then
+        local included_name
+        included_name=$(grep -oP '<include name="\K[^"]*' "$manifest_file" | head -n 1)
+        if [[ -n "$included_name" ]]; then
+            manifest_name="$included_name"
+        else
+            log_warn "Regular manifest file '$manifest_file' has no <include>."
+            log_warn "Defaulting to '$manifest_name', which may overwrite a custom manifest during restore."
+        fi
+    fi
+    echo "$manifest_name"
+}
+
 function common_lib::sync_tree_to_manifest() {
     local tree_path="$1"
     local manifest_filename="$2"
