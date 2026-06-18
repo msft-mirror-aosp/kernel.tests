@@ -567,6 +567,40 @@ function verify_git_commit_ranges() {
     save_initial_git_state "$type_code"
 }
 
+function apply_custom_manifest() {
+    local type_code="$1"
+    local is_resume="$2"
+    local tree_path="${TREE_PATHS[$type_code]}"
+    local ab_url="${SYNC_MANIFEST_TARGETS[$type_code]}"
+
+    if [[ -z "$tree_path" || -z "$ab_url" ]]; then
+        return 0
+    fi
+
+    log_info "[$type_code] Applying custom manifest: $ab_url"
+    local cache_file=""
+    common_lib::fetch_manifest "$type_code" "$ab_url" cache_file || fail_error "[$type_code] Manifest fetch failed"
+    local manifest_filename=$(basename "$cache_file")
+
+    if [[ "$is_resume" != "true" ]]; then
+        local original_manifest="default.xml"
+        if [[ -L "${tree_path}/.repo/manifest.xml" ]]; then
+            original_manifest=$(basename "$(readlink "${tree_path}/.repo/manifest.xml")")
+        fi
+        ORIGINAL_MANIFESTS[$type_code]="$original_manifest"
+    fi
+
+    cp "$cache_file" "${tree_path}/.repo/manifests/" || fail_error "Failed to copy manifest to ${tree_path}/.repo/manifests/"
+    common_lib::sync_tree_to_manifest "$tree_path" "$manifest_filename" "$type_code" || fail_error "[$type_code] repo sync failed"
+}
+
+function restore_workspace_state() {
+    log_info "Restoring workspace state..."
+    for type_code in "${!SYNC_MANIFEST_TARGETS[@]}"; do
+        apply_custom_manifest "$type_code" "true"
+    done
+}
+
 function validate_and_process_args() {
     validate_input_flags
     common_lib::check_disk_space 90 "$OUTPUT_DIR" "/tmp" || fail_error "Aborting due to insufficient disk space."
@@ -597,6 +631,45 @@ function validate_and_process_args() {
         local -a commits=()
         local id_type=""
         common_lib::parse_change_string "$build_value" tree_path project commits id_type || fail_error "Failed to parse change string: $build_value"
+
+        if [[ "$tree_path" == "UNRESOLVED_TREE_PATH" ]]; then
+            local sync_url="${SYNC_MANIFEST_TARGETS[$type_code]}"
+            if [[ -n "$sync_url" ]]; then
+                log_info "[$type_code] .repo not found. Deducing project boundary from manifest: $sync_url"
+                local cache_file=""
+                common_lib::fetch_manifest "$type_code" "$sync_url" cache_file
+                if (( $? != 0 )); then
+                    fail_error "[$type_code] Manifest fetch failed while deducing project boundary."
+                fi
+
+                local path_part="${build_value%%:*}"
+                local abs_path
+                abs_path=$(realpath -m "${path_part/#\~/$HOME}" 2>/dev/null || echo "${path_part/#\~/$HOME}")
+
+                local matched_tree=""
+                local matched_proj=""
+
+                while IFS= read -r proj_path; do
+                    if [[ -n "$proj_path" && "$abs_path" == *"/"$proj_path ]]; then
+                        local potential_tree="${abs_path%/$proj_path}"
+                        if [[ ${#proj_path} -gt ${#matched_proj} ]]; then
+                            matched_proj="$proj_path"
+                            matched_tree="$potential_tree"
+                        fi
+                    fi
+                done < <(grep -o 'path="[^"]*"' "$cache_file" | cut -d'"' -f2)
+
+                if [[ -n "$matched_tree" ]]; then
+                    log_info "[$type_code] Deduced tree_path: $matched_tree, project: $matched_proj"
+                    tree_path="$matched_tree"
+                    project="$matched_proj"
+                else
+                    fail_error "[$type_code] Could not deduce project boundary. Path '$abs_path' does not end with any project path defined in the manifest."
+                fi
+            else
+                fail_error "[$type_code] Could not find .repo directory for path: $build_value. Please sync the manifest first so the project boundary can be determined."
+            fi
+        fi
 
         ID_TYPES[$type_code]="$id_type"
 
@@ -658,25 +731,7 @@ function validate_and_process_args() {
 
         if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" || "$id_type" == "local" ]]; then
             if [[ -n "${SYNC_MANIFEST_TARGETS[$type_code]}" && "$is_newly_synced" != true ]]; then
-                local ab_url="${SYNC_MANIFEST_TARGETS[$type_code]}"
-                local cache_file=""
-
-                common_lib::fetch_manifest "$type_code" "$ab_url" cache_file
-                if (( $? != 0 )); then
-                    fail_error "[$type_code] Manifest fetch/validation failed for $ab_url"
-                fi
-
-                local manifest_filename
-                manifest_filename=$(basename "$cache_file")
-
-                local original_manifest="default.xml"
-                if [[ -L "${tree_path}/.repo/manifest.xml" ]]; then
-                    original_manifest=$(basename "$(readlink "${tree_path}/.repo/manifest.xml")")
-                fi
-                ORIGINAL_MANIFESTS[$type_code]="$original_manifest"
-                cp "$cache_file" "${tree_path}/.repo/manifests/" || fail_error "Failed to copy manifest to ${tree_path}/.repo/manifests/"
-
-                common_lib::sync_tree_to_manifest "$tree_path" "$manifest_filename" "$type_code" || fail_error "[$type_code] repo sync failed"
+                apply_custom_manifest "$type_code" "false"
             fi
         fi
     done
@@ -756,6 +811,10 @@ function init_bisect_file() {
         xml_util::add_element_with_attr xml_edit_cmd "/bisect/parameters" "parameter" "" "name" "original_manifest_${type_code}"
         xml_edit_cmd+=(-i "/bisect/parameters/parameter[@name='original_manifest_${type_code}']" -t attr -n "value" -v "${ORIGINAL_MANIFESTS[$type_code]}")
     done
+    for type_code in "${!SYNC_MANIFEST_TARGETS[@]}"; do
+        xml_util::add_element_with_attr xml_edit_cmd "/bisect/parameters" "parameter" "" "name" "sync_manifest_${type_code}"
+        xml_edit_cmd+=(-i "/bisect/parameters/parameter[@name='sync_manifest_${type_code}']" -t attr -n "value" -v "${SYNC_MANIFEST_TARGETS[$type_code]}")
+    done
     for test in "${TEST_NAME[@]}"; do
         xml_util::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
     done
@@ -816,6 +875,12 @@ function load_state_from_xml() {
         if [[ -n "$original_manifest" ]]; then
             ORIGINAL_MANIFESTS[$type_code]="$original_manifest"
         fi
+
+        local sync_manifest
+        sync_manifest=$(xml_util::read_value "/bisect/parameters/parameter[@name='sync_manifest_${type_code}']/@value")
+        if [[ -n "$sync_manifest" ]]; then
+            SYNC_MANIFEST_TARGETS[$type_code]="$sync_manifest"
+        fi
     done
 
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
@@ -864,7 +929,7 @@ function load_state_from_xml() {
                     local tree_path project
                     local -a commits=()
                     local parsed_type=""
-                    parse_change_string "$build_val" tree_path project commits parsed_type
+                    common_lib::parse_change_string "$build_val" tree_path project commits parsed_type
                     TREE_PATHS[$type_code]="$tree_path"
                     PROJECTS[$type_code]="$project"
                     COMMITS_TO_TEST_MAP[$type_code]="${commits[0]}" # Store the single commit
@@ -1538,13 +1603,14 @@ function main() {
         log_info "Resuming run from $INPUT_CONFIG_FILE"
         BISECT_CONFIG_FILE="$INPUT_CONFIG_FILE"
         xml_util::load "$BISECT_CONFIG_FILE" || fail_error "Failed to load XML file: $BISECT_CONFIG_FILE"
+        load_state_from_xml
+        restore_workspace_state
     else
         validate_and_process_args
         log_info "Starting new bisection run..."
         init_bisect_file
+        load_state_from_xml
     fi
-
-    load_state_from_xml
 
     if [[ -z "$SERIAL_NUMBER" ]]; then
         DEVICE_TYPE="VIRTUAL"
