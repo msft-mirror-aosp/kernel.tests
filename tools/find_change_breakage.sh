@@ -42,6 +42,7 @@ BISECT_CONFIG_FILE=""
 SKIP_BUILD=false
 NON_INTERACTIVE=false
 CLEAN_GIT=false
+CURRENT_TEST_LOG_PREFIX=""
 WITH_SETUP_SCRIPT=""
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
 TEMP_DIRS=()
@@ -1277,7 +1278,13 @@ function run_tests_on_device() {
     local adb_serial
     adb_serial=$(device_util::get_adb_serial)
 
-    local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_DIR" "-tl" "$OUTPUT_DIR/test_logs")
+    local log_dir="$OUTPUT_DIR/test_logs"
+    if [[ -n "${CURRENT_TEST_LOG_PREFIX:-}" ]]; then
+        log_dir="$log_dir/$CURRENT_TEST_LOG_PREFIX"
+    fi
+    mkdir -p "$log_dir"
+
+    local -a test_cmd=("$RUN_TEST_SCRIPT" "-td" "$TEST_DIR" "-tl" "$log_dir")
     test_cmd+=("-s" "$adb_serial")
 
     for test in "${TEST_NAME[@]}"; do
@@ -1345,6 +1352,7 @@ function validate_and_identify_breakage() {
     build_test_combination_args "" "" combination
 
     log_info "Testing with initial good combination: ${combination[*]}"
+    CURRENT_TEST_LOG_PREFIX="boundary_initial_good"
     setup_and_test_combination "${combination[@]}"
     if (( $? != 0 )); then
         fail_error "Validation failed: The combination of the FIRST commits is FAILING the test."
@@ -1373,6 +1381,7 @@ function validate_and_identify_breakage() {
         build_test_combination_args "$type_to_check" "$last_commit" test_combination
 
         log_info "Checking for breakage in '${type_to_check}' using combination: ${test_combination[*]}"
+        CURRENT_TEST_LOG_PREFIX="boundary_test_${type_to_check}_${last_commit:0:8}"
         setup_and_test_combination "${test_combination[@]}"
         local test_status=$?
 
@@ -1446,6 +1455,7 @@ function bisect_single_project() {
         build_test_combination_args "$type_code_to_bisect" "$mid_commit" test_combination
 
         log_info "Testing with combination: ${test_combination[*]}"
+        CURRENT_TEST_LOG_PREFIX="bisect_${type_code_to_bisect}_idx${mid_idx}_${mid_commit:0:8}"
         setup_and_test_combination "${test_combination[@]}"
         local test_status=$?
 
