@@ -1031,3 +1031,44 @@ function common_lib::parse_change_string() {
     fi
     return $EXIT_SUCCESS
 }
+
+function common_lib::check_disk_space() {
+    local min_required_gb="$1"
+    shift
+    local -a dirs_to_check=("$@")
+    local min_required_kb=$(( min_required_gb * 1024 * 1024 ))
+
+    # Check if DOWNLOAD_PATH is defined and different from /tmp
+    if [[ -n "${DOWNLOAD_PATH:-}" && "${DOWNLOAD_PATH}" != "/tmp"* ]]; then
+        dirs_to_check+=("$DOWNLOAD_PATH")
+    fi
+
+    for dir in "${dirs_to_check[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            continue
+        fi
+
+        local free_space_kb
+        free_space_kb=$(df -k "$dir" | awk 'NR==2 {print $4}')
+
+        if (( free_space_kb < min_required_kb )); then
+            local free_space_gb=$(( free_space_kb / 1024 / 1024 ))
+            local error_msg="Insufficient disk space on partition hosting '$dir'. Found ${free_space_gb}GB, required ${min_required_gb}GB."
+
+            # Add specific hint for /tmp
+            if [[ "$dir" == "/tmp" || "$dir" == "/tmp/"* ]]; then
+                error_msg+=$'\n[HINT] Downloaded test suites (e.g. android-cts.zip) can be huge. '
+                error_msg+="If /tmp is a tmpfs (RAM disk), you can expand it by running:"$'\n'
+                error_msg+="    sudo mount -o remount,size=${min_required_gb}G /tmp"$'\n'
+                error_msg+="Alternatively, modify DOWNLOAD_PATH in common_lib.sh to point to a physical disk."
+            fi
+
+            log_error "$error_msg"
+            return $EXIT_FAILURE
+        else
+            log_info "Disk space check passed for '$dir' ($(( free_space_kb / 1024 / 1024 ))GB free)."
+        fi
+    done
+
+    return $EXIT_SUCCESS
+}

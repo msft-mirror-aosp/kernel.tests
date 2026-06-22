@@ -569,7 +569,7 @@ function verify_git_commit_ranges() {
 
 function validate_and_process_args() {
     validate_input_flags
-    check_disk_space
+    common_lib::check_disk_space 90 "$OUTPUT_DIR" "/tmp" || fail_error "Aborting due to insufficient disk space."
 
     if [[ -n "$INPUT_CONFIG_FILE" ]]; then
         return 0
