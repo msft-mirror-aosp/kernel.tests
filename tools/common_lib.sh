@@ -694,6 +694,95 @@ function run_command() {
     return $status_code
 }
 
+function common_lib::validate_manifest_build_type() {
+    local build_type="$1"
+    local manifest_file="$2"
+
+    if [[ ! -f "$manifest_file" ]]; then
+        log_error "Manifest file not found: $manifest_file"
+        return $EXIT_FAILURE
+    fi
+
+    local manifest_content
+    manifest_content=$(<"$manifest_file")
+
+    if [[ "$build_type" == "pb" || "$build_type" == "sb" ]]; then
+        if [[ "$manifest_content" != *"platform/system/core"* && "$manifest_content" != *"gs-pixel"* ]]; then
+            log_error "Manifest does not appear to be a Platform/GSI manifest (missing platform/system/core or gs-pixel)."
+            return $EXIT_FAILURE
+        fi
+    elif [[ "$build_type" == "kb" ]]; then
+        if [[ "$manifest_content" != *"kernel/common"* ]]; then
+            log_error "Manifest does not appear to be a Kernel manifest (missing kernel/common)."
+            return $EXIT_FAILURE
+        fi
+    elif [[ "$build_type" == "vkb" ]]; then
+        if [[ "$manifest_content" != *"private/google-modules/soc"* ]]; then
+            log_error "Manifest does not appear to be a Vendor Kernel manifest (missing private/google-modules/soc)."
+            return $EXIT_FAILURE
+        fi
+    else
+        log_warn "Unknown build_type '$build_type'. Skipping strict manifest validation."
+    fi
+
+    return $EXIT_SUCCESS
+}
+
+function common_lib::fetch_manifest() {
+    local __fm_build_type="$1"
+    local __fm_ab_url="$2"
+    local __fm_out_ref="$3"
+
+    local __fm_ab_pattern="^ab://([^/]+)/([^/]+)/([0-9]+)$"
+    if [[ ! "$__fm_ab_url" =~ $__fm_ab_pattern ]]; then
+        log_error "Invalid --sync-manifest URL format: $__fm_ab_url. Expected: ab://<branch>/<target>/<build_id>"
+        return $EXIT_FAILURE
+    fi
+
+    local __fm_branch="${BASH_REMATCH[1]}"
+    local __fm_target="${BASH_REMATCH[2]}"
+    local __fm_build_id="${BASH_REMATCH[3]}"
+    local __fm_manifest_filename="manifest_${__fm_build_id}.xml"
+
+    local __fm_download_dir="$DOWNLOAD_PATH/$__fm_branch/$__fm_target/$__fm_build_id"
+    if [[ ! -d "$__fm_download_dir" ]]; then
+        mkdir -p "$__fm_download_dir"
+    fi
+
+    local __fm_cache_file="$__fm_download_dir/$__fm_manifest_filename"
+
+    if [[ ! -f "$__fm_cache_file" ]]; then
+        log_info "Fetching $__fm_manifest_filename from ab://${__fm_branch}/${__fm_target}/${__fm_build_id}..."
+        pushd "$__fm_download_dir" > /dev/null || return $EXIT_FAILURE
+        "$DEFAULT_FETCH_ARTIFACT" --branch "${__fm_branch}" --target "${__fm_target}" --bid "${__fm_build_id}" "${__fm_manifest_filename}"
+        local __fm_fetch_exit_code=$?
+        popd > /dev/null || return $EXIT_FAILURE
+
+        if (( __fm_fetch_exit_code != 0 )); then
+            log_error "Failed to fetch manifest for $__fm_ab_url"
+            return $EXIT_FAILURE
+        fi
+    else
+        log_info "Using cached manifest $__fm_cache_file"
+    fi
+
+    if [[ ! -f "$__fm_cache_file" ]]; then
+        log_error "Manifest not found at expected path: $__fm_cache_file"
+        return $EXIT_FAILURE
+    fi
+
+    if ! common_lib::validate_manifest_build_type "$__fm_build_type" "$__fm_cache_file"; then
+        log_error "Manifest validation failed for $__fm_ab_url"
+        return $EXIT_FAILURE
+    fi
+
+    if [[ -n "$__fm_out_ref" ]]; then
+        printf -v "$__fm_out_ref" "%s" "$__fm_cache_file"
+    fi
+
+    return $EXIT_SUCCESS
+}
+
 function set_env_var() {
     local var_name="$1"
     local var_value="$2"
@@ -706,5 +795,148 @@ function set_env_var() {
 
     export "$var_name=$var_value"
     log_info "Exported environment variable: ${var_name}='${var_value}'"
+    return $EXIT_SUCCESS
+}
+function common_lib::enter_interactive_fix_mode() {
+    local prompt_message="$1"
+    local non_interactive_flag="${2:-false}"
+
+    if [[ "$non_interactive_flag" == "true" ]]; then
+        log_error "${prompt_message} Failed in non-interactive mode."
+        # Return 5, which maps to "bad"
+        return 5
+    fi
+
+    local rv=5 # Default to 'bad'
+    cat <<-EOF2 1>&2
+    ${YELLOW}${prompt_message}${END}
+    Spawning a new shell.
+    You can attempt to fix the issue (e.g., resolve merge conflicts).
+    Once done, exit this shell with one of the following codes:
+      ${GREEN}exit 0${END}:     Retry the operation. If successful, bisection continues.
+      ${ORANGE}exit 125${END}:   '${BOLD}Skip${END}${YELLOW}' this commit (mark as untestable).
+      ${RED}exit 1-124${END}:   Mark this commit as '${BOLD}bad${END}${YELLOW}' (e.g., exit 1 or exit 5).
+      ${RED}exit 128-255${END}:  '${BOLD}Abort${END}${YELLOW}' the entire bisection process immediately.
+EOF2
+    bash -i
+    rv=$?
+    return "${rv}"
+}
+
+function common_lib::sync_tree_to_manifest() {
+    local tree_path="$1"
+    local manifest_filename="$2"
+    local type_code="${3:-repo}"
+
+    log_info "[$type_code] Syncing tree '$tree_path' to $manifest_filename..."
+    pushd "$tree_path" > /dev/null || {
+        log_error "[$type_code] Failed to cd into $tree_path"
+        return $EXIT_FAILURE
+    }
+
+    repo init -m "$manifest_filename" || {
+        log_error "[$type_code] repo init failed for $manifest_filename"
+        popd > /dev/null
+        return $EXIT_FAILURE
+    }
+
+    repo sync -c -j"$(nproc)" || {
+        log_error "[$type_code] repo sync failed for $manifest_filename"
+        popd > /dev/null
+        return $EXIT_FAILURE
+    }
+
+    popd > /dev/null
+    return $EXIT_SUCCESS
+}
+
+function common_lib::parse_artifact_url() {
+    local build_str="$1"
+    local -n branch_ref="$2"
+    local -n target_ref="$3"
+    local -n ids_ref="$4"
+    local -n type_ref="$5" # Will be 'range', 'list', 'single', 'local', or 'none'
+    local -n filename_ref="$6"
+
+    # Support for "none" to skip flashing specific build artifacts
+    if [[ "${build_str,,}" == "none" ]]; then
+        type_ref="none"
+        ids_ref=("none")
+        branch_ref="none"
+        target_ref="none"
+        return $EXIT_SUCCESS
+    fi
+
+    if [[ "$build_str" != ab://* ]]; then
+        if [[ -d "$build_str" ]]; then
+            type_ref="local"
+            ids_ref=("$build_str")
+            return $EXIT_SUCCESS
+        else
+            log_error "Build string is not a valid 'ab://' URL or a local directory: $build_str"
+            return $EXIT_FAILURE
+        fi
+    fi
+
+    local path_part="${build_str#ab://}"
+    local -a parts=()
+    local IFS='/'
+    read -r -a parts <<< "$path_part"
+
+    if (( ${#parts[@]} < 3 )); then
+        log_error "Malformed ab URL. Expected at least 3 parts: ab://<branch>/<target>/<ids>[/<filename>]. Got: ${build_str}"
+        return $EXIT_FAILURE
+    fi
+
+    if [[ -z "${parts[0]}" || -z "${parts[1]}" || -z "${parts[2]}" ]]; then
+        log_error "The branch, target, or ids cannot be empty string. Got: ${build_str}"
+        return $EXIT_FAILURE
+    fi
+
+    branch_ref="${parts[0]}"
+    target_ref="${parts[1]}"
+    local id_part
+    id_part=$(echo "${parts[2]}" | tr -d '[:space:]')
+
+    if (( ${#parts[@]} >= 4 )); then
+        filename_ref="${parts[3]}"
+    fi
+
+    if [[ "$id_part" == *","* ]]; then
+        type_ref="list"
+        local old_ifs=$IFS; IFS=','
+        read -r -a ids_ref <<< "$id_part"
+        IFS=$old_ifs
+        for id in "${ids_ref[@]}"; do
+            if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+                log_error "Invalid build ID in list. All IDs must be numeric: $id"
+                return $EXIT_FAILURE
+            fi
+        done
+        mapfile -t sorted_ids < <(printf "%s\n" "${ids_ref[@]}" | sort -n)
+        ids_ref=("${sorted_ids[@]}")
+    elif [[ "$id_part" == *"-"* ]]; then
+        type_ref="range"
+        local id1 id2
+        id1=$(echo "$id_part" | cut -d'-' -f1)
+        id2=$(echo "$id_part" | cut -d'-' -f2)
+        if ! [[ "$id1" =~ ^[0-9]+$ && "$id2" =~ ^[0-9]+$ ]]; then
+            log_error "Invalid range format. IDs must be numeric: $id_part"
+            return $EXIT_FAILURE
+        fi
+        if (( id1 >= id2 )); then
+            log_error "Invalid range: start ID ($id1) must be less than end ID ($id2)."
+            return $EXIT_FAILURE
+        fi
+        ids_ref=("$id1" "$id2")
+    else
+        type_ref="single"
+        # A single ID can be numeric or "latest"
+        if ! [[ "$id_part" =~ ^[0-9]+$ || "$id_part" == "latest" ]]; then
+            log_error "Invalid build ID. Must be numeric or 'latest': $id_part"
+            return $EXIT_FAILURE
+        fi
+        ids_ref=("$id_part")
+    fi
     return $EXIT_SUCCESS
 }

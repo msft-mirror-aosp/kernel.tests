@@ -56,6 +56,8 @@ declare -A PROJECTS
 declare -A ORIGINAL_GIT_STATES # Stores original branch/commit before checkout
 declare -A COMMITS_TO_TEST_MAP # Stores commit hashes as space-separated strings
 declare -A COMMIT_STATUSES # Stores status ("good", "bad", "skipped") for each commit index
+declare -A SYNC_MANIFEST_TARGETS # Stores ab:// URLs for --sync-manifest
+declare -A ORIGINAL_MANIFESTS # Stores original manifest.xml basename before sync
 declare -A GOOD_INDICES
 declare -A BAD_INDICES
 declare -A IS_BREAKING
@@ -147,6 +149,7 @@ function print_help() {
     echo "  -tr,  --test-retry <count>       Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] Pass '--skip-build' to underlying flash/launch scripts."
+    echo "  --sync-manifest <type>=<url>...  [Optional] Lock workspace to a manifest. Supports multiple (e.g. kb=ab://... pb=ab://...)"
     echo "  --non-interactive                [Optional] Disable interactive mode on build failures."
     echo "  --with-setup <script_path>       [Optional] Path to a custom script to run after checkout, before build."
     echo "  -od,  --output-dir <path>        Directory to store the state XML file. Default: ${DEFAULT_OUTPUT_DIR}/${DEFAULT_BISECT_CONFIG_FILENAME}."
@@ -270,6 +273,28 @@ function parse_args() {
                 has_new_bisect_args=true
                 shift
                 ;;
+            --sync-manifest)
+                shift
+                local count=0
+                while [[ $# -gt 0 && "$1" != -* ]]; do
+                    local raw_arg="$1"
+                    if [[ "$raw_arg" != *"="* ]]; then
+                        fail_error "Invalid format for --sync-manifest argument: '$raw_arg'. Must be <build_type>=<ab_url>"
+                    fi
+                    local build_type="${raw_arg%%=*}"
+                    local ab_url="${raw_arg#*=}"
+                    if [[ "$build_type" != "pb" && "$build_type" != "kb" && "$build_type" != "vkb" && "$build_type" != "sb" ]]; then
+                        fail_error "Invalid build type '$build_type' for --sync-manifest. Must be pb, kb, vkb, or sb."
+                    fi
+                    SYNC_MANIFEST_TARGETS[$build_type]="$ab_url"
+                    shift
+                    count=$((count+1))
+                done
+                if (( count == 0 )); then
+                    fail_error "--sync-manifest requires at least one argument in the format <build_type>=<ab_url>"
+                fi
+                has_new_bisect_args=true
+                ;;
             *)
                 fail_error "Unsupported flag: $1"
                 ;;
@@ -315,42 +340,46 @@ function parse_change_string() {
     # Check for ab:// URL first
     if [[ "$build_str" == ab://* ]]; then
         type_ref="ab"
-        commits_ref=("$build_str")
         return 0
     fi
 
+    # Separate path and commit parts
+    local path_part
+    local commit_part=""
+    if [[ "$build_str" == *:* ]]; then
+        path_part="${build_str%%:*}"
+        commit_part="${build_str#*:}"
+    else
+        path_part="$build_str"
+    fi
+
+    # Improved logic to find the true Android tree root by searching for .repo
+    local expanded_path="${path_part/#\~/$HOME}"
+    local abs_path
+    abs_path=$(realpath -m "$expanded_path" 2>/dev/null || echo "$expanded_path")
+
+    local found_tree=""
+    if found_tree=$(find_repo_root "$abs_path" 2>/dev/null); then
+
+        tree_path_ref="$found_tree"
+
+        if [[ "$abs_path" == "$found_tree" ]]; then
+            project_ref=""
+        else
+            project_ref="${abs_path#$found_tree/}"
+        fi
+    else
+        fail_error "Could not find .repo directory for path: $path_part"
+    fi
+
     # Check for local path without project/commit part
-    if [[ ! "$build_str" == *:* ]]; then
+    if [[ -z "$commit_part" ]]; then
         if [[ -d "$build_str" ]]; then
             type_ref="local"
-            commits_ref=("$build_str")
             return 0
         else
             fail_error "Build string is not a valid directory: $build_str"
         fi
-    fi
-
-    # It's a format with a colon
-    local path_part="${build_str%%:*}"
-    local commit_part="${build_str#*:}"
-
-    tree_path_ref="${path_part%/*}"
-    # If tree_path is '.' , resolve it to the full path
-    if [[ "$tree_path_ref" == "." ]]; then
-        tree_path_ref=$PWD
-    fi
-    # Expand tilde
-    tree_path_ref="${tree_path_ref/#\~/$HOME}"
-
-
-    project_ref="${path_part##*/}"
-    # Special handling for tb as it has a nested structure
-    if [[ "$build_str" == *"/test/vts:"* ]]; then
-        project_ref="test/vts"
-        tree_path_ref="${path_part%/test/vts}"
-    elif [[ "$build_str" == *"/cts:"* ]]; then
-        project_ref="cts"
-        tree_path_ref="${path_part%/cts}"
     fi
 
     if [[ "$commit_part" == *","* ]]; then
@@ -391,7 +420,7 @@ function get_commits_in_range() {
     log_info "Found ${#result_array_ref[@]} commits to test for ${project_path}."
 }
 
-function validate_and_process_args() {
+function validate_input_flags() {
     OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
     if [[ ! -d "$OUTPUT_DIR" ]]; then
         mkdir -p "$OUTPUT_DIR"
@@ -403,7 +432,104 @@ function validate_and_process_args() {
         return 0
     fi
 
-    # Determine device type for validation
+    for build_type in "${!SYNC_MANIFEST_TARGETS[@]}"; do
+        local var_name="${BUILD_TYPE_MAP[$build_type]}"
+        if [[ -z "$var_name" || -z "${!var_name}" ]]; then
+            fail_error "Found --sync-manifest $build_type but missing corresponding build flag (e.g., -$build_type)."
+        fi
+    done
+}
+
+function check_uncommitted_changes() {
+    local type_code="$1"
+    local tree_path="$2"
+    local -n checked_trees_ref="$3"
+
+    if [[ -z "${checked_trees_ref["$tree_path"]:-}" ]]; then
+        log_info "[$type_code] Checking for uncommitted changes in tree: $tree_path ..."
+        local dirty_projects
+        dirty_projects=$(cd "$tree_path" && repo forall -c 'git diff-index --quiet HEAD || echo "$REPO_PROJECT"')
+        if [[ -n "$dirty_projects" ]]; then
+            local error_msg
+            printf -v error_msg "[%s] Found uncommitted changes in the following projects under %s:\n%s\nPlease commit or stash them before running." \
+                "$type_code" "$tree_path" "$dirty_projects"
+            fail_error "$error_msg"
+        fi
+        checked_trees_ref["$tree_path"]="1"
+    fi
+}
+
+function verify_git_commit_ranges() {
+    local type_code="$1"
+    local id_type="$2"
+    local tree_path="$3"
+    local project="$4"
+    local -n commits_ref="$5"
+    local -n has_bisection_target_ref="$6"
+
+    log_info "Validating git argument for '$type_code' (type: $id_type)..."
+
+    local full_project_path="${tree_path}/${project}"
+    if [[ ! -d "$full_project_path/.git" ]]; then
+        fail_error "[$type_code] Project path is not a git repository: $full_project_path"
+    fi
+
+    # Verify project exists in `repo list`
+    local repo_list_output
+    repo_list_output=$(cd "$tree_path" && repo list)
+    if ! echo "$repo_list_output" | grep -q "^${project} "; then
+         fail_error "[$type_code] Project path '${project}' not found in 'repo list' for tree '${tree_path}'."
+    fi
+
+    # Verify commits
+    for commit in "${commits_ref[@]}"; do
+        if ! (cd "$full_project_path" && git cat-file -e "$commit" &>/dev/null); then
+            fail_error "[$type_code] Commit ID '$commit' does not exist in project '$project'."
+        fi
+    done
+
+    # --- Type-specific validation ---
+    if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
+        has_bisection_target_ref=true
+        local -a commits_to_test=()
+        if [[ "$id_type" == "range" ]]; then
+            local start_commit="${commits_ref[0]}"
+            local end_commit="${commits_ref[1]}"
+            # 4. Check commit order for range
+            if ! (cd "$full_project_path" && git merge-base --is-ancestor "$start_commit" "$end_commit"); then
+                fail_error "[$type_code] Start commit $start_commit is not an ancestor of end commit $end_commit."
+            fi
+            get_commits_in_range "$full_project_path" "$start_commit" "$end_commit" commits_to_test
+        else # list
+            # 5. Check commit order for list
+            local sorted_commits
+            sorted_commits=($(cd "$full_project_path" && git rev-list --topo-order --no-walk "${commits_ref[@]}"))
+            for i in "${!commits_ref[@]}"; do
+                if [[ "${commits_ref[$i]}" != "${sorted_commits[$i]}" ]]; then
+                    fail_error "[$type_code] Commit list is not in ascending chronological order. Expected order starts with: ${sorted_commits[*]}"
+                fi
+            done
+            commits_to_test=("${commits_ref[@]}")
+        fi
+
+        if (( ${#commits_to_test[@]} < 2 )); then
+             fail_error "Bisection for '$type_code' requires at least two commits. Found ${#commits_to_test[@]}."
+        fi
+        COMMITS_TO_TEST_MAP[$type_code]="${commits_to_test[*]}"
+    else # fixed_commit
+        COMMITS_TO_TEST_MAP[$type_code]="${commits_ref[0]}" # Store the single commit
+    fi
+
+    save_initial_git_state "$type_code"
+}
+
+function validate_and_process_args() {
+    validate_input_flags
+
+    if [[ -n "$INPUT_CONFIG_FILE" ]]; then
+        return 0
+    fi
+
     local current_device_type="VIRTUAL"
     if [[ -n "$SERIAL_NUMBER" ]]; then
         current_device_type="PHYSICAL"
@@ -413,6 +539,7 @@ function validate_and_process_args() {
     local has_bisection_target=false
     local script_root_dir
     script_root_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+    local -A checked_trees=()
 
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
         local var_name="${BUILD_TYPE_MAP[$type_code]}"
@@ -438,9 +565,34 @@ function validate_and_process_args() {
             continue # Skip git validation for 'none'
         fi
 
-        if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
-            # --- Shared validation for all git-based types ---
-            log_info "Validating git argument for '$type_code' (type: $id_type)..."
+        local is_newly_synced=false
+
+        if [[ -n "${SYNC_MANIFEST_TARGETS[$type_code]}" && ! -d "$tree_path/.repo" ]]; then
+            log_info "[$type_code] Tree '$tree_path' does not exist or is not a repo. Initializing it..."
+            mkdir -p "$tree_path" || fail_error "[$type_code] Failed to create directory: $tree_path"
+
+            local ab_url="${SYNC_MANIFEST_TARGETS[$type_code]}"
+            local cache_file=""
+
+            common_lib::fetch_manifest "$type_code" "$ab_url" cache_file
+            if (( $? != 0 )); then
+                fail_error "[$type_code] Manifest fetch/validation failed for $ab_url"
+            fi
+
+            local manifest_filename
+            manifest_filename=$(basename "$cache_file")
+
+            pushd "$tree_path" > /dev/null || fail_error "[$type_code] Failed to cd into $tree_path"
+            repo init -u sso://android/platform/manifest || fail_error "[$type_code] Initial repo init failed"
+            cp "$cache_file" ".repo/manifests/" || fail_error "[$type_code] Failed to copy manifest"
+            popd > /dev/null || fail_error "[$type_code] Failed to popd from $tree_path"
+
+            common_lib::sync_tree_to_manifest "$tree_path" "$manifest_filename" "$type_code" || fail_error "[$type_code] repo sync failed"
+
+            is_newly_synced=true
+        fi
+
+        if [[ "$id_type" != "ab" ]]; then
             TREE_PATHS[$type_code]="$tree_path"
             PROJECTS[$type_code]="$project"
 
@@ -452,58 +604,35 @@ function validate_and_process_args() {
                 fail_error "[$type_code] Android source tree path cannot be the same as the script's root directory."
             fi
 
-            local full_project_path="${tree_path}/${project}"
-            if [[ ! -d "$full_project_path/.git" ]]; then
-                fail_error "[$type_code] Project path is not a git repository: $full_project_path"
-            fi
+            check_uncommitted_changes "$type_code" "$tree_path" checked_trees
+        fi
 
-            # 2. Verify project exists in `repo list`
-            local repo_list_output
-            repo_list_output=$(cd "$tree_path" && repo list)
-            if ! echo "$repo_list_output" | grep -q "^${project} "; then
-                 fail_error "[$type_code] Project path '${project}' not found in 'repo list' for tree '${tree_path}'."
-            fi
+        if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
+            verify_git_commit_ranges "$type_code" "$id_type" "$tree_path" "$project" commits has_bisection_target
+        fi
 
-            # 3. Verify commits
-            for commit in "${commits[@]}"; do
-                if ! (cd "$full_project_path" && git cat-file -e "$commit" &>/dev/null); then
-                    fail_error "[$type_code] Commit ID '$commit' does not exist in project '$project'."
-                fi
-            done
+        if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" || "$id_type" == "local" ]]; then
+            if [[ -n "${SYNC_MANIFEST_TARGETS[$type_code]}" && "$is_newly_synced" != true ]]; then
+                local ab_url="${SYNC_MANIFEST_TARGETS[$type_code]}"
+                local cache_file=""
 
-            # --- Type-specific validation ---
-            if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
-                has_bisection_target=true
-                local -a commits_to_test=()
-                if [[ "$id_type" == "range" ]]; then
-                    local start_commit="${commits[0]}"
-                    local end_commit="${commits[1]}"
-                    # 4. Check commit order for range
-                    if ! (cd "$full_project_path" && git merge-base --is-ancestor "$start_commit" "$end_commit"); then
-                        fail_error "[$type_code] Start commit $start_commit is not an ancestor of end commit $end_commit."
-                    fi
-                    get_commits_in_range "$full_project_path" "$start_commit" "$end_commit" commits_to_test
-                else # list
-                    # 5. Check commit order for list
-                    local sorted_commits
-                    sorted_commits=($(cd "$full_project_path" && git rev-list --topo-order --no-walk "${commits[@]}"))
-                    for i in "${!commits[@]}"; do
-                        if [[ "${commits[$i]}" != "${sorted_commits[$i]}" ]]; then
-                            fail_error "[$type_code] Commit list is not in ascending chronological order. Expected order starts with: ${sorted_commits[*]}"
-                        fi
-                    done
-                    commits_to_test=("${commits[@]}")
+                common_lib::fetch_manifest "$type_code" "$ab_url" cache_file
+                if (( $? != 0 )); then
+                    fail_error "[$type_code] Manifest fetch/validation failed for $ab_url"
                 fi
 
-                if (( ${#commits_to_test[@]} < 2 )); then
-                     fail_error "Bisection for '$type_code' requires at least two commits. Found ${#commits_to_test[@]}."
-                fi
-                COMMITS_TO_TEST_MAP[$type_code]="${commits_to_test[*]}"
-            else # fixed_commit
-                COMMITS_TO_TEST_MAP[$type_code]="${commits[0]}" # Store the single commit
-            fi
+                local manifest_filename
+                manifest_filename=$(basename "$cache_file")
 
-            save_initial_git_state "$type_code"
+                local original_manifest="default.xml"
+                if [[ -L "${tree_path}/.repo/manifest.xml" ]]; then
+                    original_manifest=$(basename "$(readlink "${tree_path}/.repo/manifest.xml")")
+                fi
+                ORIGINAL_MANIFESTS[$type_code]="$original_manifest"
+                cp "$cache_file" "${tree_path}/.repo/manifests/" || fail_error "Failed to copy manifest to ${tree_path}/.repo/manifests/"
+
+                common_lib::sync_tree_to_manifest "$tree_path" "$manifest_filename" "$type_code" || fail_error "[$type_code] repo sync failed"
+            fi
         fi
     done
 
@@ -519,6 +648,7 @@ function validate_and_process_args() {
         fi
     fi
 }
+
 
 function save_initial_git_state() {
     local type_code="$1"
@@ -542,10 +672,22 @@ function restore_all_git_states() {
         local project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$type_code]}"
         if [[ -d "$project_path/.git" ]]; then
             log_info "Restoring project '$project_path' to '$original_state'..."
-            (cd "$project_path" && git checkout "$original_state")
-            if (( $? != 0 )); then
-                log_error "Failed to restore project '$project_path' to '$original_state'."
-            fi
+            pushd "$project_path" > /dev/null || fail_error "Failed to cd into $project_path"
+            git checkout "$original_state" || fail_error "Failed to restore project '$project_path' to '$original_state'."
+            popd > /dev/null || fail_error "Failed to popd from $project_path"
+        fi
+    done
+
+    # Restore initial manifests
+    for type_code in "${!ORIGINAL_MANIFESTS[@]}"; do
+        local original_manifest="${ORIGINAL_MANIFESTS[$type_code]}"
+        local tree_path="${TREE_PATHS[$type_code]}"
+        if [[ -n "$original_manifest" && -d "$tree_path/.repo" ]]; then
+            log_info "Restoring manifest for '$tree_path' to '$original_manifest'..."
+            pushd "$tree_path" > /dev/null || fail_error "Failed to cd into $tree_path"
+            repo init -m "$original_manifest" || fail_error "Failed to restore manifest '$original_manifest' via repo init"
+            repo sync -c -j"$(nproc)" || fail_error "Failed to repo sync after restoring manifest '$original_manifest'"
+            popd > /dev/null || fail_error "Failed to popd from $tree_path"
         fi
     done
 }
@@ -568,6 +710,10 @@ function init_bisect_file() {
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "skip_build"    "$SKIP_BUILD"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "non_interactive" "$NON_INTERACTIVE"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "with_setup_script" "$WITH_SETUP_SCRIPT"
+    for type_code in "${!ORIGINAL_MANIFESTS[@]}"; do
+        xml_util::add_element_with_attr xml_edit_cmd "/bisect/parameters" "parameter" "" "name" "original_manifest_${type_code}"
+        xml_edit_cmd+=(-i "/bisect/parameters/parameter[@name='original_manifest_${type_code}']" -t attr -n "value" -v "${ORIGINAL_MANIFESTS[$type_code]}")
+    done
     for test in "${TEST_NAME[@]}"; do
         xml_util::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
     done
@@ -620,6 +766,14 @@ function load_state_from_xml() {
     NON_INTERACTIVE=$(xml_util::read_value "/bisect/parameters/@non_interactive")
     WITH_SETUP_SCRIPT=$(xml_util::read_value "/bisect/parameters/@with_setup_script")
     xml_util::read_values_to_array "/bisect/parameters/test" TEST_NAME
+
+    for type_code in "pb" "kb" "vkb" "sb"; do
+        local original_manifest
+        original_manifest=$(xml_util::read_value "/bisect/parameters/parameter[@name='original_manifest_${type_code}']/@value")
+        if [[ -n "$original_manifest" ]]; then
+            ORIGINAL_MANIFESTS[$type_code]="$original_manifest"
+        fi
+    done
 
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
         local var_name="${BUILD_TYPE_MAP[$type_code]}"
@@ -705,90 +859,6 @@ function xml_util::update_change_status_by_index() {
 }
 
 # --- Test Suite Caching ---
-function parse_build_string() {
-    local build_str="$1"
-    local -n branch_ref="$2"
-    local -n target_ref="$3"
-    local -n ids_ref="$4"
-    local -n type_ref="$5" # Will be 'range', 'list', 'single', 'local', or 'none'
-    local -n filename_ref="$6"
-
-    # Support for "none" to skip flashing specific build artifacts
-    if [[ "${build_str,,}" == "none" ]]; then
-        type_ref="none"
-        ids_ref=("none")
-        branch_ref="none"
-        target_ref="none"
-        return $EXIT_SUCCESS
-    fi
-
-    if [[ "$build_str" != ab://* ]]; then
-        if [[ -d "$build_str" ]]; then
-            type_ref="local"
-            ids_ref=("$build_str")
-            return $EXIT_SUCCESS
-        else
-            fail_error "Build string is not a valid 'ab://' URL or a local directory: $build_str"
-        fi
-    fi
-
-    local path_part="${build_str#ab://}"
-    local -a parts=()
-    local IFS='/'
-    read -r -a parts <<< "$path_part"
-
-    if (( ${#parts[@]} < 3 )); then
-        fail_error "Malformed ab URL. Expected at least 3 parts: ab://<branch>/<target>/<ids>[/<filename>]. Got: ${build_str}"
-    fi
-
-    if [[ -z "${parts[0]}" || -z "${parts[1]}" || -z "${parts[2]}" ]]; then
-        fail_error "The branch, target, or ids cannot be empty string. Got: ${build_str}"
-    fi
-
-    branch_ref="${parts[0]}"
-    target_ref="${parts[1]}"
-    local id_part
-    id_part=$(echo "${parts[2]}" | tr -d '[:space:]')
-
-    if (( ${#parts[@]} >= 4 )); then
-        filename_ref="${parts[3]}"
-    fi
-
-    if [[ "$id_part" == *","* ]]; then
-        type_ref="list"
-        local old_ifs=$IFS; IFS=','
-        read -r -a ids_ref <<< "$id_part"
-        IFS=$old_ifs
-        for id in "${ids_ref[@]}"; do
-            if ! [[ "$id" =~ ^[0-9]+$ ]]; then
-                fail_error "Invalid build ID in list. All IDs must be numeric: $id"
-            fi
-        done
-        mapfile -t sorted_ids < <(printf "%s\n" "${ids_ref[@]}" | sort -n)
-        ids_ref=("${sorted_ids[@]}")
-    elif [[ "$id_part" == *"-"* ]]; then
-        type_ref="range"
-        local id1 id2
-        id1=$(echo "$id_part" | cut -d'-' -f1)
-        id2=$(echo "$id_part" | cut -d'-' -f2)
-        if ! [[ "$id1" =~ ^[0-9]+$ && "$id2" =~ ^[0-9]+$ ]]; then
-            fail_error "Invalid range format. IDs must be numeric: $id_part"
-        fi
-        if (( id1 >= id2 )); then
-            fail_error "Invalid range: start ID ($id1) must be less than end ID ($id2)."
-        fi
-        ids_ref=("$id1" "$id2")
-    else
-        type_ref="single"
-        # A single ID can be numeric or "latest"
-        if ! [[ "$id_part" =~ ^[0-9]+$ || "$id_part" == "latest" ]]; then
-            fail_error "Invalid build ID. Must be numeric or 'latest': $id_part"
-        fi
-        ids_ref=("$id_part")
-    fi
-    return $EXIT_SUCCESS
-}
-
 function get_test_suite_base_dir() {
     echo "$DOWNLOAD_PATH"
 }
@@ -798,7 +868,7 @@ function handle_test_suite_url() {
     log_info "Test suite provided as a URL. Preparing for download..."
 
     local branch target build_id filename
-    parse_build_string "$test_suite_url" branch target build_id _ filename
+    common_lib::parse_artifact_url "$test_suite_url" branch target build_id _ filename || fail_error "Failed to parse URL."
 
     if [[ "${filename##*.}" != "zip" ]]; then
         fail_error "Test suite filename must be a .zip file. Got: ${filename}"
@@ -851,7 +921,7 @@ function prepare_test_suite() {
 
     # For ab:// URLs, check the cache.
     local branch target build_id filename
-    parse_build_string "$required_locator" branch target build_id _ filename
+    common_lib::parse_artifact_url "$required_locator" branch target build_id _ filename || fail_error "Failed to parse URL."
 
     if [[ "${build_id[0]}" == "latest" ]]; then
         log_info "Resolving 'latest' build ID for test suite..."
@@ -901,30 +971,6 @@ function checkout_commit() {
         return 1
     fi
     return 0
-}
-
-function enter_interactive_fix_mode() {
-    local prompt_message="$1"
-    if "$NON_INTERACTIVE"; then
-        log_error "${prompt_message} Failed in non-interactive mode."
-        # Return 5, which maps to "bad"
-        return 5
-    fi
-
-    local rv=5 # Default to 'bad'
-    cat <<-EOF 1>&2
-    ${YELLOW}${prompt_message}${END}
-    Spawning a new shell.
-    You can attempt to fix the issue (e.g., resolve merge conflicts).
-    Once done, exit this shell with one of the following codes:
-      ${GREEN}exit 0${END}:     Retry the operation. If successful, bisection continues.
-      ${ORANGE}exit 125${END}:   '${BOLD}Skip${END}${YELLOW}' this commit (mark as untestable).
-      ${RED}exit 1-124${END}:   Mark this commit as '${BOLD}bad${END}${YELLOW}' (e.g., exit 1 or exit 5).
-      ${RED}exit 128-255${END}:  '${BOLD}Abort${END}${YELLOW}' the entire bisection process immediately.
-EOF
-    bash -i
-    rv=$?
-    return "${rv}"
 }
 
 function find_real_middle_index() {
@@ -1010,7 +1056,7 @@ function perform_custom_setup_script() {
 
         log_warn "Custom setup script failed (exit code $setup_status)."
 
-        enter_interactive_fix_mode "Custom setup script failed."
+        common_lib::enter_interactive_fix_mode "Custom setup script failed." "$NON_INTERACTIVE"
         local user_choice=$?
 
         if (( user_choice == 0 )); then # Retry
@@ -1133,7 +1179,7 @@ function setup_and_test_combination() {
         log_warn "Device setup failed (exit code $setup_status)."
 
         if [[ "$NON_INTERACTIVE" == "false" ]]; then
-            enter_interactive_fix_mode "Device setup (build/flash) failed."
+            common_lib::enter_interactive_fix_mode "Device setup (build/flash) failed." "$NON_INTERACTIVE"
             local interactive_status=$?
             if (( interactive_status == 0 )); then # Retry
                 log_info "User requested retry. Re-running setup..."
@@ -1205,24 +1251,50 @@ function run_tests_on_device() {
 }
 
 
+function build_test_combination_args() {
+    local target_type="$1"
+    local target_commit="$2"
+    local -n combination_ref="$3"
+
+    combination_ref=()
+
+    if [[ -n "$target_type" && -n "$target_commit" ]]; then
+        combination_ref+=("${target_type}:${target_commit}")
+    fi
+
+    # Add "good" commit for other bisection targets
+    for other_type in "${!BUILD_TYPE_MAP[@]}"; do
+        if [[ "$other_type" == "$target_type" || -z "${ID_TYPES[$other_type]:-}" ]]; then
+            continue
+        fi
+        if [[ "${ID_TYPES[$other_type]}" == "range" || "${ID_TYPES[$other_type]}" == "list" ]]; then
+            local -a other_commits=(${COMMITS_TO_TEST_MAP[$other_type]})
+            combination_ref+=("${other_type}:${other_commits[0]}")
+        fi
+    done
+
+    # Add fixed dependencies (ab, local, fixed_commit)
+    for type_code in "${!BUILD_TYPE_MAP[@]}"; do
+         if [[ "${ID_TYPES[$type_code]:-}" != "range" && "${ID_TYPES[$type_code]:-}" != "list" ]]; then
+            local var_name="${BUILD_TYPE_MAP[$type_code]}"
+            if [[ -n "${!var_name}" ]]; then
+                combination_ref+=("${type_code}:${!var_name}")
+            fi
+         fi
+    done
+}
+
 function validate_and_identify_breakage() {
     log_info "--- Step 1: Validating the initial 'all good' commit combination ---"
     local -a ranged_build_types=()
-    local -a combination=()
-
     for type_code in "${!ID_TYPES[@]}"; do
         if [[ "${ID_TYPES[$type_code]}" == "range" || "${ID_TYPES[$type_code]}" == "list" ]]; then
             ranged_build_types+=("$type_code")
-            local -a commits=(${COMMITS_TO_TEST_MAP[$type_code]})
-            combination+=("${type_code}:${commits[0]}")
-        else
-            # Add fixed dependencies (ab, local, fixed_commit) to the combination
-            local var_name="${BUILD_TYPE_MAP[$type_code]}"
-            if [[ -n "${!var_name}" ]]; then
-                combination+=("${type_code}:${!var_name}")
-            fi
         fi
     done
+
+    local -a combination=()
+    build_test_combination_args "" "" combination
 
     log_info "Testing with initial good combination: ${combination[*]}"
     setup_and_test_combination "${combination[@]}"
@@ -1248,22 +1320,9 @@ function validate_and_identify_breakage() {
         local -a test_combination=()
         local -a commits_for_type=(${COMMITS_TO_TEST_MAP[$type_to_check]})
         local last_commit_index=$(( ${#commits_for_type[@]} - 1 ))
-        test_combination+=("${type_to_check}:${commits_for_type[$last_commit_index]}")
+        local last_commit="${commits_for_type[$last_commit_index]}"
 
-        for other_type in "${ranged_build_types[@]}"; do
-            if [[ "$other_type" != "$type_to_check" ]]; then
-                local -a other_commits=(${COMMITS_TO_TEST_MAP[$other_type]})
-                test_combination+=("${other_type}:${other_commits[0]}")
-            fi
-        done
-        for type_code in "${!BUILD_TYPE_MAP[@]}"; do
-             if [[ "${ID_TYPES[$type_code]}" != "range" && "${ID_TYPES[$type_code]}" != "list" ]]; then
-                local var_name="${BUILD_TYPE_MAP[$type_code]}"
-                if [[ -n "${!var_name}" ]]; then
-                    test_combination+=("${type_code}:${!var_name}")
-                fi
-             fi
-        done
+        build_test_combination_args "$type_to_check" "$last_commit" test_combination
 
         log_info "Checking for breakage in '${type_to_check}' using combination: ${test_combination[*]}"
         setup_and_test_combination "${test_combination[@]}"
@@ -1336,28 +1395,7 @@ function bisect_single_project() {
         log_info "--- Testing $type_code_to_bisect at index: $mid_idx (Commit: ${mid_commit:0:12}) ---"
 
         local -a test_combination=()
-        test_combination+=("${type_code_to_bisect}:${mid_commit}")
-
-        # Add "good" commit for other bisection targets
-        for other_type in "${!BUILD_TYPE_MAP[@]}"; do
-            if [[ "$other_type" == "$type_code_to_bisect" || -z "${ID_TYPES[$other_type]}" ]]; then
-                continue
-            fi
-            if [[ "${ID_TYPES[$other_type]}" == "range" || "${ID_TYPES[$other_type]}" == "list" ]]; then
-                local -a other_commits=(${COMMITS_TO_TEST_MAP[$other_type]})
-                test_combination+=("${other_type}:${other_commits[0]}")
-            fi
-        done
-
-        # Add fixed dependencies (ab, local, fixed_commit)
-        for type_code in "${!BUILD_TYPE_MAP[@]}"; do
-             if [[ "${ID_TYPES[$type_code]}" != "range" && "${ID_TYPES[$type_code]}" != "list" ]]; then
-                local var_name="${BUILD_TYPE_MAP[$type_code]}"
-                if [[ -n "${!var_name}" ]]; then
-                    test_combination+=("${type_code}:${!var_name}")
-                fi
-             fi
-        done
+        build_test_combination_args "$type_code_to_bisect" "$mid_commit" test_combination
 
         log_info "Testing with combination: ${test_combination[*]}"
         setup_and_test_combination "${test_combination[@]}"
