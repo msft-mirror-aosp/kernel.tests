@@ -587,9 +587,12 @@ function init_bisect_file() {
             xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "project" "${PROJECTS[$type_code]}"
 
             local -a commits_arr=(${COMMITS_TO_TEST_MAP[$type_code]})
-            for commit in "${commits_arr[@]}"; do
+            for index in "${!commits_arr[@]}"; do
+                xpath_idx=$((index + 1))
+                commit="${commits_arr[$index]}"
                 # Add change with default "unknown" status
                 xml_util::add_element_with_attr xml_edit_cmd "/bisect/$node_name" "change" "$commit" "status" "unknown"
+                xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/change[${xpath_idx}]" "index" "$index"
             done
         else
             # This handles "ab", "local", "fixed_commit", and "none" types
