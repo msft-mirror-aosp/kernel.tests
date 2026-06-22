@@ -987,8 +987,15 @@ function common_lib::parse_change_string() {
             project_ref="${abs_path#$found_tree/}"
         fi
     else
-        log_error "Could not find .repo directory for path: $path_part"
-        return $EXIT_FAILURE
+        if [[ -z "$commit_part" ]]; then
+            # When there's no commit part, assume the path is the tree root.
+            # This elegantly supports --sync-manifest on empty directories.
+            tree_path_ref="$abs_path"
+            project_ref=""
+        else
+            tree_path_ref="UNRESOLVED_TREE_PATH"
+            project_ref="UNRESOLVED_PROJECT"
+        fi
     fi
 
     # Check for local path without project/commit part
