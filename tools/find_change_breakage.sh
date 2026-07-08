@@ -63,9 +63,14 @@ declare -A ORIGINAL_MANIFESTS # Stores original manifest.xml basename before syn
 declare -A GOOD_INDICES
 declare -A BAD_INDICES
 declare -A IS_BREAKING
+declare -A GOOD_REVS
+declare -A BAD_REVS
+declare -A PROJECT_COUNT
+declare -A CURRENT_SPLIT_STATES # Stores the currently checked-out split index for manifest_diff
 
 # Holds the list of build type codes that were identified as breaking.
 BISECT_BUILD_TYPES=()
+IGNORE_PROJECTS=()
 BISECT_STATUS=""
 
 # --- Library Import ---
@@ -126,6 +131,8 @@ function print_help() {
     echo "  For Bisection (range or list):"
     echo "    \$ANDROID_TREE_PATH/\$PROJECT_PATH:\$START_COMMIT-\$END_COMMIT"
     echo "    \$ANDROID_TREE_PATH/\$PROJECT_PATH:\$COMMIT1,\$COMMIT2,..."
+    echo "  For Auto Cross-Project Bisection (manifest_diff):"
+    echo "    \$ANDROID_TREE_PATH:ab://<branch>/<target>/<good_build_id>-<bad_build_id>"
     echo "  For Fixed Commit (not bisected):"
     echo "    \$ANDROID_TREE_PATH/\$PROJECT_PATH:\$SINGLE_COMMIT"
     echo "  For Fixed Remote Build:"
@@ -152,6 +159,7 @@ function print_help() {
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] Pass '--skip-build' to underlying flash/launch scripts."
     echo "  --sync-manifest <type>=<url>...  [Optional] Lock workspace to a manifest. Supports multiple (e.g. kb=ab://... pb=ab://...)"
+    echo "  --ignore-projects <path>         [Optional] Ignore a project during manifest_diff. Can be repeated (e.g. --ignore-projects docs/)"
     echo "  --clean                          [Optional] Run 'git clean -fdx' before checking out commits to ensure a clean state.
   --non-interactive                [Optional] Disable interactive mode on build failures."
     echo "  --with-setup <script_path>       [Optional] Path to a custom script to run after checkout, before build."
@@ -169,6 +177,13 @@ function print_help() {
     echo ""
     echo "  # Bisect one project while pinning another to a specific commit"
     echo "  $0 -pb ~/main/frameworks/base:a1b2c3d-e4f5a6b -kb ~/main/kernel/common:abc1234 -t MyTest -td /path/to/android-cts"
+    echo ""
+    echo "  # Auto Cross-Project Bisection (manifest_diff): Bisect across multiple projects between two remote builds"
+    echo "  $0 \\"
+    echo "    -pb ab://git_26Q1-release/aosp_cf_x86_64_phone-userdebug/15265174 \\"
+    echo "    -kb ~/test_motions_a15-6.6:ab://aosp_kernel-common-android15-6.6-2026-01/kernel_virt_x86_64/15293967-15300724 \\"
+    echo "    -td ab://partner-android16-m1-tests-dev/test_suites_x86_64-bp4a/15293638/android-cts.zip \\"
+    echo "    -t \"CtsHardwareTestCases android.hardware.input.cts.tests.SonyDualSenseEdgeUsbTest#testAllMotions\""
     echo ""
 
     echo "  # Resume an interrupted bisection"
@@ -266,6 +281,10 @@ function parse_args() {
                 SETUP_RETRY="$1"
                 shift
                 ;;
+            --ignore-projects)
+                IGNORE_PROJECTS+=("$2")
+                shift 2
+                ;;
             --skip-build)
                 SKIP_BUILD=true
                 shift
@@ -332,86 +351,30 @@ function parse_args() {
     fi
 }
 
-function parse_change_string() {
-    local build_str="$1"
-    local -n tree_path_ref="$2"
-    local -n project_ref="$3"
-    local -n commits_ref="$4"
-    local -n type_ref="$5" # 'range', 'list', 'local', 'ab', 'fixed_commit', 'none'
+function ensure_commit_exists_locally() {
+    local r
+    local project_path="$1"
+    local commit="$2"
 
-    # Support for "none" to skip flashing specific build artifacts
-    if [[ "${build_str,,}" == "none" ]]; then
-        type_ref="none"
-        commits_ref=("none")
-        tree_path_ref="none"
-        project_ref="none"
+    if (cd "$project_path" && git cat-file -e "$commit" &>/dev/null); then
         return 0
     fi
 
-    # Check for ab:// URL first
-    if [[ "$build_str" == ab://* ]]; then
-        type_ref="ab"
-        return 0
-    fi
-
-    # Separate path and commit parts
-    local path_part
-    local commit_part=""
-    if [[ "$build_str" == *:* ]]; then
-        path_part="${build_str%%:*}"
-        commit_part="${build_str#*:}"
-    else
-        path_part="$build_str"
-    fi
-
-    # Improved logic to find the true Android tree root by searching for .repo
-    local expanded_path="${path_part/#\~/$HOME}"
-    local abs_path
-    abs_path=$(realpath -m "$expanded_path" 2>/dev/null || echo "$expanded_path")
-
-    local found_tree=""
-    if found_tree=$(find_repo_root "$abs_path" 2>/dev/null); then
-
-        tree_path_ref="$found_tree"
-
-        if [[ "$abs_path" == "$found_tree" ]]; then
-            project_ref=""
-        else
-            project_ref="${abs_path#$found_tree/}"
+    log_info "Commit $commit not found locally in $project_path. Attempting to fetch..."
+    local remotes
+    remotes=$(cd "$project_path" && git remote)
+    local fetched=false
+    for r in $remotes; do
+        log_info "Fetching $commit from remote '$r'..."
+        if (cd "$project_path" && git fetch "$r" "$commit" --quiet &>/dev/null); then
+            fetched=true
+            break
         fi
-    else
-        fail_error "Could not find .repo directory for path: $path_part"
-    fi
+    done
 
-    # Check for local path without project/commit part
-    if [[ -z "$commit_part" ]]; then
-        if [[ -d "$build_str" ]]; then
-            type_ref="local"
-            return 0
-        else
-            fail_error "Build string is not a valid directory: $build_str"
-        fi
+    if ! $fetched; then
+        fail_error "Failed to fetch commit $commit from any remote in $project_path."
     fi
-
-    if [[ "$commit_part" == *","* ]]; then
-        type_ref="list"
-        local old_ifs=$IFS; IFS=','
-        read -r -a commits_ref <<< "$commit_part"
-        IFS=$old_ifs
-    elif [[ "$commit_part" == *"-"* ]]; then
-        type_ref="range"
-        local c1 c2
-        c1=$(echo "$commit_part" | cut -d'-' -f1)
-        c2=$(echo "$commit_part" | cut -d'-' -f2)
-        commits_ref=("$c1" "$c2")
-    elif [[ -n "$commit_part" ]]; then
-        # It's a single commit, not a range or list
-        type_ref="fixed_commit"
-        commits_ref=("$commit_part")
-    else
-        fail_error "Invalid commit format. Commit part is empty for: $build_str"
-    fi
-    return 0
 }
 
 function get_commits_in_range() {
@@ -422,6 +385,9 @@ function get_commits_in_range() {
 
     log_info "Fetching all commits in project '$project_path' from $start_commit to $end_commit..."
 
+    ensure_commit_exists_locally "$project_path" "$start_commit"
+    ensure_commit_exists_locally "$project_path" "$end_commit"
+
     # Use rev-list to get all commits between start (exclusive) and end (inclusive)
     mapfile -t result_array_ref < <(cd "$project_path" && git rev-list --ancestry-path --reverse "$start_commit..$end_commit")
 
@@ -431,44 +397,8 @@ function get_commits_in_range() {
     log_info "Found ${#result_array_ref[@]} commits to test for ${project_path}."
 }
 
-function check_disk_space() {
-    local min_required_kb=157286400 # 150 GB
-    local -a dirs_to_check=("$OUTPUT_DIR" "/tmp")
-
-    # Check if DOWNLOAD_PATH is defined and different from /tmp
-    if [[ -n "${DOWNLOAD_PATH:-}" && "${DOWNLOAD_PATH}" != "/tmp"* ]]; then
-        dirs_to_check+=("$DOWNLOAD_PATH")
-    fi
-
-    for dir in "${dirs_to_check[@]}"; do
-        if [[ ! -d "$dir" ]]; then
-            continue
-        fi
-
-        local free_space_kb
-        free_space_kb=$(df -k "$dir" | awk 'NR==2 {print $4}')
-
-        if (( free_space_kb < min_required_kb )); then
-            local free_space_gb=$(( free_space_kb / 1024 / 1024 ))
-            local required_gb=$(( min_required_kb / 1024 / 1024 ))
-            local error_msg="Insufficient disk space on partition hosting '$dir'. Found ${free_space_gb}GB, required ${required_gb}GB."
-
-            # Add specific hint for /tmp
-            if [[ "$dir" == "/tmp" || "$dir" == "/tmp/"* ]]; then
-                error_msg+="\n[HINT] Downloaded test suites (e.g. android-cts.zip) can be huge. "
-                error_msg+="If /tmp is a tmpfs (RAM disk), you can expand it by running:\n"
-                error_msg+="    sudo mount -o remount,size=${required_gb}G /tmp\n"
-                error_msg+="Alternatively, modify DOWNLOAD_PATH in common_lib.sh to point to a physical disk."
-            fi
-
-            fail_error "$error_msg"
-        else
-            log_info "Disk space check passed for '$dir' ($(( free_space_kb / 1024 / 1024 ))GB free)."
-        fi
-    done
-}
-
 function validate_input_flags() {
+    local build_type
     OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
     if [[ ! -d "$OUTPUT_DIR" ]]; then
         mkdir -p "$OUTPUT_DIR"
@@ -507,7 +437,35 @@ function check_uncommitted_changes() {
     fi
 }
 
+function generate_ai_commit_report() {
+    local type_code="$1"
+    local report_prefix="$2" # e.g. "candidate_commits" or "culprit_commits"
+    local repo_path="$3"
+    local good_rev="$4"
+    local bad_rev="$5"
+    local project_name="$6"
+
+    local safe_proj_name="${project_name//\//_}"
+    if [[ -z "$safe_proj_name" || "$safe_proj_name" == "none" ]]; then
+        safe_proj_name="$type_code"
+    fi
+    local report_out="${OUTPUT_DIR}/${report_prefix}_${type_code}_${safe_proj_name}.json"
+    local script_path="${SCRIPT_DIR}/lib/generate_commit_report.py"
+
+    if [[ -f "$script_path" && -n "$good_rev" && -n "$bad_rev" && -d "$repo_path" ]]; then
+        log_info "[$type_code] Generating AI metadata report ($report_prefix) for ${project_name:-$type_code}..."
+        python3 "$script_path" \
+            --repo_path "$repo_path" \
+            --good_rev "$good_rev" \
+            --bad_rev "$bad_rev" \
+            --project_name "${project_name:-$type_code}" \
+            --out_file "$report_out"
+    fi
+}
+
 function verify_git_commit_ranges() {
+    local commit
+    local i
     local type_code="$1"
     local id_type="$2"
     local tree_path="$3"
@@ -529,11 +487,9 @@ function verify_git_commit_ranges() {
          fail_error "[$type_code] Project path '${project}' not found in 'repo list' for tree '${tree_path}'."
     fi
 
-    # Verify commits
+    # Verify commits and fetch if missing
     for commit in "${commits_ref[@]}"; do
-        if ! (cd "$full_project_path" && git cat-file -e "$commit" &>/dev/null); then
-            fail_error "[$type_code] Commit ID '$commit' does not exist in project '$project'."
-        fi
+        ensure_commit_exists_locally "$full_project_path" "$commit"
     done
 
     # --- Type-specific validation ---
@@ -564,6 +520,10 @@ function verify_git_commit_ranges() {
              fail_error "Bisection for '$type_code' requires at least two commits. Found ${#commits_to_test[@]}."
         fi
         COMMITS_TO_TEST_MAP[$type_code]="${commits_to_test[*]}"
+
+        if [[ "$id_type" == "range" ]]; then
+            generate_ai_commit_report "$type_code" "candidate_commits" "$full_project_path" "${commits_ref[0]}" "${commits_ref[1]}" "$project"
+        fi
     else # fixed_commit
         COMMITS_TO_TEST_MAP[$type_code]="${commits_ref[0]}" # Store the single commit
     fi
@@ -597,6 +557,7 @@ function apply_custom_manifest() {
 }
 
 function restore_workspace_state() {
+    local type_code
     log_info "Restoring workspace state..."
     for type_code in "${!SYNC_MANIFEST_TARGETS[@]}"; do
         apply_custom_manifest "$type_code" "true"
@@ -604,6 +565,10 @@ function restore_workspace_state() {
 }
 
 function validate_and_process_args() {
+    local type_code
+    local existing_type
+    local proj_path
+    local i
     log_info "Starting argument validation and processing..."
     validate_input_flags
     common_lib::check_disk_space 90 "$OUTPUT_DIR" "/tmp" || log_warn "Insufficient disk space detected. Proceeding anyway, but you may encounter issues."
@@ -634,46 +599,84 @@ function validate_and_process_args() {
         log_info "Processing configuration for component: ${type_code}"
 
         local tree_path project
-        local -a commits=()
+        local -a target_ids=()
         local id_type=""
-        common_lib::parse_change_string "$build_value" tree_path project commits id_type || fail_error "Failed to parse change string: $build_value"
+        common_lib::parse_change_string "$build_value" tree_path project target_ids id_type || fail_error "Failed to parse change string: $build_value"
+
+        if [[ "$id_type" == "manifest_diff" ]]; then
+            local diff_branch="${target_ids[0]}"
+            local diff_target="${target_ids[1]}"
+            local good_id="${target_ids[2]}"
+            local bad_id="${target_ids[3]}"
+
+            # Enforce ONE manifest_diff per run
+            for existing_type in "${!ID_TYPES[@]}"; do
+                if [[ "${ID_TYPES[$existing_type]}" == "manifest_diff" && "$existing_type" != "$type_code" ]]; then
+                    fail_error "Only one manifest_diff parameter is allowed per run. Found another on $existing_type."
+                fi
+            done
+
+            local explicit_sync="${SYNC_MANIFEST_TARGETS[$type_code]}"
+            if [[ -z "$explicit_sync" ]]; then
+                log_info "[$type_code] Auto-fallback: Locking workspace to Bad Build ($bad_id) for manifest_diff."
+                SYNC_MANIFEST_TARGETS[$type_code]="ab://${diff_branch}/${diff_target}/${bad_id}"
+            else
+                local -a sync_parts=()
+                local sync_url_part="${explicit_sync#ab://}"
+                local old_ifs=$IFS; IFS='/'
+                read -r -a sync_parts <<< "$sync_url_part"
+                IFS=$old_ifs
+                local sync_branch="${sync_parts[0]}"
+                local sync_target="${sync_parts[1]}"
+                if [[ "$sync_branch" != "$diff_branch" || "$sync_target" != "$diff_target" ]]; then
+                    fail_error "[$type_code] Conflict: --sync-manifest ($sync_branch/$sync_target) does not match manifest_diff ($diff_branch/$diff_target)."
+                fi
+                log_info "[$type_code] Explicit sync matches branch and target. Using explicit XML for environment lock."
+            fi
+        fi
 
         if [[ "$tree_path" == "UNRESOLVED_TREE_PATH" ]]; then
-            local sync_url="${SYNC_MANIFEST_TARGETS[$type_code]}"
-            if [[ -n "$sync_url" ]]; then
-                log_info "[$type_code] .repo not found. Deducing project boundary from manifest: $sync_url"
-                local cache_file=""
-                common_lib::fetch_manifest "$type_code" "$sync_url" cache_file
-                if (( $? != 0 )); then
-                    fail_error "[$type_code] Manifest fetch failed while deducing project boundary."
-                fi
+            local path_part="${build_value%%:*}"
+            local abs_path
+            abs_path=$(realpath -m "${path_part/#\~/$HOME}" 2>/dev/null || echo "${path_part/#\~/$HOME}")
 
-                local path_part="${build_value%%:*}"
-                local abs_path
-                abs_path=$(realpath -m "${path_part/#\~/$HOME}" 2>/dev/null || echo "${path_part/#\~/$HOME}")
-
-                local matched_tree=""
-                local matched_proj=""
-
-                while IFS= read -r proj_path; do
-                    if [[ -n "$proj_path" && "$abs_path" == *"/"$proj_path ]]; then
-                        local potential_tree="${abs_path%/$proj_path}"
-                        if [[ ${#proj_path} -gt ${#matched_proj} ]]; then
-                            matched_proj="$proj_path"
-                            matched_tree="$potential_tree"
-                        fi
-                    fi
-                done < <(xmlstarlet sel -t -m "//project" -v "@path" -n "$cache_file")
-
-                if [[ -n "$matched_tree" ]]; then
-                    log_info "[$type_code] Deduced tree_path: $matched_tree, project: $matched_proj"
-                    tree_path="$matched_tree"
-                    project="$matched_proj"
-                else
-                    fail_error "[$type_code] Could not deduce project boundary. Path '$abs_path' does not end with any project path defined in the manifest."
-                fi
+            if [[ "$id_type" == "manifest_diff" ]]; then
+                log_info "[$type_code] manifest_diff mode: setting tree_path to '$abs_path'"
+                tree_path="$abs_path"
+                project=""
             else
-                fail_error "[$type_code] Could not find .repo directory for path: $build_value. Please sync the manifest first so the project boundary can be determined."
+                local sync_url="${SYNC_MANIFEST_TARGETS[$type_code]}"
+                if [[ -n "$sync_url" ]]; then
+                    log_info "[$type_code] .repo not found. Deducing project boundary from manifest: $sync_url"
+                    local cache_file=""
+                    common_lib::fetch_manifest "$type_code" "$sync_url" cache_file
+                    if (( $? != 0 )); then
+                        fail_error "[$type_code] Manifest fetch failed while deducing project boundary."
+                    fi
+
+                    local matched_tree=""
+                    local matched_proj=""
+
+                    while IFS= read -r proj_path; do
+                        if [[ -n "$proj_path" && "$abs_path" == *"/"$proj_path ]]; then
+                            local potential_tree="${abs_path%/$proj_path}"
+                            if [[ ${#proj_path} -gt ${#matched_proj} ]]; then
+                                matched_proj="$proj_path"
+                                matched_tree="$potential_tree"
+                            fi
+                        fi
+                    done < <(xmlstarlet sel -t -m "//project" -v "@path" -n "$cache_file")
+
+                    if [[ -n "$matched_tree" ]]; then
+                        log_info "[$type_code] Deduced tree_path: $matched_tree, project: $matched_proj"
+                        tree_path="$matched_tree"
+                        project="$matched_proj"
+                    else
+                        fail_error "[$type_code] Could not deduce project boundary. Path '$abs_path' does not end with any project path defined in the manifest."
+                    fi
+                else
+                    fail_error "[$type_code] Could not find .repo directory for path: $build_value. Please sync the manifest first so the project boundary can be determined."
+                fi
             fi
         fi
 
@@ -755,18 +758,88 @@ function validate_and_process_args() {
 
             log_info "[$type_code] Checking for uncommitted changes in ${tree_path}..."
             check_uncommitted_changes "$type_code" "$tree_path" checked_trees
+
+            if [[ -n "${SYNC_MANIFEST_TARGETS[$type_code]}" && "$is_newly_synced" != true ]]; then
+                apply_custom_manifest "$type_code" "false"
+                is_newly_synced=true
+            fi
         fi
 
         if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
             log_info "[$type_code] Verifying git commit ranges..."
-            verify_git_commit_ranges "$type_code" "$id_type" "$tree_path" "$project" commits has_bisection_target
-        fi
+            verify_git_commit_ranges "$type_code" "$id_type" "$tree_path" "$project" target_ids has_bisection_target
+        elif [[ "$id_type" == "manifest_diff" ]]; then
+            log_info "[$type_code] Generating cross-project manifest diff..."
+            local diff_branch="${target_ids[0]}"
+            local diff_target="${target_ids[1]}"
+            local good_id="${target_ids[2]}"
+            local bad_id="${target_ids[3]}"
 
-        if [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" || "$id_type" == "local" ]]; then
-            if [[ -n "${SYNC_MANIFEST_TARGETS[$type_code]}" && "$is_newly_synced" != true ]]; then
-                apply_custom_manifest "$type_code" "false"
+            local good_manifest_cache bad_manifest_cache
+            common_lib::fetch_manifest "$type_code" "ab://${diff_branch}/${diff_target}/${good_id}" good_manifest_cache || fail_error "Failed to fetch GOOD manifest ($good_id)"
+            common_lib::fetch_manifest "$type_code" "ab://${diff_branch}/${diff_target}/${bad_id}" bad_manifest_cache || fail_error "Failed to fetch BAD manifest ($bad_id)"
+
+            local -a changed_projects=()
+            common_lib::diff_manifests "$good_manifest_cache" "$bad_manifest_cache" changed_projects "$type_code" "${IGNORE_PROJECTS[@]}" || fail_error "Failed to diff manifests"
+
+            if (( ${#changed_projects[@]} == 0 )); then
+                fail_error "[$type_code] No projects changed between GOOD ($good_id) and BAD ($bad_id) manifests."
+            fi
+
+            local valid_project_index=0
+            for ((i=0; i<${#changed_projects[@]}; i++)); do
+                local line="${changed_projects[$i]}"
+                local status="${line%%|*}"
+                local rest="${line#*|}"
+                local proj="${rest%%|*}"
+                rest="${rest#*|}"
+                local good_rev="${rest%%|*}"
+                local bad_rev="${rest#*|}"
+
+                if [[ "$status" == "ADDED" || "$status" == "REMOVED" ]]; then
+                    log_warning "================================================================="
+                    log_warning "WARNING: Project $proj was $status in the manifest diff."
+                    log_warning "         Structural changes cannot be git-bisected and are SKIPPED."
+                    log_warning "         If Initial State 0 fails to build later, this may be the cause!"
+                    log_warning "================================================================="
+                    continue
+                fi
+
+                if [[ "$status" == "IGNORED" ]]; then
+                    log_info "[$type_code] Project '$proj' is explicitly ignored. Reverting and locking to GOOD ($good_rev)."
+                    (cd "$tree_path/$proj" && git checkout "$good_rev" --quiet) || fail_error "[$type_code] Failed to checkout good_rev for ignored project $proj"
+                    continue
+                fi
+
+                PROJECTS["${type_code}:$valid_project_index"]="$proj"
+                GOOD_REVS["${type_code}:$valid_project_index"]="$good_rev"
+                BAD_REVS["${type_code}:$valid_project_index"]="$bad_rev"
+                local proj_abs_path="$tree_path/$proj"
+
+                if [[ ! -d "$proj_abs_path" ]]; then
+                    fail_error "[$type_code] Changed project directory missing: $proj_abs_path. Manifest may be incompatible."
+                fi
+
+                # Fetch commits between good_rev (exclusive) and bad_rev (inclusive)
+                local -a commits_to_test=()
+                get_commits_in_range "$proj_abs_path" "$good_rev" "$bad_rev" commits_to_test
+
+                if (( ${#commits_to_test[@]} == 0 )); then
+                    log_info "[$type_code] Skipped project $proj (no testable commits found between $good_rev and $bad_rev)"
+                else
+                    COMMITS_TO_TEST_MAP["${type_code}:$valid_project_index"]="${commits_to_test[*]}"
+                    has_bisection_target=true
+                    generate_ai_commit_report "$type_code" "candidate_commits" "$proj_abs_path" "$good_rev" "$bad_rev" "$proj"
+                    valid_project_index=$((valid_project_index + 1))
+                fi
+            done
+            PROJECT_COUNT[$type_code]=$valid_project_index
+
+            if (( PROJECT_COUNT[$type_code] == 0 )); then
+                fail_error "[$type_code] No bisectable projects found between GOOD ($good_id) and BAD ($bad_id) manifests. Only structural changes (Added/Removed) or untestable commits."
             fi
         fi
+
     done
 
     if ! "$has_bisection_target"; then
@@ -786,25 +859,59 @@ function validate_and_process_args() {
 
 
 function save_initial_git_state() {
+    local i
     local type_code="$1"
-    local project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$type_code]}"
-    log_info "Saving initial git state for project: $project_path"
 
-    # Check for detached HEAD state
-    local head_state
-    head_state=$(cd "$project_path" && git symbolic-ref --short -q HEAD || git rev-parse HEAD)
-    ORIGINAL_GIT_STATES[$type_code]="$head_state"
-    log_info "[$type_code] Original HEAD is: ${head_state}"
+    if [[ "${ID_TYPES[$type_code]}" == "manifest_diff" ]]; then
+        local num_projects="${PROJECT_COUNT[$type_code]:-0}"
+        if (( num_projects == 0 )); then
+            # Culprit project already found, only 1 project is being bisected
+            local project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$type_code]}"
+            log_info "Saving initial git state for project: $project_path"
+            local head_state
+            head_state=$(cd "$project_path" && git symbolic-ref --short -q HEAD || git rev-parse HEAD)
+            ORIGINAL_GIT_STATES[$type_code]="$head_state"
+            log_info "[$type_code] Original HEAD is: ${head_state}"
+        else
+            for ((i=0; i<num_projects; i++)); do
+                local project_path="${TREE_PATHS[$type_code]}/${PROJECTS["$type_code:$i"]}"
+                log_info "Saving initial git state for project: $project_path"
+                local head_state
+                head_state=$(cd "$project_path" && git symbolic-ref --short -q HEAD || git rev-parse HEAD)
+                ORIGINAL_GIT_STATES["$type_code:$i"]="$head_state"
+                log_info "[$type_code:$i] Original HEAD is: ${head_state}"
+            done
+        fi
+    else
+        local project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$type_code]}"
+        log_info "Saving initial git state for project: $project_path"
+
+        # Check for detached HEAD state
+        local head_state
+        head_state=$(cd "$project_path" && git symbolic-ref --short -q HEAD || git rev-parse HEAD)
+        ORIGINAL_GIT_STATES[$type_code]="$head_state"
+        log_info "[$type_code] Original HEAD is: ${head_state}"
+    fi
 }
 
 function restore_all_git_states() {
+    local key
     log_info "Restoring all modified git repositories to their original state..."
-    for type_code in "${!ORIGINAL_GIT_STATES[@]}"; do
-        local original_state="${ORIGINAL_GIT_STATES[$type_code]}"
+    for key in "${!ORIGINAL_GIT_STATES[@]}"; do
+        local original_state="${ORIGINAL_GIT_STATES[$key]}"
         if [[ -z "$original_state" ]]; then
             continue
         fi
-        local project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$type_code]}"
+
+        local type_code="${key%%:*}"
+        local project_path
+
+        if [[ "$key" == *":"* ]]; then
+            project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$key]}"
+        else
+            project_path="${TREE_PATHS[$type_code]}/${PROJECTS[$type_code]}"
+        fi
+
         if [[ -d "$project_path/.git" ]]; then
             log_info "Restoring project '$project_path' to '$original_state'..."
             pushd "$project_path" > /dev/null || fail_error "Failed to cd into $project_path"
@@ -814,6 +921,7 @@ function restore_all_git_states() {
     done
 
     # Restore initial manifests
+    local type_code
     for type_code in "${!ORIGINAL_MANIFESTS[@]}"; do
         local original_manifest="${ORIGINAL_MANIFESTS[$type_code]}"
         local tree_path="${TREE_PATHS[$type_code]}"
@@ -842,6 +950,7 @@ function init_bisect_file() {
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "non_interactive" "$NON_INTERACTIVE"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "clean_git" "$CLEAN_GIT"
     xml_util::add_attribute  xml_edit_cmd "/bisect/parameters" "with_setup_script" "$WITH_SETUP_SCRIPT"
+    local type_code
     for type_code in "${!ORIGINAL_MANIFESTS[@]}"; do
         xml_util::add_element_with_attr xml_edit_cmd "/bisect/parameters" "parameter" "" "name" "original_manifest_${type_code}"
         xml_edit_cmd+=(-i "/bisect/parameters/parameter[@name='original_manifest_${type_code}']" -t attr -n "value" -v "${ORIGINAL_MANIFESTS[$type_code]}")
@@ -850,6 +959,7 @@ function init_bisect_file() {
         xml_util::add_element_with_attr xml_edit_cmd "/bisect/parameters" "parameter" "" "name" "sync_manifest_${type_code}"
         xml_edit_cmd+=(-i "/bisect/parameters/parameter[@name='sync_manifest_${type_code}']" -t attr -n "value" -v "${SYNC_MANIFEST_TARGETS[$type_code]}")
     done
+    local test
     for test in "${TEST_NAME[@]}"; do
         xml_util::add_element xml_edit_cmd "/bisect/parameters" "test" "$test"
     done
@@ -869,12 +979,42 @@ function init_bisect_file() {
             xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "project" "${PROJECTS[$type_code]}"
 
             local -a commits_arr=(${COMMITS_TO_TEST_MAP[$type_code]})
+            local index xpath_idx commit
             for index in "${!commits_arr[@]}"; do
                 xpath_idx=$((index + 1))
                 commit="${commits_arr[$index]}"
                 # Add change with default "unknown" status
                 xml_util::add_element_with_attr xml_edit_cmd "/bisect/$node_name" "change" "$commit" "status" "unknown"
                 xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/change[${xpath_idx}]" "index" "$index"
+            done
+        elif [[ "${ID_TYPES[$type_code]}" == "manifest_diff" ]]; then
+            local node_name="${var_name,,}s" # e.g., platform_builds
+            xml_util::add_node       xml_edit_cmd "/bisect" "$node_name"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "id_type" "${ID_TYPES[$type_code]}"
+            xml_util::add_attribute  xml_edit_cmd "/bisect/$node_name" "path" "${TREE_PATHS[$type_code]}"
+
+            xml_util::add_node xml_edit_cmd "/bisect/$node_name" "project_bisection"
+            local num_projects="${PROJECT_COUNT[$type_code]}"
+            xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/project_bisection" "good_index" "0"
+            xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/project_bisection" "bad_index" "$num_projects"
+
+            local i proj_idx proj good_rev bad_rev status
+            for ((i=1; i<=num_projects; i++)); do
+                proj_idx=$((i-1))
+                proj="${PROJECTS["${type_code}:$proj_idx"]}"
+                good_rev="${GOOD_REVS["${type_code}:$proj_idx"]}"
+                bad_rev="${BAD_REVS["${type_code}:$proj_idx"]}"
+
+                status="unknown"
+                if (( i == num_projects )); then
+                    status="bad"
+                fi
+
+                xml_util::add_element_with_attr xml_edit_cmd "/bisect/$node_name/project_bisection" "split_state" "" "index" "$i"
+                xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/project_bisection/split_state[$i]" "project_made_bad" "$proj"
+                xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/project_bisection/split_state[$i]" "status" "$status"
+                xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/project_bisection/split_state[$i]" "good_rev" "$good_rev"
+                xml_util::add_attribute xml_edit_cmd "/bisect/$node_name/project_bisection/split_state[$i]" "bad_rev" "$bad_rev"
             done
         else
             # This handles "ab", "local", "fixed_commit", and "none" types
@@ -888,6 +1028,8 @@ function init_bisect_file() {
 }
 
 function load_state_from_xml() {
+    local type_code
+    local i
     log_info "Loading state from ${BISECT_CONFIG_FILE}..."
     BISECT_STATUS=$(xml_util::read_value "/bisect/state/@status")
     local has_bisection_node=false
@@ -940,9 +1082,10 @@ function load_state_from_xml() {
             COMMITS_TO_TEST_MAP[$type_code]="${commits_arr[*]}"
 
             # Load commit statuses
+            local commit status
             for i in "${!commits_arr[@]}"; do
-                local commit="${commits_arr[$i]}"
-                local status="${statuses_arr[$i]}"
+                commit="${commits_arr[$i]}"
+                status="${statuses_arr[$i]}"
                 COMMIT_STATUSES["$type_code:$i"]="$status"
             done
 
@@ -950,6 +1093,75 @@ function load_state_from_xml() {
                 BISECT_BUILD_TYPES+=("$type_code")
             fi
             # Must save the initial state for cleanup on resume
+            save_initial_git_state "$type_code"
+        elif [[ "$id_type" == "manifest_diff" ]]; then
+            has_bisection_node=true
+            ID_TYPES[$type_code]="$id_type"
+            TREE_PATHS[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/@path")
+
+            local bisection_node_count
+            bisection_node_count=$(xml_util::read_value "count(/bisect/$plural_node_name/project_bisection)")
+            if [[ "$bisection_node_count" -gt 0 ]]; then
+                GOOD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/project_bisection/@good_index")
+                BAD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/project_bisection/@bad_index")
+
+                local -a split_projs=()
+                local -a split_statuses=()
+                local -a split_good_revs=()
+                local -a split_bad_revs=()
+
+                xml_util::read_attributes_to_array "/bisect/$plural_node_name/project_bisection/split_state/@project_made_bad" split_projs
+                xml_util::read_attributes_to_array "/bisect/$plural_node_name/project_bisection/split_state/@status" split_statuses
+                xml_util::read_attributes_to_array "/bisect/$plural_node_name/project_bisection/split_state/@good_rev" split_good_revs
+                xml_util::read_attributes_to_array "/bisect/$plural_node_name/project_bisection/split_state/@bad_rev" split_bad_revs
+
+                PROJECT_COUNT[$type_code]=${#split_projs[@]}
+
+                local proj_abs_path
+                local -a commits_to_test
+                for i in "${!split_projs[@]}"; do
+                    PROJECTS["$type_code:$i"]="${split_projs[$i]}"
+                    GOOD_REVS["$type_code:$i"]="${split_good_revs[$i]}"
+                    BAD_REVS["$type_code:$i"]="${split_bad_revs[$i]}"
+
+                    # Dynamically reconstruct COMMITS_TO_TEST_MAP without side-effects
+                    proj_abs_path="${TREE_PATHS[$type_code]}/${split_projs[$i]}"
+                    commits_to_test=()
+                    get_commits_in_range "$proj_abs_path" "${split_good_revs[$i]}" "${split_bad_revs[$i]}" commits_to_test
+                    COMMITS_TO_TEST_MAP["$type_code:$i"]="${commits_to_test[*]}"
+                done
+            fi
+
+            local project_node_count
+            project_node_count=$(xml_util::read_value "count(/bisect/$plural_node_name/project)")
+            if [[ "$project_node_count" -gt 0 ]]; then
+                # Script has found the culprit project and entered Commit-Level Bisection
+                PROJECTS[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/project/@name")
+                GOOD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/project/@good_index")
+                BAD_INDICES[$type_code]=$(xml_util::read_value "/bisect/$plural_node_name/project/@bad_index")
+                IS_BREAKING[$type_code]="true"
+                BISECT_BUILD_TYPES+=("$type_code")
+
+                # Restore baseline for the other projects during resume
+                local bad_idx_for_baseline
+                bad_idx_for_baseline=$(xml_util::read_value "/bisect/$plural_node_name/project_bisection/@bad_index")
+                if [[ -n "$bad_idx_for_baseline" ]]; then
+                    local culprit_proj_idx=$(( bad_idx_for_baseline - 1 ))
+                    log_info "Resuming commit-level bisection. Restoring baseline to split_${culprit_proj_idx}."
+                    checkout_manifest_diff_split_state "$type_code" "$culprit_proj_idx"
+                fi
+
+                local -a commits_arr=()
+                local -a statuses_arr=()
+                xml_util::read_values_to_array "/bisect/$plural_node_name/project/change" commits_arr
+                xml_util::read_attributes_to_array "/bisect/$plural_node_name/project/change/@status" statuses_arr
+                COMMITS_TO_TEST_MAP[$type_code]="${commits_arr[*]}"
+
+                for i in "${!commits_arr[@]}"; do
+                    COMMIT_STATUSES["$type_code:$i"]="${statuses_arr[$i]}"
+                done
+            fi
+
             save_initial_git_state "$type_code"
         else
             id_type=$(xml_util::read_value "/bisect/$single_node_name/@id_type")
@@ -962,12 +1174,12 @@ function load_state_from_xml() {
                 if [[ "$id_type" == "fixed_commit" ]]; then
                     # Re-parse the string to populate our maps for checkout/cleanup
                     local tree_path project
-                    local -a commits=()
+                    local -a target_ids=()
                     local parsed_type=""
-                    common_lib::parse_change_string "$build_val" tree_path project commits parsed_type
+                    common_lib::parse_change_string "$build_val" tree_path project target_ids parsed_type
                     TREE_PATHS[$type_code]="$tree_path"
                     PROJECTS[$type_code]="$project"
-                    COMMITS_TO_TEST_MAP[$type_code]="${commits[0]}" # Store the single commit
+                    COMMITS_TO_TEST_MAP[$type_code]="${target_ids[0]}" # Store the single commit
                     # We must save the initial state for cleanup on resume
                     save_initial_git_state "$type_code"
                 fi
@@ -988,15 +1200,19 @@ function load_state_from_xml() {
     log_info "State loaded successfully. Status: $BISECT_STATUS."
 }
 
-function xml_util::update_change_status_by_index() {
+function update_commit_status_in_xml() {
     local type_code="$1"
     local commit_index="$2" # This is the 0-based index
     local status="$3"
 
     local var_name="${BUILD_TYPE_MAP[$type_code]}"
     local node_name="${var_name,,}s"
-    # XML is 1-based, so add 1
-    local change_xpath="/bisect/$node_name/change[$((commit_index + 1))]"
+
+    local change_xpath="/bisect/$node_name"
+    if [[ -n "${PROJECTS[$type_code]:-}" ]]; then
+        change_xpath+="/project[@name='${PROJECTS[$type_code]}']"
+    fi
+    change_xpath+="/change[@index='$commit_index']"
 
     xml_util::update_xml_attribute "${change_xpath}" "status" "$status"
 }
@@ -1007,6 +1223,7 @@ function get_test_suite_base_dir() {
 }
 
 function handle_test_suite_url() {
+    local i
     local test_suite_url="$1"
     log_info "Test suite provided as a URL. Preparing for download..."
 
@@ -1133,6 +1350,7 @@ function find_real_middle_index() {
     fi
 
     local -A skipped_set
+    local skip_val
     for skip_val in $skipped_string; do
         skipped_set["$skip_val"]=1
     done
@@ -1140,6 +1358,7 @@ function find_real_middle_index() {
     local -a candidates=()
 
     # Find candidates between (low_bound, high_bound)
+    local i
     for (( i=low_bound + 1; i<high_bound; i++ )); do
         if [[ -v skipped_set[$i] ]]; then
             continue
@@ -1221,9 +1440,11 @@ function perform_custom_setup_script() {
 }
 
 function setup_and_test_combination() {
+    local arg
+    local type_code
     local -A builds_to_use
     for arg in "$@"; do
-        local type_code="${arg%%:*}"
+        type_code="${arg%%:*}"
         local value="${arg#*:}" # Can be commit hash or ab:// URL or local path
         builds_to_use[$type_code]="$value"
     done
@@ -1231,17 +1452,37 @@ function setup_and_test_combination() {
     # 1. Checkout all necessary commits (bisection targets + fixed_commit)
     log_info "--- Test Combination ---"
     # 1.1 Checkout bisection targets
+    local split_value split_idx
     for type_code in "${!builds_to_use[@]}"; do
         if [[ "${ID_TYPES[$type_code]}" == "range" || "${ID_TYPES[$type_code]}" == "list" ]]; then
             log_info "  - ${type_code} [BISECT] (${PROJECTS[$type_code]}): ${builds_to_use[$type_code]}"
             checkout_commit "$type_code" "${builds_to_use[$type_code]}" || return 1 # Propagate failure
+        elif [[ "${ID_TYPES[$type_code]}" == "manifest_diff" ]]; then
+            if [[ "${IS_BREAKING[$type_code]:-}" == "true" ]]; then
+                log_info "  - ${type_code} [BISECT] (${PROJECTS[$type_code]}): ${builds_to_use[$type_code]}"
+                checkout_commit "$type_code" "${builds_to_use[$type_code]}" || return 1 # Propagate failure
+            else
+                split_value="${builds_to_use[$type_code]}"
+                if [[ "$split_value" != split_* ]]; then
+                    fail_error "Internal error: Expected 'split_' prefix for manifest_diff in Phase 1, got '$split_value' for $type_code"
+                fi
+                split_idx="${split_value#split_}"
+
+                if [[ "${CURRENT_SPLIT_STATES[$type_code]:-}" != "$split_idx" ]]; then
+                    fail_error "Internal error: Workspace for $type_code is not at split state $split_idx. (Currently at: ${CURRENT_SPLIT_STATES[$type_code]:-none}). Expected checkout_manifest_diff_split_state to be called first."
+                fi
+
+                log_info "  - ${type_code} [BISECT_SPLIT] (Multiple Projects): Split Index $split_idx"
+                # Checkout is handled externally by checkout_manifest_diff_split_state before calling this function
+            fi
         fi
     done
     # 1.2 Checkout fixed_commit dependencies
     log_info "--- Checking out fixed_commit dependencies ---"
+    local commit_hash
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
         if [[ "${ID_TYPES[$type_code]}" == "fixed_commit" ]]; then
-            local commit_hash="${COMMITS_TO_TEST_MAP[$type_code]}"
+            commit_hash="${COMMITS_TO_TEST_MAP[$type_code]}"
             log_info "  - ${type_code} [FIXED] (${PROJECTS[$type_code]}): $commit_hash"
             checkout_commit "$type_code" "$commit_hash" || return 1
         fi
@@ -1276,21 +1517,22 @@ function setup_and_test_combination() {
     fi
 
     # Loop over all build types to construct command
+    local id_type arg_val var_name
     for type_code in pb kb vkb sb; do
-        local id_type="${ID_TYPES[$type_code]}"
+        id_type="${ID_TYPES[$type_code]}"
         if [[ -z "$id_type" ]]; then
             continue
         fi
 
-        local arg_val=""
+        arg_val=""
         if [[ "$id_type" == "none" ]]; then
             arg_val="none"
-        elif [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" ]]; then
+        elif [[ "$id_type" == "range" || "$id_type" == "list" || "$id_type" == "fixed_commit" || "$id_type" == "manifest_diff" ]]; then
             # For all git-based types, we pass the path to the Android tree
             arg_val="${TREE_PATHS[$type_code]}"
         else
             # For "ab" or "local" types
-            local var_name="${BUILD_TYPE_MAP[$type_code]}"
+            var_name="${BUILD_TYPE_MAP[$type_code]}"
             arg_val="${!var_name}"
         fi
 
@@ -1351,6 +1593,8 @@ function setup_and_test_combination() {
 }
 
 function run_tests_on_device() {
+    local test
+    local i
     local input_serial_to_use="$SERIAL_NUMBER"
 
     if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
@@ -1410,6 +1654,8 @@ function build_test_combination_args() {
     local target_type="$1"
     local target_commit="$2"
     local -n combination_ref="$3"
+    local type_code
+    local other_type
 
     combination_ref=()
 
@@ -1418,20 +1664,29 @@ function build_test_combination_args() {
     fi
 
     # Add "good" commit for other bisection targets
+    local -a other_commits
     for other_type in "${!BUILD_TYPE_MAP[@]}"; do
         if [[ "$other_type" == "$target_type" || -z "${ID_TYPES[$other_type]:-}" ]]; then
             continue
         fi
         if [[ "${ID_TYPES[$other_type]}" == "range" || "${ID_TYPES[$other_type]}" == "list" ]]; then
-            local -a other_commits=(${COMMITS_TO_TEST_MAP[$other_type]})
+            other_commits=(${COMMITS_TO_TEST_MAP[$other_type]})
             combination_ref+=("${other_type}:${other_commits[0]}")
+        elif [[ "${ID_TYPES[$other_type]}" == "manifest_diff" ]]; then
+            if [[ "${IS_BREAKING[$other_type]:-}" == "true" ]]; then
+                other_commits=(${COMMITS_TO_TEST_MAP[$other_type]})
+                combination_ref+=("${other_type}:${other_commits[0]}")
+            else
+                combination_ref+=("${other_type}:split_0")
+            fi
         fi
     done
 
     # Add fixed dependencies (ab, local, fixed_commit)
+    local var_name
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
-         if [[ "${ID_TYPES[$type_code]:-}" != "range" && "${ID_TYPES[$type_code]:-}" != "list" ]]; then
-            local var_name="${BUILD_TYPE_MAP[$type_code]}"
+         if [[ "${ID_TYPES[$type_code]:-}" != "range" && "${ID_TYPES[$type_code]:-}" != "list" && "${ID_TYPES[$type_code]:-}" != "manifest_diff" ]]; then
+            var_name="${BUILD_TYPE_MAP[$type_code]}"
             if [[ -n "${!var_name}" ]]; then
                 combination_ref+=("${type_code}:${!var_name}")
             fi
@@ -1440,6 +1695,8 @@ function build_test_combination_args() {
 }
 
 function validate_and_identify_breakage() {
+    local type_code
+    local type_to_check
     log_info "--- Step 1: Validating the initial 'all good' commit combination ---"
     local -a ranged_build_types=()
     for type_code in "${!ID_TYPES[@]}"; do
@@ -1453,6 +1710,19 @@ function validate_and_identify_breakage() {
 
     log_info "Testing with initial good combination: ${combination[*]}"
     CURRENT_TEST_LOG_PREFIX="boundary_initial_good"
+
+    # For manifest_diff, the workspace is currently at the Bad manifest.
+    # We must checkout the initial 'all good' split state (Index 0) before testing.
+    for type_code in "${!ID_TYPES[@]}"; do
+        if [[ "${ID_TYPES[$type_code]}" == "manifest_diff" && "${IS_BREAKING[$type_code]}" != "true" ]]; then
+            log_info "[$type_code] Checking out 'all good' split state (Index 0) for boundary validation."
+            checkout_manifest_diff_split_state "$type_code" 0
+            if (( $? != 0 )); then
+                fail_error "Failed to checkout initial good split state for $type_code"
+            fi
+        fi
+    done
+
     setup_and_test_combination "${combination[@]}"
     if (( $? != 0 )); then
         fail_error "Validation failed: The combination of the FIRST commits is FAILING the test."
@@ -1489,7 +1759,7 @@ function validate_and_identify_breakage() {
         local node_name="${var_name,,}s"
         if (( test_status != 0 )); then
             log_info "RESULT: Found breaking project: ${type_to_check}"
-            BISECT_BUILD_TYPES+=("$type_code_to_check")
+            BISECT_BUILD_TYPES+=("$type_to_check")
             GOOD_INDICES[$type_to_check]=0
             BAD_INDICES[$type_to_check]=$last_commit_index
             IS_BREAKING[$type_to_check]=true
@@ -1508,13 +1778,184 @@ function validate_and_identify_breakage() {
         fi
     done
 
-    if (( ${#BISECT_BUILD_TYPES[@]} == 0 )); then
+    local has_active_manifest_diff=false
+    for type_code in "${!ID_TYPES[@]}"; do
+        if [[ "${ID_TYPES[$type_code]}" == "manifest_diff" && "${IS_BREAKING[$type_code]}" != "true" ]]; then
+            has_active_manifest_diff=true
+            break
+        fi
+    done
+
+    if (( ${#BISECT_BUILD_TYPES[@]} == 0 )) && ! $has_active_manifest_diff; then
         fail_error "Validation failed: No breaking projects were identified. The combination of all LAST commits seems to be passing."
     fi
     log_info "Validation complete. Breaking projects to be bisected: ${BISECT_BUILD_TYPES[*]}"
 }
 
+function checkout_manifest_diff_split_state() {
+    local i
+    local type_code="$1"
+    local split_idx="$2"
+    local num_projects="${PROJECT_COUNT[$type_code]}"
+    local tree_path="${TREE_PATHS[$type_code]}"
+
+    log_info "--- Checking out projects for Split State $split_idx ---"
+    for ((i=0; i<num_projects; i++)); do
+        local proj="${PROJECTS["$type_code:$i"]}"
+        local commit
+        if (( i < split_idx )); then
+            commit="${BAD_REVS["$type_code:$i"]}"
+        else
+            commit="${GOOD_REVS["$type_code:$i"]}"
+        fi
+        local proj_abs_path="$tree_path/$proj"
+        log_info "  - ${type_code} [SPLIT:$split_idx] ($proj): $commit"
+
+        pushd "$proj_abs_path" > /dev/null || return 1
+        git checkout -q "$commit" || {
+            log_error "Failed to checkout $commit in $proj_abs_path"
+            popd > /dev/null
+            return 1
+        }
+        popd > /dev/null
+    done
+
+    # Record the successful checkout
+    CURRENT_SPLIT_STATES["$type_code"]="$split_idx"
+    return 0
+}
+
+function bisect_projects_in_manifest_diff() {
+    local i
+    local c_idx
+    local type_code="$1"
+    local num_projects="${PROJECT_COUNT[$type_code]}"
+
+    log_info "========================================="
+    log_info "Starting Project-Level Bisection for: $type_code"
+    log_info "========================================="
+
+    local var_name="${BUILD_TYPE_MAP[$type_code]}"
+    local plural_node_name="${var_name,,}s"
+
+    local good_idx=$(xml_util::read_value "/bisect/$plural_node_name/project_bisection/@good_index")
+    local bad_idx=$(xml_util::read_value "/bisect/$plural_node_name/project_bisection/@bad_index")
+
+    if [[ -z "$good_idx" || -z "$bad_idx" ]]; then
+        good_idx=0
+        bad_idx=$num_projects
+        xml_util::update_xml_attribute "/bisect/$plural_node_name/project_bisection" "good_index" "$good_idx"
+        xml_util::update_xml_attribute "/bisect/$plural_node_name/project_bisection" "bad_index" "$bad_idx"
+    fi
+
+    local skipped_indices_string=""
+    for ((i=1; i<=num_projects; i++)); do
+        local st=$(xml_util::read_value "/bisect/$plural_node_name/project_bisection/split_state[$i]/@status")
+        if [[ "$st" == "skipped" ]]; then
+            skipped_indices_string+=" $i"
+        fi
+    done
+
+    while (( good_idx + 1 < bad_idx )); do
+        local mid_idx
+        mid_idx=$(find_real_middle_index "$good_idx" "$bad_idx" "$skipped_indices_string")
+        if (( $? != 0 )); then
+            log_warn "Project-Level Bisection stuck. No testable splits between $good_idx and $bad_idx."
+            break
+        fi
+
+        checkout_manifest_diff_split_state "$type_code" "$mid_idx"
+        if (( $? != 0 )); then
+            fail_error "Failed to checkout split state $mid_idx"
+        fi
+
+        local -a test_combination=()
+        build_test_combination_args "$type_code" "split_${mid_idx}" test_combination
+
+        CURRENT_TEST_LOG_PREFIX="bisect_proj_${type_code}_split${mid_idx}"
+
+        setup_and_test_combination "${test_combination[@]}"
+        local test_status=$?
+
+        if (( test_status == 0 )); then
+            log_info "RESULT: Split State $mid_idx is GOOD."
+            good_idx=$mid_idx
+            xml_util::update_xml_attribute "/bisect/$plural_node_name/project_bisection" "good_index" "$good_idx"
+            xml_util::update_xml_attribute "/bisect/$plural_node_name/project_bisection/split_state[$mid_idx]" "status" "good"
+        elif (( test_status == 125 )); then
+            log_warn "RESULT: Split State $mid_idx is SKIPPED."
+            skipped_indices_string+=" $mid_idx"
+            xml_util::update_xml_attribute "/bisect/$plural_node_name/project_bisection/split_state[$mid_idx]" "status" "skipped"
+        elif (( test_status > 0 && test_status < 128 )); then
+            log_info "RESULT: Split State $mid_idx is BAD."
+            bad_idx=$mid_idx
+            xml_util::update_xml_attribute "/bisect/$plural_node_name/project_bisection" "bad_index" "$bad_idx"
+            xml_util::update_xml_attribute "/bisect/$plural_node_name/project_bisection/split_state[$mid_idx]" "status" "bad"
+        else
+            fail_error "Test aborted with status $test_status"
+        fi
+    done
+
+    local culprit_proj_idx=$(( bad_idx - 1 ))
+
+    # Restore baseline to split_${culprit_proj_idx} for commit-level bisection
+    log_info "Restoring baseline to split_${culprit_proj_idx} for commit-level bisection."
+    if ! checkout_manifest_diff_split_state "$type_code" "$culprit_proj_idx"; then
+        fail_error "Failed to restore baseline split state $culprit_proj_idx for $type_code before moving to commit-level bisection."
+    fi
+
+    local culprit_proj="${PROJECTS["$type_code:$culprit_proj_idx"]}"
+    log_info "========================================="
+    log_info "Culprit Project Found: $culprit_proj"
+    log_info "========================================="
+
+    local -a commits_to_test=(${COMMITS_TO_TEST_MAP["$type_code:$culprit_proj_idx"]})
+
+    if (( ${#commits_to_test[@]} == 0 )); then
+        log_warn "Project-Level Bisection identified culprit project '$culprit_proj', but no testable commits were found."
+        log_warn "Skipping commit-level bisection for $type_code."
+        return $EXIT_SUCCESS
+    fi
+
+    local last_commit_index=$(( ${#commits_to_test[@]} - 1 ))
+
+    local -a xml_edit_cmd=()
+    xml_util::add_element_with_attr xml_edit_cmd "/bisect/$plural_node_name" "project" "" "name" "$culprit_proj"
+
+    local proj_xpath="/bisect/$plural_node_name/project[@name='$culprit_proj']"
+
+    xml_util::add_attribute xml_edit_cmd "$proj_xpath" "status" "bisecting"
+    xml_util::add_attribute xml_edit_cmd "$proj_xpath" "good_index" "0"
+    xml_util::add_attribute xml_edit_cmd "$proj_xpath" "bad_index" "$last_commit_index"
+
+    for c_idx in "${!commits_to_test[@]}"; do
+        local xpath_idx=$(( c_idx + 1 ))
+        local commit="${commits_to_test[$c_idx]}"
+        local st="unknown"
+        if (( c_idx == 0 )); then st="good"; fi
+        if (( c_idx == last_commit_index )); then st="bad"; fi
+
+        xml_util::add_element_with_attr xml_edit_cmd "$proj_xpath" "change" "$commit" "status" "$st"
+        xml_util::add_attribute xml_edit_cmd "$proj_xpath/change[${xpath_idx}]" "index" "$c_idx"
+    done
+    xml_util::execute_edits xml_edit_cmd
+
+    PROJECTS[$type_code]="$culprit_proj"
+    COMMITS_TO_TEST_MAP[$type_code]="${commits_to_test[*]}"
+    GOOD_INDICES[$type_code]=0
+    BAD_INDICES[$type_code]=$last_commit_index
+    IS_BREAKING[$type_code]="true"
+    BISECT_BUILD_TYPES+=("$type_code")
+    for c_idx in "${!commits_to_test[@]}"; do
+        local st="unknown"
+        if (( c_idx == 0 )); then st="good"; fi
+        if (( c_idx == last_commit_index )); then st="bad"; fi
+        COMMIT_STATUSES["$type_code:$c_idx"]="$st"
+    done
+}
+
 function bisect_single_project() {
+    local i
     local type_code_to_bisect="$1"
     log_info "========================================="
     log_info "Starting Bisection Loop for: $type_code_to_bisect"
@@ -1526,6 +1967,11 @@ function bisect_single_project() {
 
     local var_name="${BUILD_TYPE_MAP[$type_code_to_bisect]}"
     local node_name="${var_name,,}s"
+
+    local target_xpath="/bisect/$node_name"
+    if [[ -n "${PROJECTS[$type_code_to_bisect]:-}" ]]; then
+        target_xpath+="/project[@name='${PROJECTS[$type_code_to_bisect]}']"
+    fi
 
     # Build the initial string of skipped indices from the XML
     local skipped_indices_string=""
@@ -1563,41 +2009,52 @@ function bisect_single_project() {
             log_info "RESULT: Commit ${mid_commit:0:12} ($type_code_to_bisect) is GOOD."
             good_idx=$mid_idx
             GOOD_INDICES[$type_code_to_bisect]=$good_idx
-            xml_util::update_xml_attribute "/bisect/$node_name" "good_index" "$good_idx"
-            xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "good"
+            xml_util::update_xml_attribute "$target_xpath" "good_index" "$good_idx"
+            update_commit_status_in_xml "$type_code_to_bisect" "$mid_idx" "good"
             COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="good"
         elif (( test_status == 125 )); then # SKIP
             log_warn "RESULT: Commit ${mid_commit:0:12} ($type_code_to_bisect) is SKIPPED."
             # Add to our in-memory list of skipped indices
             skipped_indices_string+=" $mid_idx"
             COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="skipped"
-            xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "skipped"
+            update_commit_status_in_xml "$type_code_to_bisect" "$mid_idx" "skipped"
             # DO NOT update good_idx or bad_idx, let the loop try again
         elif (( test_status > 0 && test_status < 128 )); then # BAD (1-124, including 1 for test fail)
             log_info "RESULT: Commit ${mid_commit:0:12} ($type_code_to_bisect) is BAD/BROKEN."
             bad_idx=$mid_idx
             BAD_INDICES[$type_code_to_bisect]=$bad_idx
-            xml_util::update_xml_attribute "/bisect/$node_name" "bad_index" "$bad_idx"
+            xml_util::update_xml_attribute "$target_xpath" "bad_index" "$bad_idx"
             if (( test_status == 1 )); then
-                 xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "bad" # Test failed
+                 update_commit_status_in_xml "$type_code_to_bisect" "$mid_idx" "bad" # Test failed
                  COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="bad"
             else
-                 xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "broken" # User marked bad/broken
+                 update_commit_status_in_xml "$type_code_to_bisect" "$mid_idx" "broken" # User marked bad/broken
                  COMMIT_STATUSES["$type_code_to_bisect:$mid_idx"]="broken"
             fi
         else # ABORT (128+)
             log_error "Bisection aborted by user (exit code $test_status)!"
-            xml_util::update_change_status_by_index "$type_code_to_bisect" "$mid_idx" "abort"
+            update_commit_status_in_xml "$type_code_to_bisect" "$mid_idx" "abort"
             xml_util::update_xml_node "/bisect/state/@status" "aborted"
             exit "$test_status"
         fi
         log_info "New Range for $type_code_to_bisect: Index $good_idx (Good) to $bad_idx (Bad)"
     done
+
+    xml_util::update_xml_attribute "$target_xpath" "status" "complete"
 }
 
 function bisect_all_breaking_projects() {
+    local type_code
+    local b
     for type_code in "${BISECT_ORDER[@]}"; do
-        if [[ " ${BISECT_BUILD_TYPES[*]} " =~ " ${type_code} " ]]; then
+        local found=false
+        for b in "${BISECT_BUILD_TYPES[@]}"; do
+            if [[ "$b" == "$type_code" ]]; then
+                found=true
+                break
+            fi
+        done
+        if $found; then
             bisect_single_project "$type_code"
         fi
     done
@@ -1621,6 +2078,13 @@ function bisect_all_breaking_projects() {
         log_info "Last known good commit: $last_good_commit"
         log_info "${RED}First known bad commit: $first_bad_commit${END}"
         log_info "Git log: (cd ${TREE_PATHS[$type_code]}/${project_path} && git log ${last_good_commit}..${first_bad_commit})"
+
+        # Generate commit metadata report for AI analysis
+        local full_repo_path="${TREE_PATHS[$type_code]}"
+        if [[ -n "$project_path" ]]; then
+            full_repo_path="${full_repo_path}/${project_path}"
+        fi
+        generate_ai_commit_report "$type_code" "culprit_commits" "$full_repo_path" "$last_good_commit" "$first_bad_commit" "$project_path"
     done
 }
 
@@ -1667,6 +2131,13 @@ function main() {
     else
          log_info "--- Resuming bisection. Skipping boundary validation. ---"
     fi
+
+    local type_code
+    for type_code in "${!ID_TYPES[@]}"; do
+        if [[ "${ID_TYPES[$type_code]}" == "manifest_diff" && "${IS_BREAKING[$type_code]}" != "true" ]]; then
+            bisect_projects_in_manifest_diff "$type_code"
+        fi
+    done
 
     bisect_all_breaking_projects
 }
