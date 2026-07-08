@@ -165,11 +165,17 @@ function xml_util::update_xml_attribute() {
     _xml_util::check_file "$file" || return 1
 
     log_info "Updating XML attribute in $(basename "$file"): $xpath_expr @$attr_name -> $value"
-    # Delete the attribute first to avoid errors if it doesn't exist, then insert it.
-    xmlstarlet ed -L \
-        -d "${xpath_expr}/@${attr_name}" \
-        -i "$xpath_expr" -t "attr" -n "$attr_name" -v "$value" \
-        "$file"
+
+    local count
+    count=$(xmlstarlet sel -t -v "count(${xpath_expr}/@${attr_name})" "$file" 2>/dev/null)
+
+    if [[ "$count" != "0" && -n "$count" ]]; then
+        # Attribute exists, update in-place to preserve order
+        xmlstarlet ed -L -u "${xpath_expr}/@${attr_name}" -v "$value" "$file"
+    else
+        # Attribute doesn't exist, insert it
+        xmlstarlet ed -L -i "$xpath_expr" -t "attr" -n "$attr_name" -v "$value" "$file"
+    fi
 }
 
 # --- Construction Helpers (Command Builders) ---
@@ -211,4 +217,16 @@ function xml_util::add_element_with_attr() {
     xml_util::add_element __cmd_array_ref "$parent_xpath" "$el_name" "$el_val"
     # Add the attribute to the newly created element (using last() to target it)
     xml_util::add_attribute __cmd_array_ref "${parent_xpath}/${el_name}[last()]" "$attr_name" "$attr_val"
+}
+
+function xml_util::execute_edits() {
+    local -n _cmd_array_ref="$1"
+    local file="${2:-$_XML_UTIL_DEFAULT_FILE}"
+
+    _xml_util::check_file "$file" || return 1
+
+    log_info "Executing batch XML edits on $(basename "$file")"
+    if (( ${#_cmd_array_ref[@]} > 0 )); then
+        xmlstarlet ed -L "${_cmd_array_ref[@]}" "$file"
+    fi
 }
