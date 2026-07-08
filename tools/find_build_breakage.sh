@@ -39,6 +39,7 @@ OUTPUT_DIR=""
 INPUT_CONFIG_FILE=""
 BISECT_CONFIG_FILE=""
 SKIP_BUILD=false
+DRY_RUN=false
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
 TEMP_DIRS=()
 CURRENT_TEST_SUITE_LOCATOR=""
@@ -154,6 +155,7 @@ function print_help() {
     echo "  -tr,  --test-retry <count>       Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] If set, pass '--skip-build' to underlying flash/launch scripts."
+    echo "  --dry-run                        [Optional] Initialize the bisection XML file and exit without running tests."
     echo "  -od,  --output-dir <path>        Path of Directory to store the bisection state XML file. Default: ${DEFAULT_OUTPUT_DIR}/${DEFAULT_BISECT_CONFIG_FILENAME}."
     echo "  -i,   --input-config-file <path> Resume bisection from the given state XML file."
     echo "  -h,   --help                     Display this help message."
@@ -248,6 +250,10 @@ function parse_args() {
                 SKIP_BUILD=true
                 shift
                 ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
             *)
                 log_error "Unsupported flag: $1"
                 print_help
@@ -262,6 +268,10 @@ function parse_args() {
 
     if "$has_input_file" && "$has_new_bisect_args"; then
         fail_error "Cannot specify new bisection options (-pb, -kb, etc.) when resuming with -i."
+    fi
+
+    if "$has_input_file" && "$DRY_RUN"; then
+        fail_error "Cannot specify --dry-run when resuming with -i."
     fi
 
     if ! "$has_input_file"; then
@@ -1173,6 +1183,13 @@ function bisect_all_breaking_builds() {
     done
 }
 
+function exit_if_dry_run() {
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "Dry run completed. Bisection XML file created at: $BISECT_CONFIG_FILE"
+        exit $EXIT_SUCCESS
+    fi
+}
+
 # --- Main Script Logic ---
 function main() {
     trap cleanup EXIT
@@ -1189,6 +1206,7 @@ function main() {
         validate_args
         log_info "Starting new bisection..."
         init_bisect_file
+        exit_if_dry_run
     fi
 
     load_state_from_xml
