@@ -42,6 +42,7 @@ BISECT_CONFIG_FILE=""
 SKIP_BUILD=false
 NON_INTERACTIVE=false
 CLEAN_GIT=false
+DRY_RUN=false
 CURRENT_TEST_LOG_PREFIX=""
 WITH_SETUP_SCRIPT=""
 TEMP_FILES=("$ACLOUD_OUTPUT_FILE")
@@ -158,6 +159,7 @@ function print_help() {
     echo "  -tr,  --test-retry <count>       Retry count for a failed test. Default: ${DEFAULT_TEST_RETRY}."
     echo "  -sr,  --setup-retry <count>      Retry count for failed device setup. Default: ${DEFAULT_SETUP_RETRY}."
     echo "  --skip-build                     [Optional] Pass '--skip-build' to underlying flash/launch scripts."
+    echo "  --dry-run                        [Optional] Initialize the bisection XML file and exit without running tests."
     echo "  --sync-manifest <type>=<url>...  [Optional] Lock workspace to a manifest. Supports multiple (e.g. kb=ab://... pb=ab://...)"
     echo "  --ignore-projects <path>         [Optional] Ignore a project during manifest_diff. Can be repeated (e.g. --ignore-projects docs/)"
     echo "  --clean                          [Optional] Run 'git clean -fdx' before checking out commits to ensure a clean state.
@@ -289,6 +291,10 @@ function parse_args() {
                 SKIP_BUILD=true
                 shift
                 ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
             --clean)
                 CLEAN_GIT=true
                 shift
@@ -339,6 +345,10 @@ function parse_args() {
 
     if "$has_input_file" && "$has_new_bisect_args"; then
         fail_error "Cannot specify new bisection options (-pb, -kb, etc.) when resuming with -i."
+    fi
+
+    if "$has_input_file" && "$DRY_RUN"; then
+        fail_error "Cannot specify --dry-run when resuming with -i."
     fi
 
     if ! "$has_input_file"; then
@@ -2088,6 +2098,13 @@ function bisect_all_breaking_projects() {
     done
 }
 
+function exit_if_dry_run() {
+    if "$DRY_RUN"; then
+        log_info "Dry run completed. Bisection XML file created at: $BISECT_CONFIG_FILE"
+        exit 0
+    fi
+}
+
 # --- Main Script Logic ---
 function main() {
     trap cleanup EXIT
@@ -2108,6 +2125,7 @@ function main() {
         validate_and_process_args
         log_info "Starting new bisection run..."
         init_bisect_file
+        exit_if_dry_run
         load_state_from_xml
     fi
 
