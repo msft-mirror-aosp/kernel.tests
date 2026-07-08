@@ -965,30 +965,35 @@ function common_lib::parse_change_string() {
     local build_str="$1"
     local -n tree_path_ref="$2"
     local -n project_ref="$3"
-    local -n commits_ref="$4"
-    local -n type_ref="$5" # 'range', 'list', 'local', 'ab', 'fixed_commit', 'none'
+    local -n ids_ref="$4"
+    local -n type_ref="$5" # 'range', 'list', 'local', 'ab', 'fixed_commit', 'none', 'manifest_diff'
 
     # Support for "none" to skip flashing specific build artifacts
     if [[ "${build_str,,}" == "none" ]]; then
         type_ref="none"
-        commits_ref=("none")
+        ids_ref=("none")
         tree_path_ref="none"
         project_ref="none"
         return $EXIT_SUCCESS
     fi
 
-    # Check for ab:// URL first
+    # Check for standalone ab:// URL first
     if [[ "$build_str" == ab://* ]]; then
-        type_ref="ab"
+        local branch target ab_type filename
+        local -a ab_ids=()
+        if ! common_lib::parse_artifact_url "$build_str" branch target ab_ids ab_type filename; then
+            return $EXIT_FAILURE
+        fi
+        type_ref="ab" # Keep it as 'ab' for the caller, but now it's validated!
         return $EXIT_SUCCESS
     fi
 
-    # Separate path and commit parts
+    # Separate path and revision parts
     local path_part
-    local commit_part=""
+    local revision_part=""
     if [[ "$build_str" == *:* ]]; then
         path_part="${build_str%%:*}"
-        commit_part="${build_str#*:}"
+        revision_part="${build_str#*:}"
     else
         path_part="$build_str"
     fi
@@ -1007,8 +1012,8 @@ function common_lib::parse_change_string() {
             project_ref="${abs_path#$found_tree/}"
         fi
     else
-        if [[ -z "$commit_part" ]]; then
-            # When there's no commit part, assume the path is the tree root.
+        if [[ -z "$revision_part" ]]; then
+            # When there's no revision part, assume the path is the tree root.
             # This elegantly supports --sync-manifest on empty directories.
             tree_path_ref="$abs_path"
             project_ref=""
@@ -1018,42 +1023,55 @@ function common_lib::parse_change_string() {
         fi
     fi
 
-    # Check for local path without project/commit part
-    if [[ -z "$commit_part" ]]; then
+    # Check for local path without project/revision part
+    if [[ -z "$revision_part" ]]; then
         type_ref="local"
         return $EXIT_SUCCESS
     fi
 
-    if [[ "$commit_part" == *","* ]]; then
+    if [[ "$revision_part" == ab://* ]]; then
+        local branch target ab_type filename
+        local -a ab_ids=()
+        if ! common_lib::parse_artifact_url "$revision_part" branch target ab_ids ab_type filename; then
+            log_error "Failed to parse ab:// URL in manifest diff: $revision_part"
+            return $EXIT_FAILURE
+        fi
+        if [[ "$ab_type" != "range" ]]; then
+            log_error "manifest_diff requires a range of Build IDs (e.g., ab://branch/target/123-456). Got: $revision_part"
+            return $EXIT_FAILURE
+        fi
+        type_ref="manifest_diff"
+        ids_ref=("$branch" "$target" "${ab_ids[0]}" "${ab_ids[1]}")
+    elif [[ "$revision_part" == *","* ]]; then
         type_ref="list"
         local old_ifs=$IFS; IFS=','
-        read -r -a commits_ref <<< "$commit_part"
+        read -r -a ids_ref <<< "$revision_part"
         IFS=$old_ifs
-        for c in "${commits_ref[@]}"; do
+        for c in "${ids_ref[@]}"; do
             if [[ ! "$c" =~ ^[a-fA-F0-9]+$ ]]; then
                 log_error "Invalid git commit hash format in list: $c"
                 return $EXIT_FAILURE
             fi
         done
-    elif [[ "$commit_part" == *"-"* ]]; then
+    elif [[ "$revision_part" == *"-"* ]]; then
         type_ref="range"
         local c1 c2
-        c1=$(echo "$commit_part" | cut -d'-' -f1)
-        c2=$(echo "$commit_part" | cut -d'-' -f2)
+        c1=$(echo "$revision_part" | cut -d'-' -f1)
+        c2=$(echo "$revision_part" | cut -d'-' -f2)
         if [[ ! "$c1" =~ ^[a-fA-F0-9]+$ || ! "$c2" =~ ^[a-fA-F0-9]+$ ]]; then
-            log_error "Invalid git commit hash format in range: $commit_part"
+            log_error "Invalid git commit hash format in range: $revision_part"
             return $EXIT_FAILURE
         fi
-        commits_ref=("$c1" "$c2")
-    elif [[ -n "$commit_part" ]]; then
+        ids_ref=("$c1" "$c2")
+    elif [[ -n "$revision_part" ]]; then
         type_ref="fixed_commit"
-        if [[ ! "$commit_part" =~ ^[a-fA-F0-9]+$ ]]; then
-            log_error "Invalid git commit hash format: $commit_part"
+        if [[ ! "$revision_part" =~ ^[a-fA-F0-9]+$ ]]; then
+            log_error "Invalid git commit hash format: $revision_part"
             return $EXIT_FAILURE
         fi
-        commits_ref=("$commit_part")
+        ids_ref=("$revision_part")
     else
-        log_error "Invalid commit format. Commit part is empty for: $build_str"
+        log_error "Invalid revision format. Revision part is empty for: $build_str"
         return $EXIT_FAILURE
     fi
     return $EXIT_SUCCESS
@@ -1096,6 +1114,54 @@ function common_lib::check_disk_space() {
             log_info "Disk space check passed for '$dir' ($(( free_space_kb / 1024 / 1024 ))GB free)."
         fi
     done
+
+    return $EXIT_SUCCESS
+}
+
+function common_lib::diff_manifests() {
+    local good_manifest="$1"
+    local bad_manifest="$2"
+    local -n changed_projects_ref="$3"
+    local build_type="${4:-}"
+    shift 4 || true
+    # Remaining arguments are ignore projects
+
+    if [[ ! -f "$good_manifest" || ! -f "$bad_manifest" ]]; then
+        log_error "diff_manifests: Missing manifest file(s)."
+        return $EXIT_FAILURE
+    fi
+
+    local script_dir
+    script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    local python_tool="${script_dir}/lib/diff_manifests.py"
+
+    if [[ ! -f "$python_tool" ]]; then
+        log_error "diff_manifests: Python tool not found at $python_tool"
+        return $EXIT_FAILURE
+    fi
+
+    local -a py_args=("$good_manifest" "$bad_manifest" "--format" "parsable")
+    if [[ -n "$build_type" ]]; then
+        py_args+=("--build_type" "$build_type")
+    fi
+    for ig in "$@"; do
+        py_args+=("--ignore" "$ig")
+    done
+
+    local output
+    output=$("$python_tool" "${py_args[@]}" 2>/dev/null)
+    local status=$?
+    if (( status != 0 )); then
+        log_error "Failed to diff manifests. Python script error."
+        return $EXIT_FAILURE
+    fi
+
+    changed_projects_ref=()
+    if [[ -n "$output" ]]; then
+        while IFS= read -r line; do
+            changed_projects_ref+=("$line")
+        done <<< "$output"
+    fi
 
     return $EXIT_SUCCESS
 }
