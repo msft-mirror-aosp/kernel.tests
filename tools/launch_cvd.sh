@@ -382,7 +382,7 @@ function rebuild_kernel() {
     if (( build_status == 0 )); then
         log_info "Kernel build command succeeded."
     else
-        fail_error "Kernel build command failed" build "$build_status"
+        fail_error "Kernel build command failed" "$build_status"
     fi
 }
 
