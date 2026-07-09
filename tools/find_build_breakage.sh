@@ -102,6 +102,7 @@ readonly RUN_TEST_SCRIPT="${SCRIPT_DIR}/run_test_only.sh"
 readonly QUERY_BUILD_SCRIPT="${SCRIPT_DIR}/query_build.sh"
 readonly QUERY_CHANGE_SCRIPT="${SCRIPT_DIR}/query_change.sh"
 readonly FETCH_ARTIFACT_SCRIPT="${SCRIPT_DIR}/fetch_artifact.sh"
+readonly FIND_CHANGE_BREAKAGE_SCRIPT="${SCRIPT_DIR}/find_change_breakage.sh"
 
 # --- Functions ---
 function print_help() {
@@ -1150,6 +1151,75 @@ function print_commit_ranges_for_build() {
     fi
 }
 
+function print_commit_bisection_instruction() {
+    local type_code="$1"
+    local last_good_id="$2"
+    local first_bad_id="$3"
+
+    local b_branch="${BRANCHES[$type_code]}"
+    local b_target="${TARGETS[$type_code]}"
+    local -a commit_bisection_args=()
+
+    for key in "${!BUILD_TYPE_MAP[@]}"; do
+        local var_name="${BUILD_TYPE_MAP[$key]}"
+        local original_build_string="${!var_name}"
+
+        if [[ -z "$original_build_string" ]]; then
+            continue
+        fi
+
+        if [[ "$key" == "$type_code" ]]; then
+            # This is the breaking type, we use manifest_diff syntax
+            local fake_tree="${HOME}/${type_code}-${b_branch}-${b_target}"
+            commit_bisection_args+=("-${key}" "${fake_tree}:ab://${b_branch}/${b_target}/${last_good_id}-${first_bad_id}")
+        else
+            # Other types: use their fixed build string or last_good_id
+            if [[ -n "${BUILDS_TO_TEST_MAP[$key]:-}" ]]; then
+                # It participated in build bisection, but is not the breaking target here, so we use its last good_id
+                local other_good_idx=${GOOD_INDICES[$key]}
+                local -a other_builds=(${BUILDS_TO_TEST_MAP[$key]})
+                local other_good_id=${other_builds[$other_good_idx]}
+                local other_good_url=$(resolve_build_locator "$key" "$other_good_id")
+                commit_bisection_args+=("-${key}" "$other_good_url")
+            else
+                # Did not participate in bisection (user provided fixed local/remote path)
+                commit_bisection_args+=("-${key}" "${original_build_string}")
+            fi
+        fi
+    done
+
+    # Add Test parameters and additional output directory
+    for t in "${TEST_NAME[@]}"; do
+        commit_bisection_args+=("-t" "$t")
+    done
+    if [[ -n "${SERIAL_NUMBER:-}" ]]; then
+        commit_bisection_args+=("-s" "$SERIAL_NUMBER")
+    fi
+    if [[ "${TEST_RETRY:-$DEFAULT_TEST_RETRY}" != "$DEFAULT_TEST_RETRY" ]]; then
+        commit_bisection_args+=("-tr" "$TEST_RETRY")
+    fi
+    if [[ "${SETUP_RETRY:-$DEFAULT_SETUP_RETRY}" != "$DEFAULT_SETUP_RETRY" ]]; then
+        commit_bisection_args+=("-sr" "$SETUP_RETRY")
+    fi
+    if [[ "${SKIP_BUILD:-false}" == true ]]; then
+        commit_bisection_args+=("--skip-build")
+    fi
+
+    commit_bisection_args+=("-od" "${OUTPUT_DIR}/${type_code}")
+
+    echo ""
+    log_info "Found build breakage for ${BUILD_TYPE_MAP[$type_code]} ($type_code)."
+    log_info "To find the exact breaking commit, please run the following command:"
+
+    local cmd_str="$FIND_CHANGE_BREAKAGE_SCRIPT"
+    local arg
+    for arg in "${commit_bisection_args[@]}"; do
+        printf -v cmd_str "%s %q" "$cmd_str" "$arg"
+    done
+
+    log_info " $cmd_str"
+}
+
 function bisect_all_breaking_builds() {
     # Bisect each breaking build type in the specified order
     for type_code in "${BISECT_ORDER[@]}"; do
@@ -1180,6 +1250,9 @@ function bisect_all_breaking_builds() {
         log_info "${RED}First known bad build: $first_bad_url${END}"
 
         print_commit_ranges_for_build "$first_bad_id"
+
+        # Generate commit bisection XML for the next stage
+        print_commit_bisection_instruction "$type_code" "$last_good_id" "$first_bad_id"
     done
 }
 
