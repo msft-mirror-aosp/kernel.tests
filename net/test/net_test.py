@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import contextlib
+import ctypes
 import fcntl
 import os
 import random
@@ -105,6 +106,34 @@ IS_STABLE = (LINUX_VERSION[2] > 0)
 
 # From //system/gsid/libgsi.cpp IsGsiRunning()
 IS_GSI = os.access("/metadata/gsi/dsu/booted", os.F_OK)
+
+# man 2 personality
+personality = ctypes.CDLL(None).personality
+personality.restype = ctypes.c_int
+personality.argtypes = [ctypes.c_ulong]
+
+# From Linux kernel's include/uapi/linux/personality.h
+PER_QUERY = 0xFFFFFFFF
+PER_LINUX = 0
+PER_LINUX32 = 8
+
+# Check system info and if running 32-bit userspace on a 64-bit kernel.
+_uname = os.uname()
+SYSNAME = _uname.sysname
+RELEASE = _uname.release
+ARCH = _uname.machine
+# Since ARCH can be a bit of a lie, also fetch the 'true' kernel arch
+_p = personality(PER_LINUX)
+TRUE_ARCH = os.uname().machine
+personality(_p)
+
+# This is the bitness of the python interpreter (ie. current userspace)
+BITNESS = 64 if sys.maxsize > 0x7FFFFFFF else 32
+IS_USERSPACE32 = BITNESS == 32
+
+# This is the bitness of the kernel itself
+IS_KERNEL64 = TRUE_ARCH.endswith("64")
+
 
 # NonGXI() is useful to run tests starting from a specific kernel version,
 # thus allowing one to test for correctly backported fixes,

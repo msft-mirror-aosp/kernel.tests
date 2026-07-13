@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import argparse
-import ctypes
 import importlib
 import os
 import sys
@@ -24,16 +23,6 @@ import unittest
 import gki
 import namespace
 import net_test
-
-# man 2 personality
-personality = ctypes.CDLL(None).personality
-personality.restype = ctypes.c_int
-personality.argtypes = [ctypes.c_ulong]
-
-# From Linux kernel's include/uapi/linux/personality.h
-PER_QUERY = 0xFFFFFFFF
-PER_LINUX = 0
-PER_LINUX32 = 8
 
 all_test_modules = [
     'anycast_test',
@@ -87,16 +76,9 @@ def FilterTests(suite, exclude_test_ids):
 
 
 def RunTests(modules_to_test, excludes=None):
-  uname = os.uname()
-  linux = uname.sysname
-  kver = uname.release
-  arch = uname.machine
-  p = personality(PER_LINUX)
-  true_arch = os.uname().machine
-  personality(p)
   print('Running on %s %s %s %s/%s-%sbit%s%s'
-        % (linux, kver, net_test.LINUX_VERSION, true_arch, arch,
-           '64' if sys.maxsize > 0x7FFFFFFF else '32',
+        % (net_test.SYSNAME, net_test.RELEASE, net_test.LINUX_VERSION,
+           net_test.TRUE_ARCH, net_test.ARCH, net_test.BITNESS,
            ' GKI' if gki.IS_GKI else '', ' GSI' if net_test.IS_GSI else ''),
         file=sys.stderr)
   namespace.EnterNewNetworkNamespace()

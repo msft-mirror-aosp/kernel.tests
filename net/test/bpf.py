@@ -44,7 +44,7 @@ __NR_bpf = {  # pylint: disable=invalid-name
     "x86_64-32bit": 357,
     "x86_64-64bit": 321,
     "riscv64-64bit": 280,
-}[os.uname()[4] + "-" + ("64" if sys.maxsize > 0x7FFFFFFF else "32") + "bit"]
+}[f"{net_test.ARCH}-{net_test.BITNESS}bit"]
 
 # Note: This is *not* correct for parisc & sparc architectures
 SO_NETNS_COOKIE = 71
