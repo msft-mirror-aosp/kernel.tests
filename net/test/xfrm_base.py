@@ -18,6 +18,7 @@ from socket import *  # pylint: disable=wildcard-import
 from scapy import all as scapy
 import binascii
 import struct
+import unittest
 
 import csocket
 import cstruct
@@ -271,6 +272,31 @@ def DecryptPacketWithNull(packet):
   return packet, esp_hdr
 
 
+# XFRM/ipsec tests are for CAP_NET_ADMIN requiring interfaces, as such we only need to test these
+# kernel apis at the bitness of netd & system_server - ie. there is no need to test 32-bit api
+# (potentially used by unpriv app) if those system processes are 64-bit.
+#
+# ACK 6.18+ no longer includes the Android hack to make 32-on-64 xfrm api use 64-bit struct layout,
+# which was needed (basically for historical reasons) to match the behaviour of ancient kernels
+# which failed (forgot) to do compat translations on this specific code path.
+# This results in all xfrm_* tests failing on 6.18+ 32-on-64 (this is because the python xfrm struct
+# definitions hard code 64-bit layout, while the new kernels perform up/down translation to 32-bit,
+# this 64-bit layout is *also* hardcoded elsewhere in the non-python Android code base).
+#
+# NetBpfLoad.cpp already enforces "64-bit userspace required on 6.13+ kernels."
+# As such, in theory, there is no need to test 32-bit on 6.13+ at all...
+#
+# But for safety let's make sure we disable the test only on 6.18+ 64-bit kernels that are *not*
+# using personality uname() arch spoofing (commonly used by CF for 32-bit system server env).
+# Hence the check for ARCH and not TRUE_ARCH below.
+#
+# This skip clause is needed to fix (for example) an Android T/13 device that upgrades to Android 17
+# while uprevving the kernel to 6.18.  Unlike modern new launch devices which are 64-bit only, it
+# (most likely) supported 32-bit apps and will thus run VTS in both 32 and 64-bit mode.
+#
+# See b/532739201
+@unittest.skipIf(net_test.IS_USERSPACE32 and net_test.ARCH.endswith("64") and net_test.LINUX_VERSION >= (6, 18, 0),
+                 "xfrm_ tests need to be skipped on 32-bit userspace 64-bit kernel 6.18+")
 class XfrmBaseTest(multinetwork_base.MultiNetworkBaseTest):
   """Base test class for all XFRM-related testing."""
 

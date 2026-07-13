@@ -33,7 +33,7 @@ class KernelFeatureTest(net_test.NetworkTest):
     try:
       return gzip.open("/proc/config.gz", mode="rt")
     except FileNotFoundError:
-      return open("/boot/config-" + os.uname()[2], mode="rt")
+      return open("/boot/config-" + net_test.RELEASE, mode="rt")
 
   @classmethod
   def loadKernelConfig(cls):
