@@ -103,6 +103,7 @@ readonly QUERY_BUILD_SCRIPT="${SCRIPT_DIR}/query_build.sh"
 readonly QUERY_CHANGE_SCRIPT="${SCRIPT_DIR}/query_change.sh"
 readonly FETCH_ARTIFACT_SCRIPT="${SCRIPT_DIR}/fetch_artifact.sh"
 readonly FIND_CHANGE_BREAKAGE_SCRIPT="${SCRIPT_DIR}/find_change_breakage.sh"
+readonly SETUP_AND_TEST_SCRIPT="${SCRIPT_DIR}/setup_and_test.sh"
 
 # --- Functions ---
 function print_help() {
@@ -506,6 +507,10 @@ function validate_args() {
 
     # --- New Bisection Validations ---
     local bisect_arg_found=false
+    local -a original_ranged_types=()
+    local -A ORIG_BRANCHES=()
+    local -A ORIG_TARGETS=()
+    local -A ORIG_BUILDS=()
     for type_code in "${!BUILD_TYPE_MAP[@]}"; do
         local var_name="${BUILD_TYPE_MAP[$type_code]}"
         local build_value="${!var_name}"
@@ -534,7 +539,6 @@ function validate_args() {
         FILENAMES[$type_code]="$filename"
 
         if [[ "$id_type" == "range" || "$id_type" == "list" ]]; then
-            bisect_arg_found=true
             local -a build_ids_to_test=()
             if [[ "$id_type" == "range" ]]; then
                 get_build_ids "$branch" "$target" "${ids[0]}" "${ids[1]}" build_ids_to_test
@@ -542,19 +546,76 @@ function validate_args() {
                 build_ids_to_test=("${ids[@]}")
             fi
 
-            if (( ${#build_ids_to_test[@]} < 2 )); then
-                 fail_error "Bisection for '$type_code' requires at least two builds. Found ${#build_ids_to_test[@]}."
+            if (( ${#build_ids_to_test[@]} == 1 )); then
+                 log_warn "Range for '$type_code' only contains 1 build (${build_ids_to_test[0]}). Treating it as a fixed single build."
+
+                 original_ranged_types+=("$type_code")
+                 ORIG_BRANCHES[$type_code]="$branch"
+                 ORIG_TARGETS[$type_code]="$target"
+                 ORIG_BUILDS[$type_code]="${build_ids_to_test[0]}"
+
+                 id_type="single"
+                 ID_TYPES[$type_code]="single"
+
+                 # Re-set and cleanup public array state to prevent confusion during debugging
+                 unset "BRANCHES[$type_code]"
+                 unset "TARGETS[$type_code]"
+                 unset "FILENAMES[$type_code]"
+
+                 # Reconstruct the URL for the single build
+                 local new_url="ab://${branch}/${target}/${build_ids_to_test[0]}"
+                 if [[ "$type_code" == "tb" && -n "$filename" ]]; then
+                     new_url="${new_url}/${filename}"
+                 fi
+                 printf -v "$var_name" "%s" "$new_url"
+            elif (( ${#build_ids_to_test[@]} == 0 )); then
+                 fail_error "No builds found for '$type_code'."
+            else
+                 bisect_arg_found=true
+                 if [[ "$type_code" == "tb" && -z "$filename" ]]; then
+                     fail_error "Test suite ('tb') bisection requires a filename in the URL (e.g., .../range/android-cts.zip)."
+                 fi
+                 # Store the array as a space-separated string in the map
+                 BUILDS_TO_TEST_MAP[$type_code]="${build_ids_to_test[*]}"
             fi
-            if [[ "$type_code" == "tb" && -z "$filename" ]]; then
-                fail_error "Test suite ('tb') bisection requires a filename in the URL (e.g., .../range/android-cts.zip)."
-            fi
-            # Store the array as a space-separated string in the map
-            BUILDS_TO_TEST_MAP[$type_code]="${build_ids_to_test[*]}"
         fi
     done
 
     if ! "$bisect_arg_found"; then
-        fail_error "New bisection requires at least one build argument to have a range (e.g., 1-2) or list (e.g., 1,2,3)."
+        log_info "No valid bisection ranges found (all provided ranges resolved to single builds). Falling back to setup_and_test.sh..."
+        local -a fallback_args=()
+        [[ -n "$PLATFORM_BUILD" ]] && fallback_args+=("-pb" "$PLATFORM_BUILD")
+        [[ -n "$KERNEL_BUILD" ]] && fallback_args+=("-kb" "$KERNEL_BUILD")
+        [[ -n "$VENDOR_KERNEL_BUILD" ]] && fallback_args+=("-vkb" "$VENDOR_KERNEL_BUILD")
+        [[ -n "$GSI_BUILD" ]] && fallback_args+=("-sb" "$GSI_BUILD")
+        [[ -n "$TEST_SUITE_BUILD" ]] && fallback_args+=("-tb" "$TEST_SUITE_BUILD")
+        [[ -n "$SERIAL_NUMBER" ]] && fallback_args+=("-s" "$SERIAL_NUMBER")
+        [[ -n "$OUTPUT_DIR" ]] && fallback_args+=("-od" "$OUTPUT_DIR")
+        fallback_args+=("-tr" "$TEST_RETRY" "-sr" "$SETUP_RETRY")
+        for test in "${TEST_NAME[@]}"; do fallback_args+=("-t" "$test"); done
+
+        # Execute setup_and_test.sh and exit with its code
+        "${SETUP_AND_TEST_SCRIPT}" "${fallback_args[@]}"
+        local fallback_status=$?
+
+        if (( fallback_status != 0 )); then
+            echo ""
+            log_warn "========================================="
+            log_warn "Fallback test execution FAILED."
+            log_warn "========================================="
+            for type_code in "${original_ranged_types[@]}"; do
+                local first_build_id="${ORIG_BUILDS[$type_code]}"
+
+                echo ""
+                log_info "--- Commit info for initial build of ${BUILD_TYPE_MAP[$type_code]} ($type_code): $first_build_id ---"
+                print_commit_ranges_for_build "$first_build_id"
+                print_fallback_commit_bisection_command "$type_code"
+            done
+            echo ""
+            fail_error "Fallback test execution failed. (Exit Code $fallback_status)" "$fallback_status"
+        fi
+
+        exit $fallback_status
     fi
 
     # Handle a fixed test suite URL if we are NOT bisecting the test suite itself.
@@ -938,6 +999,20 @@ function validate_initial_builds() {
     setup_and_test_combination "${initial_good_combination[@]}"
     local init_status=$?
     if (( init_status != 0 )); then
+        echo ""
+        log_warn "========================================="
+        log_warn "Initial 'all good' combination FAILED."
+        log_warn "========================================="
+        for type_code in "${ranged_build_types[@]}"; do
+            local -a builds=(${BUILDS_TO_TEST_MAP[$type_code]})
+            local first_build_id="${builds[0]}"
+
+            echo ""
+            log_info "--- Commit info for initial build of ${BUILD_TYPE_MAP[$type_code]} ($type_code): $first_build_id ---"
+            print_commit_ranges_for_build "$first_build_id"
+            print_fallback_commit_bisection_command "$type_code"
+        done
+        echo ""
         fail_error "Validation failed: The combination of the FIRST builds in all ranges is FAILING the test (or setup)."
     fi
     log_info "Initial 'all good' combination PASSED."
@@ -1096,6 +1171,9 @@ function bisect_single_build_type() {
 }
 
 function print_commit_ranges_for_build() {
+    PROJECTS_WITH_CHANGES=()
+    PROJECT_COMMIT_RANGES=()
+
     local build_id="$1"
     if [[ -z "$build_id" ]]; then
         return
@@ -1151,6 +1229,39 @@ function print_commit_ranges_for_build() {
     fi
 }
 
+function print_fallback_commit_bisection_command() {
+    local target_type_code="$1"
+
+    local -a other_args=()
+    for key in "${!BUILD_TYPE_MAP[@]}"; do
+        if [[ "$key" == "$target_type_code" ]]; then
+            continue
+        fi
+
+        local var_name="${BUILD_TYPE_MAP[$key]}"
+        local original_build_string="${!var_name}"
+        if [[ -z "$original_build_string" ]]; then
+            continue
+        fi
+
+        other_args+=("-${key}" "${original_build_string}")
+    done
+
+    if (( ${#PROJECTS_WITH_CHANGES[@]} == 0 )); then
+        log_warn "No project changes found to bisect."
+        return
+    fi
+
+    for project in "${PROJECTS_WITH_CHANGES[@]}"; do
+        local commit_range="${PROJECT_COMMIT_RANGES[$project]}"
+        local project_sanitized="${project//\//_}"
+
+        echo ""
+        log_info "To bisect commits for project '$project' in ${BUILD_TYPE_MAP[$target_type_code]} ($target_type_code), run:"
+        echo -e "\n${SCRIPT_DIR}/find_change_breakage.sh -${target_type_code} <YOUR_ANDROID_TREE_PATH>/${project}:${commit_range} ${other_args[@]}\n"
+    done
+}
+
 function print_commit_bisection_instruction() {
     local type_code="$1"
     local last_good_id="$2"
@@ -1175,8 +1286,8 @@ function print_commit_bisection_instruction() {
         else
             # Other types: use their fixed build string or last_good_id
             if [[ -n "${BUILDS_TO_TEST_MAP[$key]:-}" ]]; then
-                # It participated in build bisection, but is not the breaking target here, so we use its last good_id
-                local other_good_idx=${GOOD_INDICES[$key]}
+                # It participated in build bisection, but is not the breaking target here, so we use its last good_id (or 0 if not yet set)
+                local other_good_idx=${GOOD_INDICES[$key]:-0}
                 local -a other_builds=(${BUILDS_TO_TEST_MAP[$key]})
                 local other_good_id=${other_builds[$other_good_idx]}
                 local other_good_url=$(resolve_build_locator "$key" "$other_good_id")
