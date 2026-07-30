@@ -222,7 +222,7 @@ main() {
     FROM $DATA_TABLE
     WHERE branch='$BRANCH' AND build_target='$BUILD_TARGET'
         AND REGEXP_CONTAINS(build_id, r'^[0-9]+$')
-        AND CAST(build_id AS INT64) > CAST('$START_BUILD_ID' AS INT64)
+        AND CAST(build_id AS INT64) >= CAST('$START_BUILD_ID' AS INT64)
         AND CAST(build_id AS INT64) <= CAST('$END_BUILD_ID' AS INT64)
     ORDER BY CAST(build_id AS INT64) ASC;"
 
