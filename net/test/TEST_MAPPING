@@ -2,11 +2,17 @@
   "presubmit": [
     {
       "name": "vts_kernel_net_tests"
+    },
+    {
+      "name": "vts_kernel_net_tests_32"
     }
   ],
   "kernel-presubmit": [
     {
       "name": "vts_kernel_net_tests"
+    },
+    {
+      "name": "vts_kernel_net_tests_32"
     }
   ]
 }
