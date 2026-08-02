@@ -286,16 +286,18 @@ def DecryptPacketWithNull(packet):
 # NetBpfLoad.cpp already enforces "64-bit userspace required on 6.13+ kernels."
 # As such, in theory, there is no need to test 32-bit on 6.13+ at all...
 #
-# But for safety let's make sure we disable the test only on 6.18+ 64-bit kernels that are *not*
-# using personality uname() arch spoofing (commonly used by CF for 32-bit system server env).
-# Hence the check for ARCH and not TRUE_ARCH below.
+# TradeFed/atest executes 32-bit test suites under PER_LINUX32 personality,
+# which causes uname() to return 'x86' / 'i686' (net_test.ARCH).
+# However, PER_LINUX32 does not alter the 6.18+ kernel's XFRM compat translation
+# behavior, so 32-bit XFRM tests will always fail on a 64-bit kernel 6.18+.
+# Therefore, we must check net_test.IS_KERNEL64 (or net_test.TRUE_ARCH).
 #
 # This skip clause is needed to fix (for example) an Android T/13 device that upgrades to Android 17
 # while uprevving the kernel to 6.18.  Unlike modern new launch devices which are 64-bit only, it
 # (most likely) supported 32-bit apps and will thus run VTS in both 32 and 64-bit mode.
 #
 # See b/532739201
-@unittest.skipIf(net_test.IS_USERSPACE32 and net_test.ARCH.endswith("64") and net_test.LINUX_VERSION >= (6, 18, 0),
+@unittest.skipIf(net_test.IS_USERSPACE32 and net_test.IS_KERNEL64 and net_test.LINUX_VERSION >= (6, 18, 0),
                  "xfrm_ tests need to be skipped on 32-bit userspace 64-bit kernel 6.18+")
 class XfrmBaseTest(multinetwork_base.MultiNetworkBaseTest):
   """Base test class for all XFRM-related testing."""
