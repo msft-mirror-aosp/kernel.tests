@@ -40,6 +40,8 @@ USE_DSU=false
 FORCE_DEBUGGABLE=true
 ENABLE_RAMDUMP=false
 FORCE_MIXED_BUILD=false
+HAVE_VENDOR_KERNEL_ABI=false
+HAVE_ACK_ABI=false
 
 SERIAL_NUMBER=
 FASTBOOT_SERIAL_NUMBER=
@@ -806,6 +808,9 @@ function download_kernel_build() {
             fi
             if [[ -n "$VENDOR_KERNEL_BUILD" && "$_build_info" != *android13* ]]; then
                 _file_patterns+=( "system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers" )
+                if [[ "$_build_info" != *android-mainline* ]]; then
+                    HAVE_ACK_ABI=true
+                fi
             fi
             ;;
         kirkwood)
@@ -893,9 +898,11 @@ function download_vendor_kernel_build() {
             else
                 _file_patterns+=("vendor_dlkm_staging_archive.tar.gz" "vendor_dlkm.props" "vendor_dlkm_file_contexts" \
                 "kernel_aarch64_Module.symvers" "abi_gki_aarch64_pixel")
+                HAVE_VENDOR_KERNEL_ABI=true
                 if [[ "$_build_info" == *android1[5-9]* ]]; then
                     _file_patterns+=("vendor_dev_nodes_fragment.img" 'vendor-bootconfig.img')
                 elif [[ "$_build_info" == *pixel-mainline* ]]; then
+                    HAVE_VENDOR_KERNEL_ABI=false
                     _file_patterns+=("vendor-bootconfig.img")
                 fi
             fi
@@ -1665,6 +1672,10 @@ function mixing_build() {
     mkdir -p "$new_device_dir" || { log_error "Failed to create $new_device_dir folder" && exit 1; }
     local mixed_build_cmd="$mix_kernel_cmd"
     if [[ -d "${KERNEL_BUILD}" ]]; then
+        if [[ "${HAVE_ACK_ABI}" == "true" ]] \
+                && [[ "${HAVE_VENDOR_KERNEL_ABI}" == "true" ]]; then
+            mixed_build_cmd+=" --verify_crcs"
+        fi
         mixed_build_cmd+=" --gki_dir $KERNEL_BUILD"
     fi
     mixed_build_cmd+=" $PLATFORM_BUILD $VENDOR_KERNEL_BUILD $new_device_dir"
