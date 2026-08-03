@@ -25,6 +25,24 @@ python_test {
     ],
 }
 
+// 32-bit variant of VTS kernel net tests for 32-bit ABI coverage in TEST_MAPPING.
+python_test {
+    name: "vts_kernel_net_tests_32",
+    stem: "kernel_net_tests_bin_32",
+    srcs: [
+        "*.py",
+    ],
+    libs: [
+        "scapy",
+    ],
+    main: "all_tests.py",
+    test_config: "vts_kernel_net_tests_32.xml",
+    test_suites: [
+        "general-tests",
+    ],
+    compile_multilib: "32",
+}
+
 // Main target used for GKI tests.
 // equivalent to above, but has 'gki.IS_GKI == True'
 python_test {
