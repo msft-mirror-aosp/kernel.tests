@@ -1443,7 +1443,7 @@ function flash_platform_build() {
         else
             _flash_cmd+=" -l ${_branch}"
         fi
-    elif [[ -n "$PLATFORM_REPO_ROOT" && "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
+    elif [[ -n "${PLATFORM_REPO_ROOT:-}" && "$PLATFORM_BUILD" == "$PLATFORM_REPO_ROOT/out/target/product/$PRODUCT" ]] && \
     [[ -x "$PLATFORM_REPO_ROOT/vendor/google/tools/flashall" ]]; then
         cd "$PLATFORM_REPO_ROOT" || { log_error "Fail to go to $PLATFORM_REPO_ROOT" && exit 1; }
         log_info "Flashing device by vendor/google/tools/flashall with platform build from ${PLATFORM_BUILD}"
@@ -1642,7 +1642,7 @@ function mixing_build() {
         PLATFORM_BUILD="$_device_dir"
     fi
 
-    if [[ -n "${PLATFORM_REPO_ROOT}" && -f "${PLATFORM_REPO_ROOT}/vendor/google/tools/$MIX_SCRIPT_NAME" ]]; then
+    if [[ -n "${PLATFORM_REPO_ROOT:-}" && -f "${PLATFORM_REPO_ROOT}/vendor/google/tools/$MIX_SCRIPT_NAME" ]]; then
         mix_kernel_cmd="${PLATFORM_REPO_ROOT}/vendor/google/tools/${MIX_SCRIPT_NAME}"
     elif [[ -f "${DOWNLOAD_PATH}/${MIX_SCRIPT_NAME}" ]]; then
         mix_kernel_cmd="$DOWNLOAD_PATH/$MIX_SCRIPT_NAME"
