@@ -807,10 +807,7 @@ function download_kernel_build() {
                 _file_patterns=( "gsi_arm64-img-*.zip" )
             fi
             if [[ -n "$VENDOR_KERNEL_BUILD" && "$_build_info" != *android13* ]]; then
-                _file_patterns+=( "system_dlkm_staging_archive.tar.gz" "kernel_aarch64_Module.symvers" )
-                if [[ "$_build_info" != *android-mainline* ]]; then
-                    HAVE_ACK_ABI=true
-                fi
+                _file_patterns+=( "system_dlkm_staging_archive.tar.gz" )
             fi
             ;;
         kirkwood)
@@ -844,6 +841,15 @@ function download_kernel_build() {
             fi
             ;;
     esac
+
+    if [[ -n "$VENDOR_KERNEL_BUILD" ]] \
+            && [[ "$_build_info" != *android-mainline* ]] \
+            && product_is_any_pixel \
+            && [[ "$_build_info" != *android13* ]] \
+            ; then
+        HAVE_ACK_ABI=true
+        _file_patterns+=( "kernel_aarch64_Module.symvers" )
+    fi
 
     local _file_path="${KERNEL_BUILD/ab:\/\//}"
     local _full_file_path="$DOWNLOAD_PATH/$_file_path"
@@ -896,13 +902,10 @@ function download_vendor_kernel_build() {
             if [[ "$_build_info" == *android13* || -z "$KERNEL_BUILD" ]]; then
                 _file_patterns+=("vendor_dlkm.img")
             else
-                _file_patterns+=("vendor_dlkm_staging_archive.tar.gz" "vendor_dlkm.props" "vendor_dlkm_file_contexts" \
-                "kernel_aarch64_Module.symvers" "abi_gki_aarch64_pixel")
-                HAVE_VENDOR_KERNEL_ABI=true
+                _file_patterns+=("vendor_dlkm_staging_archive.tar.gz" "vendor_dlkm.props" "vendor_dlkm_file_contexts")
                 if [[ "$_build_info" == *android1[5-9]* ]]; then
                     _file_patterns+=("vendor_dev_nodes_fragment.img" 'vendor-bootconfig.img')
                 elif [[ "$_build_info" == *pixel-mainline* ]]; then
-                    HAVE_VENDOR_KERNEL_ABI=false
                     _file_patterns+=("vendor-bootconfig.img")
                 fi
             fi
@@ -919,6 +922,15 @@ function download_vendor_kernel_build() {
             _file_patterns+=("vendor_dlkm.img" "system_dlkm.img" "*-a0.dtb" "*-b0.dtb" )
             ;;
     esac
+
+    if [[ -n "$KERNEL_BUILD" ]] \
+            && product_is_any_pixel \
+            && [[ "$_build_info" != *pixel-mainline* ]] \
+            && [[ "$_build_info" != *android13* ]] \
+            ; then
+        HAVE_VENDOR_KERNEL_ABI=true
+        _file_patterns+=("kernel_aarch64_Module.symvers" "abi_gki_aarch64_pixel")
+    fi
 
     local _file_path="${_build_info/ab:\/\//}"
     local _full_file_path="$DOWNLOAD_PATH/$_file_path"
@@ -1955,6 +1967,20 @@ FASTBOOT_SERIAL_NUMBER=$FASTBOOT_SERIAL_NUMBER"
     exit 1
 }
 
+function product_is_any_pixel() {
+    case "$PRODUCT" in
+        oriole | raven | bluejay \
+        | shiba | husky | akita \
+        | caiman | komodo | tokay | comet \
+        )
+            true
+            ;;
+        *)
+            false
+            ;;
+    esac
+}
+
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$( cd "$( dirname "${SCRIPT_PATH}" )" &> /dev/null && pwd -P)"
 LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
@@ -2129,7 +2155,7 @@ if [[ "$VENDOR_KERNEL_BUILD" == ab://* ]]; then
     format_ab_vendor_kernel_build_string
     log_info "Downloading vendor kernel build $VENDOR_KERNEL_BUILD"
     if [[ -n "$PLATFORM_BUILD" ]] && [[ -n "$KERNEL_BUILD" || "$VENDOR_KERNEL_BUILD" =~ "5.15" ]] &&
-    [[ "$PRODUCT" == "oriole" || "$PRODUCT" == "raven" || "$PRODUCT" == "bluejay" ]]; then
+            product_is_any_pixel; then
         FORCE_MIXED_BUILD=true
     fi
     if [[ "$FORCE_MIXED_BUILD" == "true" ]]; then
