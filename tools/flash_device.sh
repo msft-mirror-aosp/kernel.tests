@@ -348,8 +348,8 @@ function build_platform() {
         build_cmd+=" droid otatools-package dist DIST_DIR=out/dist/$PRODUCT"
     fi
     log_warn "Flag --skip-build is not set. Rebuilt images at $PWD with: $build_cmd"
-    eval $build_cmd
-    exit_code=$?
+    exit_code=0
+    eval $build_cmd || exit_code=$?
     if (( exit_code == 1 )); then
         log_warn "$build_cmd returned exit_code $exit_code"
         log_error "$build_cmd failed"
@@ -374,8 +374,8 @@ function build_ack() {
     fi
     build_cmd+=" //common:kernel_aarch64_dist"
     log_warn "Flag --skip-build is not set. Rebuild the kernel with: $build_cmd."
-    eval $build_cmd
-    exit_code=$?
+    exit_code=0
+    eval $build_cmd || exit_code=$?
     if (( exit_code == 0 )); then
         log_info "$build_cmd succeeded"
     else
@@ -700,8 +700,8 @@ function download_platform_build() {
     local _full_file_path="$DOWNLOAD_PATH/$_file_path"
     for _pattern in "${_file_patterns[@]}"; do
         log_info "Downloading $_build_info/$_pattern"
-        eval "$FETCH_SCRIPT $_build_info/$_pattern"
-        exit_code=$?
+        exit_code=0
+        eval "$FETCH_SCRIPT $_build_info/$_pattern" || exit_code=$?
         if (( exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern"
         else
@@ -728,8 +728,8 @@ function download_platform_build() {
             _bootloader_path="git_tm-qpr3-release/$PRODUCT-userdebug/13458367/bootloader.img"
         fi
         log_info "Downloading bootloader.img from ab://$_bootloader_path"
-        eval "$FETCH_SCRIPT ab://$_bootloader_path"
-        exit_code=$?
+        exit_code=0
+        eval "$FETCH_SCRIPT ab://$_bootloader_path" || exit_code=$?
         if (( exit_code == 0 )); then
             log_info "Downloaded ab://$_bootloader_path"
         else
@@ -761,8 +761,8 @@ function download_gsi_build() {
         mkdir -p "$_full_file_path" || { log_error "Failed to create folder $_full_file_path" && exit 1; }
     fi
     log_info "Downloading $_build_info/$_file_pattern"
-    eval "$FETCH_SCRIPT $_build_info/$_file_pattern"
-    exit_code=$?
+    exit_code=0
+    eval "$FETCH_SCRIPT $_build_info/$_file_pattern" || exit_code=$?
     if (( exit_code == 0 )); then
         log_info "Downloading $_build_info/$_file_pattern succeeded"
     else
@@ -856,8 +856,8 @@ function download_kernel_build() {
 
     for _pattern in "${_file_patterns[@]}"; do
         log_info "Downloading $_build_info/$_pattern"
-        eval "$FETCH_SCRIPT $_build_info/$_pattern"
-        exit_code=$?
+        exit_code=0
+        eval "$FETCH_SCRIPT $_build_info/$_pattern" || exit_code=$?
         if (( exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern"
         else
@@ -936,8 +936,8 @@ function download_vendor_kernel_build() {
     local _full_file_path="$DOWNLOAD_PATH/$_file_path"
     for _pattern in "${_file_patterns[@]}"; do
         log_info "Downloading $_build_info/$_pattern"
-        eval "$FETCH_SCRIPT $_build_info/$_pattern"
-        exit_code=$?
+        exit_code=0
+        eval "$FETCH_SCRIPT $_build_info/$_pattern" || exit_code=$?
         if (( exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern"
         else
@@ -981,8 +981,8 @@ function download_vendor_kernel_for_direct_flash() {
     local _full_file_path="$DOWNLOAD_PATH/$_file_path"
     for _pattern in "${_image_patterns[@]}"; do
         log_info "Downloading $_build_info/$_pattern"
-        eval "$FETCH_SCRIPT $_build_info/$_pattern"
-        exit_code=$?
+        exit_code=0
+        eval "$FETCH_SCRIPT $_build_info/$_pattern" || exit_code=$?
         if (( exit_code == 0 )); then
             log_info "Downloaded $_build_info/$_pattern succeeded"
         else
@@ -1017,8 +1017,8 @@ function reboot_device_into_bootloader() {
     wait_for_device_in_fastboot
     if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
         log_info "Running fastboot oem disable-verity and disable-verification commands"
-        eval "fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verity && fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification"
-        exit_code=$?
+        exit_code=0
+        eval "fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verity && fastboot -s $FASTBOOT_SERIAL_NUMBER oem disable-verification" || exit_code=$?
         if (( exit_code == 0 )); then
             log_info "oem disable-verity and disable-verification commands succeeded"
         else
@@ -1083,8 +1083,8 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
     fi
 
     log_info "Flashing GKI kernel with: $_flash_cmd"
-    eval "$_flash_cmd"
-    exit_code=$?
+    exit_code=0
+    eval "$_flash_cmd" || exit_code=$?
     if (( exit_code == 0 )); then
         echo "Flash GKI kernel succeeded"
         wait_for_device_in_adb
@@ -1108,8 +1108,8 @@ function check_fastboot_version() {
         cd /tmp/fastboot || { log_error "Fail to go to /tmp/fastboot" && exit 1; }
 
         # Use $FETCH_SCRIPT and $_download_file_name correctly
-        eval "$FETCH_SCRIPT $_download_file_name"
-        exit_code=$?
+        exit_code=0
+        eval "$FETCH_SCRIPT $_download_file_name" || exit_code=$?
         if (( exit_code == 0 )); then
             log_info "Downloading $_download_file_name succeeded"
         else
@@ -1175,8 +1175,8 @@ function flash_vendor_kernel_build() {
     fi
 
     log_info "Executing vendor kernel flash command: $_flash_cmd"
-    eval "$_flash_cmd"
-    exit_code=$?
+    exit_code=0
+    eval "$_flash_cmd" || exit_code=$?
     if (( exit_code == 0 )); then
         echo "Finished flashing vendor kernel images. Rebooting device"
     else
@@ -1487,8 +1487,8 @@ function flash_platform_build() {
     fi
 
     log_info "Flashing device with: $_flash_cmd"
-    eval "$_flash_cmd"
-    exit_code=$?
+    exit_code=0
+    eval "$_flash_cmd" || exit_code=$?
     if (( exit_code == 0 )); then
         log_info "Flashing platform build succeeded"
         wait_for_device_in_adb
@@ -1564,8 +1564,8 @@ function flash_gsi_build() {
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot"
     fi
     log_info "Flashing GSI with: $_flash_cmd"
-    eval "$_flash_cmd"
-    exit_code=$?
+    exit_code=0
+    eval "$_flash_cmd" || exit_code=$?
     if (( exit_code == 0 )); then
         echo "Flash GSI succeeded"
         wait_for_device_in_adb
@@ -2199,8 +2199,8 @@ build target"
                 build_cmd+=" --kasan"
             fi
             log_info "Build vendor kernel with $build_cmd"
-            eval "$build_cmd"
-            exit_code=$?
+            exit_code=0
+            eval "$build_cmd" || exit_code=$?
             if (( exit_code == 0 )); then
                 log_info "Build vendor kernel succeeded"
             else
