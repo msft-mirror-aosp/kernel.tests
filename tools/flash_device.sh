@@ -1091,7 +1091,7 @@ or use a vendor kernel build by flag -vkb, such as ab://kernel-android*-gs-pixel
         wait_for_device_boot_complete
         return
     else
-        echo "Flash GKI kernel failed with exit code $exit_code"
+        log_error "Flashing GKI kernel failed with exit code $exit_code"
         exit 1
     fi
 }
@@ -1180,7 +1180,7 @@ function flash_vendor_kernel_build() {
     if (( exit_code == 0 )); then
         echo "Finished flashing vendor kernel images. Rebooting device"
     else
-        echo "Flashing vendor kernel failed with exit code $exit_code"
+        log_error "Flashing vendor kernel failed with exit code $exit_code"
         exit 1
     fi
 
@@ -1572,7 +1572,7 @@ function flash_gsi_build() {
         wait_for_device_boot_complete
         return
     else
-        echo "Flash GSI failed with exit code $exit_code"
+        log_error "Flashing GSI failed with exit code $exit_code"
         exit 1
     fi
 
@@ -2204,7 +2204,7 @@ build target"
             if (( exit_code == 0 )); then
                 log_info "Build vendor kernel succeeded"
             else
-                log_error "Build vendor kernel failed with exit code $exit_code"
+                log_error "Building vendor kernel failed with exit code $exit_code"
                 exit 1
             fi
         fi
@@ -2235,7 +2235,7 @@ else  # Platform build provided
             mixing_build
             flash_platform_build
         else
-            log_info "Flashing platform build, then vendor kernel build in squence"
+            log_info "Flashing platform build, then vendor kernel build in sequence"
             flash_platform_build
             flash_vendor_kernel_build
         fi
