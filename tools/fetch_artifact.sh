@@ -149,6 +149,7 @@ elif grep -q "StatusCode.UNAVAILABLE" /tmp/err.txt; then
     log_warn "The build server is not available. Try again"
     sleep 5
     eval "$fetch_cli"
+    exit_code=$?
 fi
 
-
+exit $exit_code
