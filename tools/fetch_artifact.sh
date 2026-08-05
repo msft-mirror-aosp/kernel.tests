@@ -145,6 +145,9 @@ if (( exit_code == 0 )); then
 elif grep -q "BuildNotFound" /tmp/err.txt; then
     log_error "$BUILD_INFO is not found in the ab build server."
     exit 1
+elif grep -q "NoFileFoundError" /tmp/err.txt; then
+    log_warn "File '${array[5]}' not found in this build."
+    exit 1
 elif grep -q "StatusCode.UNAVAILABLE" /tmp/err.txt; then
     log_warn "The build server is not available. Try again"
     sleep 5
