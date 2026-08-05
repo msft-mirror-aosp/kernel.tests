@@ -135,24 +135,29 @@ fi
 fetch_cli+="$EXTRA_OPTIONS"
 fetch_cli+=" '${array[5]}'"
 cd "$file_path"  || { log_error "Failed to go to $file_path"; exit 1; }
-log_info "Running command: $fetch_cli"
-eval "$fetch_cli" 2>/tmp/err.txt
-exit_code=$?
 
-if (( exit_code == 0 )); then
-    log_info "Downloaded ${array[5]} to $file_path"
-    exit 0
-elif grep -q "BuildNotFound" /tmp/err.txt; then
-    log_error "$BUILD_INFO is not found in the ab build server."
-    exit 1
-elif grep -q "NoFileFoundError" /tmp/err.txt; then
-    log_warn "File '${array[5]}' not found in this build."
-    exit 1
-elif grep -q "StatusCode.UNAVAILABLE" /tmp/err.txt; then
-    log_warn "The build server is not available. Try again"
-    sleep 5
-    eval "$fetch_cli"
+MAX_RETRIES=1
+for retries in $(seq 0 $MAX_RETRIES) ; do
+    log_info "Running command: $fetch_cli"
+    eval "$fetch_cli" 2>/tmp/err.txt
     exit_code=$?
-fi
+
+    if (( exit_code == 0 )); then
+        log_info "Downloaded ${array[5]} to $file_path"
+        exit 0
+    elif grep -q "BuildNotFound" /tmp/err.txt; then
+        log_error "$BUILD_INFO is not found in the ab build server."
+        exit 1
+    elif grep -q "NoFileFoundError" /tmp/err.txt; then
+        log_warn "File '${array[5]}' not found in this build."
+        exit 1
+    elif grep -q "StatusCode.UNAVAILABLE" /tmp/err.txt; then
+        log_warn "The build server is not available."
+    fi
+    if [[ $retries -ne $MAX_RETRIES ]]; then
+        log_info "Trying again."
+        sleep 5
+    fi
+done
 
 exit $exit_code
