@@ -680,7 +680,7 @@ function download_platform_build() {
     fi
     mkdir -p "$_device_dir" || { log_error "Failed to create $_device_dir folder" && exit 1; }
     local _build_info="$PLATFORM_BUILD"
-    local _file_patterns=( "*$PRODUCT-img-*.zip" "radio.img" )
+    local _file_patterns=( "*${PRODUCT}*-img-*.zip" "radio.img" )
     if [[ "$SKIP_UPDATE_BOOTLOADER" == "false" || -n "$VENDOR_KERNEL_BUILD" ]]; then
         _file_patterns+=("bootloader.img")
     fi
@@ -1693,8 +1693,9 @@ function mixing_build() {
     mixed_build_cmd+=" $PLATFORM_BUILD $VENDOR_KERNEL_BUILD $new_device_dir"
     log_info "Run: $mixed_build_cmd"
     eval $mixed_build_cmd
-    device_image=$(ls $new_device_dir/*$PRODUCT-img*.zip)
-    if [[ ! -f "$device_image" ]]; then
+    device_image=$(ls $new_device_dir/*${PRODUCT}*-img*.zip 2> /dev/null || :)
+    if [[ $(echo "${device_image}" | wc -l) -ne 1 ]] \
+            || [[ ! -f "$device_image" ]]; then
         log_error "New device image is not created in $new_device_dir"
         exit 1
     fi
