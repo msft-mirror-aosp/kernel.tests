@@ -963,7 +963,7 @@ function download_vendor_kernel_for_direct_flash() {
     local _vendor_kernel_dir="$VENDOR_KERNEL_DIR/$DEVICE_SERIAL_NUMBER"
     local _image_patterns=("${VENDOR_KERNEL_IMGS[@]}")
 
-    if [[ "$_build_info" == *kernel-pixel-android*-gs-pixel* && "${PRODUCT}" != "raven" && "${PRODUCT}" != "oriole"  && "${PRODUCT}" != "bluejay" ]]; then
+    if product_is_any_pixel && [[ "${PRODUCT}" != "raven" && "${PRODUCT}" != "oriole"  && "${PRODUCT}" != "bluejay" ]]; then
         _image_patterns=("${VENDOR_KERNEL_IMGS_PIXEL[@]}")
     elif [[ "${PRODUCT}" == "raven" || "${PRODUCT}" == "oriole" || "${PRODUCT}" == "bluejay" ]]; then
         _image_patterns=("${VENDOR_KERNEL_IMGS_PIXEL6[@]}")
