@@ -79,9 +79,7 @@ function _device_util::find_adb_serial() {
         [[ -z "$device_id" ]] && continue
 
         local detected_serial
-        detected_serial=$(adb -s "$device_id" shell getprop ro.serialno 2>&1)
-        # Trim whitespace
-        detected_serial="${detected_serial%"${detected_serial##*[![:space:]]}"}"
+        detected_serial=$(adb_getprop "$device_id" "ro.serialno")
 
         if [[ "$detected_serial" == "$target_serial" ]]; then
             _DEVICE_UTIL_ADB_SERIAL="$device_id"
@@ -308,4 +306,29 @@ function device_util::ensure_root() {
     else
         log_info "Already root."
     fi
+}
+
+# Safely retrieves an Android device system property via 'adb shell getprop'.
+# Arguments:
+#   $1 - ADB Device Serial Number (String, Required)
+#   $2 - Target System Property Name (String, Required)
+#   $3 - Optional Timeout Duration String (Default: '5s')
+# Returns:
+#   Writes the Whitespace-sanitized property string directly to stdout.
+#   Always resolves with exit-code 0 to protect callers from 'set -e' pre-emptive aborts.
+function adb_getprop() {
+    local device_serial="$1"
+    local property_name="$2"
+    local timeout_spec="${3:-5s}"
+
+    local exit_code=0
+    local raw_output
+    raw_output=$(timeout -k 1s "$timeout_spec" adb -s "$device_serial" shell getprop "$property_name") || exit_code=$?
+
+    if (( exit_code == 124 || exit_code == 137 )); then
+        log_warn "Timeout ($timeout_spec) reached while retrieving $property_name for device '$device_serial'."
+    fi
+
+    # Emit the sanitized, whitespace-stripped property string onto stdout
+    printf "%s" "${raw_output//[[:space:]]/}"
 }
