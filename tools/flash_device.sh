@@ -1191,7 +1191,6 @@ function flash_vendor_kernel_build() {
 function is_device_in_adb() {
     local adb_serials
     adb_serials=($(adb devices | grep -v -w "offline" | tail -n +2 | awk '{print $1}'))
-
     if (( ${#adb_serials[@]} == 0 )); then
         log_info "No devices found in adb mode."
         return 1
@@ -1206,7 +1205,7 @@ function is_device_in_adb() {
         fi
         if [[ -z "$ADB_SERIAL_NUMBER" ]]; then
             local hw_serial
-            hw_serial=$(adb -s "$adb_serial" shell getprop ro.serialno | tr -d '[:space:]')
+            hw_serial=$(adb_getprop "$adb_serial" "ro.serialno")
             if [[ -n "$hw_serial" && "$hw_serial" == "$target_serial" ]]; then
                 DEVICE_SERIAL_NUMBER="$hw_serial"
                 ADB_SERIAL_NUMBER="$adb_serial"
@@ -1430,7 +1429,8 @@ function flash_platform_build() {
 
     local _flash_cmd
     if [[ "$PLATFORM_BUILD" == ab://* ]]; then
-        _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions -w -s $DEVICE_SERIAL_NUMBER "
+        _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions -w"
+        _flash_cmd+=" -s ${ADB_SERIAL_NUMBER:-${FASTBOOT_SERIAL_NUMBER:-${DEVICE_SERIAL_NUMBER:-$SERIAL_NUMBER}}}"
 
         if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
             _flash_cmd+=" --disable_verity --disable_verification"
@@ -1828,7 +1828,7 @@ then restart adb server with command (adb kill-server, adb start-server) to allo
 
 function is_device_ready_for_adb_command() {
     local _output
-    _output=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.serialno)
+    _output=$(adb_getprop "$ADB_SERIAL_NUMBER" "ro.serialno" "10s")
     if [[ -n "$_output" ]]; then
         log_info "Device $ADB_SERIAL_NUMBER is ready to take adb command"
         return 0 # Succeed. Device is ready for adb command
@@ -1854,12 +1854,13 @@ function get_device_info_from_adb() {
 
     # Parse values locally from the captured properties ---
     if [[ -z "$DEVICE_SERIAL_NUMBER" ]]; then
-        DEVICE_SERIAL_NUMBER=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.serialno)
+        DEVICE_SERIAL_NUMBER=$(adb_getprop "$ADB_SERIAL_NUMBER" "ro.serialno")
     fi
 
     if [[ -z "$PRODUCT" || "$PRODUCT" == generic_arm64 ]]; then
         for property in "ro.product.board" "ro.build.product"; do
-            local found_product=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop "$property")
+            local found_product
+            found_product=$(adb_getprop "$ADB_SERIAL_NUMBER" "$property")
             if [[ -n "$found_product" && "$found_product" != "generic_arm64" ]]; then
                 PRODUCT="$found_product" # Found a valid product
                 log_info "Using $PRODUCT for product name from device property $property"
@@ -1868,19 +1869,34 @@ function get_device_info_from_adb() {
         done
     fi
 
-    # Final check: If we still don't have a valid product, it's a fatal error
+    # Final check: If we still don's have a valid product, it's a fatal error
     if [[ -z "$PRODUCT" || "$PRODUCT" == generic_arm64 ]]; then
-        log_error "Could not determine a valid hardware product for $ADB_SERIAL_NUMBER."
-        exit 1
+        if [[ -n "$KERNEL_BUILD" || -n "$VENDOR_KERNEL_BUILD" ]]; then
+            log_error "Could not determine a valid hardware product for $ADB_SERIAL_NUMBER. It's needed for kernel flashing"
+            exit 1
+        else
+            log_warn "Could not determine a valid product for $ADB_SERIAL_NUMBER."
+            if [[ -n "$ADB_SERIAL_NUMBER" ]] && (( $(adb devices | grep "$ADB_SERIAL_NUMBER" | wc -l) > 0 )); then
+                log_info "Rebooting device $ADB_SERIAL_NUMBER into bootloader to flash the device"
+                adb -s "$ADB_SERIAL_NUMBER" reboot bootloader
+                exit 0
+            fi
+        fi
     fi
 
     # Get remaining info using the same efficient method or separate calls for non-getprop commands
-    ABI=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.product.cpu.abi)
-    BUILD_TYPE=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.build.type)
-    SYSTEM_DLKM_INFO=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop dev.mnt.blk.system_dlkm)
-    BUILD_FINGERPRINT=$(adb -s "$ADB_SERIAL_NUMBER" shell getprop ro.build.fingerprint)
+    ABI=$(adb_getprop "$ADB_SERIAL_NUMBER" "ro.product.cpu.abi")
+    BUILD_TYPE=$(adb_getprop "$ADB_SERIAL_NUMBER" "ro.build.type")
+    SYSTEM_DLKM_INFO=$(adb_getprop "$ADB_SERIAL_NUMBER" "dev.mnt.blk.system_dlkm")
+    BUILD_FINGERPRINT=$(adb_getprop "$ADB_SERIAL_NUMBER" "ro.build.fingerprint")
 
-    DEVICE_KERNEL_STRING=$(adb -s "$ADB_SERIAL_NUMBER" shell uname -r)
+    local kernel_exit_code=0
+    local raw_kernel
+    raw_kernel=$(timeout -k 1s 5s adb -s "$ADB_SERIAL_NUMBER" shell uname -r) || kernel_exit_code=$?
+    if (( kernel_exit_code == 124 || kernel_exit_code == 137 )); then
+        log_warn "Timeout (5s) reached while retrieving uname -r for device '$ADB_SERIAL_NUMBER'."
+    fi
+    DEVICE_KERNEL_STRING="${raw_kernel//[[:space:]]/}"
 
     if [[ "$SERIAL_NUMBER" != "$DEVICE_SERIAL_NUMBER" ]]; then
         log_info "Notice: Provided serial $SERIAL_NUMBER differs from device serial $DEVICE_SERIAL_NUMBER."
@@ -1995,6 +2011,17 @@ else
     exit 1
 fi
 
+DEVICE_UTIL_PATH="${SCRIPT_DIR}/lib/device_util.sh"
+if [[ -f "$DEVICE_UTIL_PATH" ]]; then
+    if ! . "$DEVICE_UTIL_PATH"; then
+        log_error "Cannot load library $DEVICE_UTIL_PATH"
+        exit 1
+    fi
+else
+    log_error "Cannot find library $DEVICE_UTIL_PATH"
+    exit 1
+fi
+
 if ! check_commands_available "${REQUIRED_COMMANDS[@]}"; then
     log_error "One or more required commands are missing. Please install them and retry."
     exit 1
@@ -2014,6 +2041,7 @@ if [[ ! -d "$DOWNLOAD_PATH" ]]; then
     mkdir -p "$DOWNLOAD_PATH" || { log_error "Fail to create directory $DOWNLOAD_PATH" && exit 1; }
 fi
 
+log_info "Getting the device info"
 get_device_info
 
 if is_in_repo_workspace; then
