@@ -848,7 +848,7 @@ function download_kernel_build() {
             && [[ "$_build_info" != *android13* ]] \
             ; then
         HAVE_ACK_ABI=true
-        _file_patterns+=( "kernel_aarch64_Module.symvers" )
+        _file_patterns+=( "kernel_aarch64_*Module.symvers" )
     fi
 
     local _file_path="${KERNEL_BUILD/ab:\/\//}"
@@ -929,7 +929,7 @@ function download_vendor_kernel_build() {
             && [[ "$_build_info" != *android13* ]] \
             ; then
         HAVE_VENDOR_KERNEL_ABI=true
-        _file_patterns+=("kernel_aarch64_Module.symvers" "abi_gki_aarch64_pixel")
+        _file_patterns+=("kernel_aarch64_*Module.symvers" "abi_gki_aarch64_pixel")
     fi
 
     local _file_path="${_build_info/ab:\/\//}"
