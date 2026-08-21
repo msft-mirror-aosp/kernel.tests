@@ -1434,7 +1434,7 @@ function flash_platform_build() {
     local _flash_cmd
     if [[ "$PLATFORM_BUILD" == ab://* ]]; then
         _flash_cmd="$CL_FLASH_CLI --nointeractive --force_flash_partitions -w"
-        _flash_cmd+=" -s ${ADB_SERIAL_NUMBER:-${FASTBOOT_SERIAL_NUMBER:-${DEVICE_SERIAL_NUMBER:-$SERIAL_NUMBER}}}"
+        _flash_cmd+=" -s ${DEVICE_SERIAL_NUMBER:-${FASTBOOT_SERIAL_NUMBER:-${ADB_SERIAL_NUMBER:-$SERIAL_NUMBER}}}"
 
         if [[ "$DISABLE_VERIFICATION" == "true" ]]; then
             _flash_cmd+=" --disable_verity --disable_verification"
