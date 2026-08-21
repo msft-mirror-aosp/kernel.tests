@@ -870,6 +870,8 @@ function download_kernel_build() {
             _new_file_name="boot.img"
         elif [[ "$_pattern" == system_dlkm* && "$_pattern" != system_dlkm_staging_* ]]; then
             _new_file_name="system_dlkm.img"
+        elif [[ "$_pattern" == "kernel_aarch64_*Module.symvers" ]]; then
+            _new_file_name="kernel_aarch64_Module.symvers"
         fi
         if [[ "$_pattern" == "gsi_arm64-img-*.zip" ]]; then
             eval "unzip -j $_full_file_path/gsi_arm64-img-*.zip boot-5.10-lz4.img" -d "$_kernel_dir/boot.img"
@@ -950,6 +952,8 @@ function download_vendor_kernel_build() {
             _new_file_name="vendor_ramdisk_fragment_extra.img"
         elif [[ "$_pattern" == "abi_gki_aarch64_pixel" ]]; then
             _new_file_name="extracted_symbols"
+        elif [[ "$_pattern" == "kernel_aarch64_*Module.symvers" ]]; then
+            _new_file_name="kernel_aarch64_Module.symvers"
         fi
         create_soft_link "$_full_file_name" "$_vendor_kernel_dir/$_new_file_name"
 
