@@ -18,8 +18,9 @@ CF_KERNEL_REPO_ROOT=""
 CF_KERNEL_VERSION=""
 PLATFORM_REPO_ROOT=""
 PLATFORM_VERSION=""
+SERIAL_OUT=""
 
-readonly REQUIRED_COMMANDS=("adb" "grep" "basename" "dirname" "read" "realpath" "nproc" "bc")
+readonly REQUIRED_COMMANDS=("adb" "grep" "basename" "dirname" "read" "realpath" "nproc" "bc" "jq")
 
 # --- Library Import ---
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
@@ -69,6 +70,8 @@ function print_help() {
     echo "  --cf-product=<product_type>"
     echo "                        The alternative cuttlefish product type for local build."
     echo "                        Will use default ${PRODUCT} if not specified."
+    echo "  -so <file>, --serial-out=<file>"
+    echo "                        Extract the device serial port and write it to this file."
     echo "  --acloud-arg=<acloud_arg>"
     echo "                        Additional acloud command arg. Can be repeated."
     echo "                        For example --acloud-arg=--local-instance to launch a local cvd."
@@ -194,6 +197,19 @@ function parse_args() {
                 ;;
             --kasan)
                 KASAN=true
+                shift
+                ;;
+            -so|--serial-out)
+                shift
+                if (( $# > 0 )); then
+                    SERIAL_OUT="$1"
+                else
+                    fail_error "serial out path is not specified"
+                fi
+                shift
+                ;;
+            --serial-out=*)
+                SERIAL_OUT="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             *)
@@ -630,5 +646,33 @@ fi
 
 # 9. Execute acloud Command
 acloud_cmd_parts+=("${EXTRA_OPTIONS[@]}")
+
+tmp_report_file=""
+if [[ -n "$SERIAL_OUT" ]]; then
+    tmp_report_file=$(mktemp)
+    acloud_cmd_parts+=("--report-file" "$tmp_report_file")
+fi
+
 log_info "Launch CVD with command: ${acloud_cmd_parts[*]}"
 run_command "${acloud_cmd_parts[@]}"
+acloud_status=$?
+
+if [[ -n "$SERIAL_OUT" && -f "$tmp_report_file" ]]; then
+    if (( acloud_status == 0 )); then
+        extracted_serial=$(jq -r '.data.devices[0].device_serial // empty' "$tmp_report_file")
+        if [[ -n "$extracted_serial" ]]; then
+            echo "$extracted_serial" > "$SERIAL_OUT"
+            log_info "Extracted serial port '$extracted_serial' to $SERIAL_OUT"
+        else
+            log_warn "Failed to extract device_serial from acloud report file."
+            log_warn "Acloud report content:"
+            jq . "$tmp_report_file" >&2
+            rm -f "$SERIAL_OUT"
+        fi
+    else
+        rm -f "$SERIAL_OUT"
+    fi
+    rm -f "$tmp_report_file"
+fi
+
+exit $acloud_status
