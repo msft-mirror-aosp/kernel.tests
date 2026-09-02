@@ -1523,7 +1523,7 @@ function setup_and_test_combination() {
         setup_cmd_array=("$FLASH_DEVICE_SCRIPT" "-s" "$SERIAL_NUMBER")
     else
         # Connect Cuttlefish with adb connection only. Skip webrtc autoconnect
-        setup_cmd_array=("$LAUNCH_CVD_SCRIPT" "--acloud-arg=--autoconnect" "--acloud-arg=adb")
+        setup_cmd_array=("$LAUNCH_CVD_SCRIPT" "--acloud-arg=--autoconnect" "--acloud-arg=adb" "--serial-out" "$ACLOUD_OUTPUT_FILE")
     fi
 
     # Loop over all build types to construct command
@@ -1564,13 +1564,8 @@ function setup_and_test_combination() {
 
     local setup_status=1
     while true; do # Infinite loop for retries
-        if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
-            unbuffer "${setup_cmd_array[@]}" | tee "$ACLOUD_OUTPUT_FILE"
-            setup_status=${PIPESTATUS[0]}
-        else
-            "${setup_cmd_array[@]}"
-            setup_status=$?
-        fi
+        "${setup_cmd_array[@]}"
+        setup_status=$?
 
         if (( setup_status == 0 )); then
             log_info "Device setup successful."
@@ -1609,7 +1604,7 @@ function run_tests_on_device() {
 
     if [[ "$DEVICE_TYPE" == "VIRTUAL" ]]; then
         if [[ -f "$ACLOUD_OUTPUT_FILE" ]]; then
-            input_serial_to_use=$(grep -oP "ANDROID_SERIAL=\K[\.0-9:]+" "$ACLOUD_OUTPUT_FILE")
+            input_serial_to_use=$(cat "$ACLOUD_OUTPUT_FILE")
         fi
         if [[ -z "$input_serial_to_use" ]]; then
              log_error "Could not determine virtual device serial from output file."
