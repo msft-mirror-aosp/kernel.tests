@@ -142,8 +142,17 @@ function print_help() {
 function abort() {
     local message="$1"
     local exit_code="${2:-1}"
-    log_error "$message" "$exit_code" 2
+    # log_error returns non-zero; swallow it so 'set -e' does not pre-empt the
+    # explicit exit below and clobber the intended exit code.
+    log_error "$message" "$exit_code" 2 || true
     exit "$exit_code"
+}
+
+# Records a job failure without aborting the matrix run. Frame offset 2 makes
+# the log point at the real call site instead of this wrapper.
+function fail_job() {
+    log_error "$1" "${2:-}" 2 || true
+    JOB_FAILED=true
 }
 
 function cleanup_temp_files() {
@@ -224,7 +233,7 @@ function parse_args() {
                 shift
                 ;;
             *)
-                log_error "Unsupported flag: $1"
+                log_error "Unsupported flag: $1" || true
                 print_help
                 exit 1
                 ;;
@@ -299,6 +308,9 @@ if [[ "$RESUME" != "true" && -z "$RESUME_FROM" ]]; then
 fi
 sed -i "/^RUN_ID=/d" "$STATE_FILE" 2>/dev/null || true
 echo "RUN_ID=$RUN_ID" >> "$STATE_FILE"
+
+# Create up-front so the reporter still works when every job fails before testing.
+mkdir -p "${REPORTS_DIR}/${RUN_ID}"
 
 log_info "Using configuration from $JSON_FILE"
 log_info "Run ID: $RUN_ID"
@@ -463,8 +475,7 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
             set -e
 
             if [[ $LAUNCH_STATUS -ne 0 ]] || [[ ! -f "$CVD_SERIAL_FILE" ]] || [[ ! -s "$CVD_SERIAL_FILE" ]]; then
-                log_error "Failed to obtain Cuttlefish serial number or launch failed."
-                JOB_FAILED=true
+                fail_job "Failed to obtain Cuttlefish serial number or launch failed."
             else
                 SERIAL=$(cat "$CVD_SERIAL_FILE")
                 log_info "Obtained CVD Serial: $SERIAL"
@@ -483,8 +494,7 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
             SERIAL=$(jq -r ".jobs[$i].serial_port // empty" "$JSON_FILE")
         fi
         if [[ -z "$SERIAL" ]]; then
-            log_error "serial_port not defined for physical job $JOB_ID and no -s provided."
-            JOB_FAILED=true
+            fail_job "serial_port not defined for physical job $JOB_ID and no -s provided."
         else
             skip_flash=false
             if [[ "$SKIP_INITIAL_FLASH" == "true" ]]; then
@@ -499,26 +509,22 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
                 LAUNCH_STATUS=$?
                 set -e
                 if [[ $LAUNCH_STATUS -ne 0 ]]; then
-                    log_error "Flashing physical device failed."
-                    JOB_FAILED=true
+                    fail_job "Flashing physical device failed."
                 fi
             fi
         fi
     else
-        log_error "Unknown device type '$DEVICE_TYPE' for job $JOB_ID"
-        JOB_FAILED=true
+        fail_job "Unknown device type '$DEVICE_TYPE' for job $JOB_ID"
     fi
 
     if [[ "$JOB_FAILED" == "false" && -n "$SERIAL" ]]; then
         log_info "Initializing device context for $SERIAL..."
         if ! device_util::init "$SERIAL"; then
-            log_error "Failed to initialize device_util for serial $SERIAL"
-            JOB_FAILED=true
+            fail_job "Failed to initialize device_util for serial $SERIAL"
         else
             adb_serial=$(device_util::get_adb_serial)
             if [[ -z "$adb_serial" ]]; then
-                log_error "Could not resolve ADB serial for device $SERIAL"
-                JOB_FAILED=true
+                fail_job "Could not resolve ADB serial for device $SERIAL"
             else
                 log_info "Running tests on ADB device $adb_serial..."
                 ATEST_LOG_FILE=$(mktemp)
@@ -534,8 +540,7 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
                         log_warn "Tests completed with failures for job $JOB_ID."
                         TESTS_FAILED=true
                     else
-                        log_error "run_test_only.sh crashed or failed to run tests for job $JOB_ID (Exit $TEST_STATUS)."
-                        JOB_FAILED=true
+                        fail_job "run_test_only.sh crashed or failed to run tests for job $JOB_ID (Exit $TEST_STATUS)."
                     fi
                 fi
 
@@ -606,7 +611,7 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
         sed -i "/^ABORTED_ON=/d" "$STATE_FILE" 2>/dev/null || true
         echo "JOB_STATUS_${JOB_ID}=COMPLETED_WITH_FAILURES" >> "$STATE_FILE"
     else
-        log_error "Job $JOB_ID failed setup or crashed."
+        log_error "Job $JOB_ID failed setup or crashed." || true
         TOTAL_ERROR+=1
         sed -i "/^JOB_STATUS_${JOB_ID}=/d" "$STATE_FILE" 2>/dev/null || true
         echo "JOB_STATUS_${JOB_ID}=ERROR" >> "$STATE_FILE"
@@ -614,7 +619,7 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
         if [[ "$FAIL_FAST" == "true" ]]; then
             sed -i "/^ABORTED_ON=/d" "$STATE_FILE" 2>/dev/null || true
             echo "ABORTED_ON=${JOB_ID}" >> "$STATE_FILE"
-            log_error "Aborting entirely due to ERROR in job $JOB_ID (--fail-fast)."
+            log_error "Aborting entirely due to ERROR in job $JOB_ID (--fail-fast)." || true
             FAIL_FAST_ABORTED=true
             break
         else
@@ -633,7 +638,7 @@ else
     log_info "TOTAL COMPLETED_WITH_FAILURES: $TOTAL_COMPLETED_WITH_FAILURES"
     log_info "TOTAL ERROR: $TOTAL_ERROR"
     if [[ "$FAIL_FAST_ABORTED" == "true" ]]; then
-        log_error "Matrix execution was aborted early due to --fail-fast."
+        log_error "Matrix execution was aborted early due to --fail-fast." || true
     fi
     if [[ $TOTAL_ERROR -eq 0 ]]; then
         if [[ $TOTAL_COMPLETED_WITH_FAILURES -eq 0 ]]; then
@@ -642,7 +647,7 @@ else
             log_warn "All jobs completed, but some had test failures."
         fi
     else
-        log_error "$TOTAL_ERROR jobs encountered infra errors/crashes. Please check logs."
+        log_error "$TOTAL_ERROR jobs encountered infra errors/crashes. Please check logs." || true
     fi
     log_info "Reports are saved in ${REPORTS_DIR}/${RUN_ID}"
 
