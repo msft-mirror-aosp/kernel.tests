@@ -154,15 +154,17 @@ function _print_log() {
         full_message_suffix=" (${BOLD}Exit Code ${exit_code}${END}${color_code})${END}"
     fi
 
-    # Determine output stream (stderr for WARN/ERROR)
-    local output_stream="/dev/stderr"
+    # Determine output fd (stderr for WARN/ERROR). Duplicating the fd instead of
+    # redirecting to /dev/std* is required: '> /dev/stdout' re-opens the target
+    # with O_TRUNC, which wipes the whole file when output is redirected to one.
+    local output_fd=2
     if [[ "$log_level" == "INFO" ]]; then
-        output_stream="/dev/stdout"
+        output_fd=1
     fi
 
     # Print using printf with %s for the message to handle special characters safely
     # Structure: ColorStart Prefix Message Suffix ColorEnd Newline
-    printf "%s%s%s%s%s\n" "${full_message_prefix}" "${color_code}" "$message" "${full_message_suffix}" "${END}" > "$output_stream"
+    printf "%s%s%s%s%s\n" "${full_message_prefix}" "${color_code}" "$message" "${full_message_suffix}" "${END}" >&"$output_fd"
 }
 
 # --- Public API Functions ---
@@ -436,12 +438,14 @@ function set_platform_repo() {
         log_info "Determined lunch target: ${BOLD}${lunch_target}${END}"
     fi
 
+    local pushed=false
     if [[ "$PWD" != "$resolved_root" ]]; then
         # Temporarily change to the repo root to run the commands
         # Use pushd/popd to manage directory changes reliably
         log_info "Changing directory to '${resolved_root}' for setup..."
 
         pushd "$resolved_root" &> /dev/null || { log_error "Failed to pushd into platform root: '${resolved_root}'"; return $EXIT_FAILURE; }
+        pushed=true
 
         log_info "Changed directory to '${resolved_root}' successfully."
     fi
@@ -453,7 +457,7 @@ function set_platform_repo() {
     local source_status=$?
     if (( source_status != 0 )); then
         log_error "Sourcing ${envsetup_script} failed." "$source_status"
-        popd > /dev/null || { log_error "'popd' failed after sourcing."; return $EXIT_FAILURE; }
+        if [[ "$pushed" == true ]]; then popd &> /dev/null; fi
         return "$source_status"
     fi
 
@@ -462,7 +466,7 @@ function set_platform_repo() {
     # Run the lunch command (should be defined after sourcing envsetup.sh).
     if ! check_command "lunch"; then
         log_error "'lunch' command not found after sourcing envsetup.sh. Setup failed." $EXIT_FAILURE
-        popd > /dev/null || { log_error "'popd' failed after checking command."; return $EXIT_FAILURE; }
+        if [[ "$pushed" == true ]]; then popd &> /dev/null; fi
         return $EXIT_FAILURE
     fi
 
@@ -472,22 +476,23 @@ function set_platform_repo() {
     local temp_file
     temp_file=$(mktemp)
     lunch "${lunch_target}" 1>"$temp_file" 2>&1
-    local lunch_status=$?
     lunch_output=$(cat "$temp_file")
     # Clean up the temporary file
     rm "$temp_file"
 
-    if [[ "$lunch_output" != *"error:"* ]]; then
-        log_info "Build environment successfully set for ${lunch_target}."
-    else
-        log_error "'lunch ${lunch_target}' failed. Output:$(printf '\n%s' "$lunch_output")" "$lunch_status"
-        popd > /dev/null || { log_error "'popd' failed after lunching target."; return $EXIT_FAILURE; }
-        return "$lunch_status"
+    # 'lunch' exits 0 and keeps the previous TARGET_PRODUCT when the target
+    # cannot be resolved, so verify the outcome instead of the exit status.
+    if [[ "$lunch_output" == *"error:"* || "${TARGET_PRODUCT:-}" != "${lunch_target%%-*}" ]]; then
+        log_error "'lunch ${lunch_target}' failed. Output:$(printf '\n%s' "$lunch_output")" $EXIT_FAILURE
+        if [[ "$pushed" == true ]]; then popd &> /dev/null; fi
+        return $EXIT_FAILURE
     fi
+    log_info "Build environment successfully set for ${lunch_target}."
 
-    popd > /dev/null || log_warn "'popd' failed after successful setup. Current directory: $PWD"
-
-    log_info "Setup complete. Returned to original directory via popd."
+    if [[ "$pushed" == true ]]; then
+        popd &> /dev/null || log_warn "'popd' failed after successful setup. Current directory: $PWD"
+        log_info "Setup complete. Returned to original directory via popd."
+    fi
     return $EXIT_SUCCESS
 }
 

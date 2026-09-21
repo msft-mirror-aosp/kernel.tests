@@ -78,22 +78,48 @@ function sync_platform_repo() {
     local build_type="$2"
     local repo_root_path="$3"
 
-    local is_current_product_x86=false
-    if [[ "${TARGET_PRODUCT}" == *"x86"* ]]; then
-        is_current_product_x86=true
+    if [[ -z "${product_to_build}" ]]; then
+        log_error "Could not determine the device product name (ro.product.product.name). \
+Unable to verify that the build environment matches the device under test."
+        exit 1
     fi
 
-    local is_new_product_x86=false
-    if [[ "${product_to_build}" == *"x86"* ]]; then
-        is_new_product_x86=true
-    fi
+    local current_product="${TARGET_PRODUCT:-}"
 
-    if [[ -z "${TARGET_PRODUCT}" || "${is_current_product_x86}" != "${is_new_product_x86}" ]]; then
-        log_warn "Build target product ('${TARGET_PRODUCT}') does not match device product ('${product_to_build}'). Resetting build environment."
+    if [[ "${current_product}" != "${product_to_build}" ]]; then
+        if [[ -z "${current_product}" ]]; then
+            log_info "Build environment is not configured yet. Setting it up for '${product_to_build}'."
+        else
+            log_warn "Build target product ('${current_product}') does not match device product \
+('${product_to_build}'). Resetting build environment."
+        fi
         set_platform_repo "${product_to_build}" "${build_type}" "${repo_root_path}"
+
+        # 'lunch' exits with status 0 even when the target cannot be resolved and
+        # keeps TARGET_PRODUCT pointing at the previously selected product, so
+        # neither the return status nor an emptiness check can detect a failure
+        # here. Verify the actual outcome instead.
+        if [[ "${TARGET_PRODUCT:-}" != "${product_to_build}" ]]; then
+            log_error "Failed to switch the build environment to '${product_to_build}' \
+(TARGET_PRODUCT is still '${TARGET_PRODUCT:-unset}'). Running the tests now would use another \
+product's artifacts. Please make sure '${product_to_build}' is a valid lunch target in \
+'${repo_root_path}'."
+            exit 1
+        fi
+        log_info "Build environment is now set for '${TARGET_PRODUCT}' \
+(${ANDROID_PRODUCT_OUT:-unknown product out})."
+    else
+        log_info "Build target product '${current_product}' already matches the device under test. \
+Skipping 'lunch'."
     fi
 
-    if [[ -z "$ANDROID_HOST_OUT" || -z "$TARGET_PRODUCT" ]]; then
+    if [[ -n "${build_type}" && -n "${TARGET_BUILD_VARIANT:-}" && \
+          "${TARGET_BUILD_VARIANT}" != "${build_type}" ]]; then
+        log_warn "Build variant ('${TARGET_BUILD_VARIANT}') differs from the device build type \
+('${build_type}')."
+    fi
+
+    if [[ -z "${ANDROID_HOST_OUT:-}" || -z "${TARGET_PRODUCT:-}" ]]; then
         log_error "'lunch' tool failed to configure build variants. Please check."
         exit 1
     fi
