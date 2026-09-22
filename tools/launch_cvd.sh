@@ -19,6 +19,7 @@ CF_KERNEL_VERSION=""
 PLATFORM_REPO_ROOT=""
 PLATFORM_VERSION=""
 SERIAL_OUT=""
+REPORT_OUT=""
 
 # Optional override for how long acloud may wait for the device to download
 # artifacts and boot, in seconds. Empty means "let acloud decide", which is the
@@ -82,6 +83,10 @@ function print_help() {
     echo "                        Will use default ${PRODUCT} if not specified."
     echo "  -so <file>, --serial-out=<file>"
     echo "                        Extract the device serial port and write it to this file."
+    echo "  -rf <file>, --report-file=<file>"
+    echo "                        Keep the acloud report at this path. The report names"
+    echo "                        the instance that was created, so a caller can clean it"
+    echo "                        up later. It is kept whether the launch worked or not."
     echo "  --acloud-arg=<acloud_arg>"
     echo "                        Additional acloud command arg. Can be repeated."
     echo "                        For example --acloud-arg=--local-instance to launch a local cvd."
@@ -228,6 +233,19 @@ function parse_args() {
                 ;;
             --serial-out=*)
                 SERIAL_OUT="$(echo "$1" | sed -e "s/^[^=]*=//g")"
+                shift
+                ;;
+            -rf|--report-file)
+                shift
+                if (( $# > 0 )); then
+                    REPORT_OUT="$1"
+                else
+                    fail_error "report file path is not specified"
+                fi
+                shift
+                ;;
+            --report-file=*)
+                REPORT_OUT="$(echo "$1" | sed -e "s/^[^=]*=//g")"
                 shift
                 ;;
             *)
@@ -677,32 +695,53 @@ if [[ -n "$ACLOUD_BOOT_TIMEOUT_SECS" ]]; then
     fi
 fi
 
-tmp_report_file=""
-if [[ -n "$SERIAL_OUT" ]]; then
-    tmp_report_file=$(mktemp)
-    acloud_cmd_parts+=("--report-file" "$tmp_report_file")
+# acloud writes this report only after 'create' has returned. That covers a
+# clean failure, such as acloud hitting its own boot timeout, but not a process
+# killed from the outside. When REPORT_OUT is set the report is kept for the
+# caller; otherwise a temporary one is used just to read the serial out of.
+report_file=""
+remove_report=false
+if [[ -n "$REPORT_OUT" ]]; then
+    report_file="$REPORT_OUT"
+    mkdir -p "$(dirname "$report_file")"
+    # Start clean so a stale report from an earlier run cannot be mistaken for
+    # the result of this one.
+    rm -f "$report_file"
+elif [[ -n "$SERIAL_OUT" ]]; then
+    report_file=$(mktemp)
+    remove_report=true
+fi
+if [[ -n "$report_file" ]]; then
+    acloud_cmd_parts+=("--report-file" "$report_file")
 fi
 
 log_info "Launch CVD with command: ${acloud_cmd_parts[*]}"
 run_command "${acloud_cmd_parts[@]}"
 acloud_status=$?
 
-if [[ -n "$SERIAL_OUT" && -f "$tmp_report_file" ]]; then
-    if (( acloud_status == 0 )); then
-        extracted_serial=$(jq -r '.data.devices[0].device_serial // empty' "$tmp_report_file")
-        if [[ -n "$extracted_serial" ]]; then
-            echo "$extracted_serial" > "$SERIAL_OUT"
-            log_info "Extracted serial port '$extracted_serial' to $SERIAL_OUT"
-        else
-            log_warn "Failed to extract device_serial from acloud report file."
-            log_warn "Acloud report content:"
-            jq . "$tmp_report_file" >&2
-            rm -f "$SERIAL_OUT"
-        fi
+if [[ -n "$SERIAL_OUT" ]]; then
+    extracted_serial=""
+    if (( acloud_status == 0 )) && [[ -f "$report_file" ]]; then
+        extracted_serial=$(jq -r '.data.devices[0].device_serial // empty' "$report_file")
+    fi
+    if [[ -n "$extracted_serial" ]]; then
+        echo "$extracted_serial" > "$SERIAL_OUT"
+        log_info "Extracted serial port '$extracted_serial' to $SERIAL_OUT"
     else
+        if (( acloud_status == 0 )); then
+            log_warn "Failed to extract device_serial from acloud report file."
+            if [[ -f "$report_file" ]]; then
+                log_warn "Acloud report content:"
+                jq . "$report_file" >&2
+            fi
+        fi
+        # Never leave a serial file behind that does not describe a live device.
         rm -f "$SERIAL_OUT"
     fi
-    rm -f "$tmp_report_file"
+fi
+
+if [[ "$remove_report" == "true" ]]; then
+    rm -f "$report_file"
 fi
 
 exit $acloud_status
