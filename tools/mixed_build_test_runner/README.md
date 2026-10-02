@@ -1,6 +1,6 @@
-# VTS LTP Build Matrix Runner
+# Mixed Build Test Runner
 
-`build_matrix_runner` is an automated orchestration tool designed to run ATest test suites (such as VTS LTP) across a matrix of different Android builds. It supports both **Cuttlefish (Virtual Devices)** and **Physical Devices**, manages device provisioning/teardown automatically, features a robust auto-resume system, and generates beautiful HTML and CSV test reports.
+`mixed_build_test_runner` is an automated orchestration tool designed to run ATest test suites (such as VTS LTP) across a matrix of different Android builds. It supports both **Cuttlefish (Virtual Devices)** and **Physical Devices**, manages device provisioning/teardown automatically, features a robust auto-resume system, and generates beautiful HTML and CSV test reports.
 
 ---
 
@@ -29,13 +29,13 @@
 4. **Run a basic matrix test**:
    Pass your matrix configuration JSON file using the `-c` flag.
    ```bash
-   ./build_matrix_runner.sh -c configs/local_ltp.json
+   ./mixed_build_test_runner.sh -c configs/local_ltp.json
    ```
 
 5. **Run and reuse the same virtual device**:
    If you are testing locally and want to save time launching and deleting Cuttlefish, you can tell the script to reuse the device across jobs.
    ```bash
-   ./build_matrix_runner.sh -c configs/local_ltp.json --reuse-device
+   ./mixed_build_test_runner.sh -c configs/local_ltp.json --reuse-device
    ```
 
 ---
@@ -53,7 +53,7 @@ Start from one of the two templates in `configs/`:
 Copy a template to `configs/local_<name>.json` before editing, or print it with
 `--generate-config`:
 ```bash
-./build_matrix_runner.sh --generate-config physical > configs/local_phys.json
+./mixed_build_test_runner.sh --generate-config physical > configs/local_phys.json
 ```
 
 > [!IMPORTANT]
@@ -180,7 +180,7 @@ If your machine restarts or a job crashes midway (e.g., Cuttlefish fails to boot
 ### 1. The Auto-Resume (`--resume`)
 The smartest and most common way to recover.
 ```bash
-./build_matrix_runner.sh -c configs/local_ltp.json --resume
+./mixed_build_test_runner.sh -c configs/local_ltp.json --resume
 ```
 * **What it does**: It reads the state file and groups logs under the original `RUN_ID`.
 * **Skipping logic**: It will **skip** any job marked as `SUCCESS` or `COMPLETED_WITH_FAILURES` (since we already have their reports). It will automatically retry jobs marked as `ERROR` and continue to the unexecuted jobs.
@@ -188,7 +188,7 @@ The smartest and most common way to recover.
 ### 2. Manual Resume (`--resume-from <job_id>`)
 Use this when you want to forcefully dictate where to restart.
 ```bash
-./build_matrix_runner.sh -c configs/local_ltp.json --resume-from cf_14_6_1
+./mixed_build_test_runner.sh -c configs/local_ltp.json --resume-from cf_14_6_1
 ```
 * **What it does**: It skips all jobs preceding the specified `job_id` and begins execution exactly at that job.
 * **Pre-flight Safety**: To prevent generating incomplete "ghost" reports, the script will strictly verify that all jobs preceding your target were completed (either `SUCCESS` or `COMPLETED_WITH_FAILURES`). If an earlier job was skipped or had an `ERROR`, the script will abort and warn you.
