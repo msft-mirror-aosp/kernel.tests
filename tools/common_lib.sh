@@ -43,6 +43,12 @@ DEFAULT_LAUNCH_TIMEOUT="${DEFAULT_LAUNCH_TIMEOUT:-30m}"
 # A bridged device (Pontis) can take tens of seconds to reappear after a reboot.
 DEFAULT_DEVICE_WAIT_TIMEOUT="${DEFAULT_DEVICE_WAIT_TIMEOUT:-3m}"
 DEFAULT_DEVICE_POLL_INTERVAL="${DEFAULT_DEVICE_POLL_INTERVAL:-5s}"
+# Talking to acloud about existing instances. Listing is a quick metadata
+# lookup; deleting has to tear a cloud instance down, so it gets far longer.
+# Both are bounded because acloud makes SSH calls that have no timeout of their
+# own, and cleanup must never be the thing that hangs a run.
+DEFAULT_ACLOUD_QUERY_TIMEOUT="${DEFAULT_ACLOUD_QUERY_TIMEOUT:-60s}"
+DEFAULT_ACLOUD_DELETE_TIMEOUT="${DEFAULT_ACLOUD_DELETE_TIMEOUT:-10m}"
 
 # --- Constants ---
 readonly FETCH_SCRIPT_PATH_IN_REPO="kernel/tests/tools/fetch_artifact.sh"
