@@ -1,6 +1,13 @@
 {
+  "_comment": "Template: LTP on Cuttlefish across the GKI branches. Copy to configs/local_<name>.json before editing; only *.template.json is tracked by git.",
+  "_comment_build_id": "Every build_id is 'latest'. Pin a numeric id in your local copy when you need a reproducible run.",
   "global_config": {
-    "test_suite": "vts_ltp_test_x86_64"
+    "test_suite": "vts_ltp_test_x86_64",
+    "_comment_timeouts": "Optional. GNU timeout duration strings. See README.md.",
+    "flash_timeout": "30m",
+    "launch_timeout": "30m",
+    "test_timeout": "3h",
+    "device_wait_timeout": "3m"
   },
   "jobs": [
     {
@@ -11,29 +18,12 @@
         "pb": {
           "branch": "git_main",
           "target": "aosp_cf_x86_64_only_phone-trunk_staging-userdebug",
-          "build_id": "16270345"
+          "build_id": "latest"
         },
         "kb": {
           "branch": "aosp_kernel-common-android-mainline",
           "target": "kernel_virt_x86_64",
-          "build_id": "16270995"
-        }
-      }
-    },
-    {
-      "job_id": "cf_17-6.18",
-      "display_name": "LTP on CF (17-6.18)",
-      "device_type": "virtual",
-      "builds": {
-        "pb": {
-          "branch": "git_main",
-          "target": "aosp_cf_x86_64_only_phone-trunk_staging-userdebug",
-          "build_id": "16036516"
-        },
-        "kb": {
-          "branch": "aosp_kernel-common-android17-6.18",
-          "target": "kernel_virt_x86_64",
-          "build_id": "16053510"
+          "build_id": "latest"
         }
       }
     },
@@ -45,29 +35,12 @@
         "pb": {
           "branch": "git_main",
           "target": "aosp_cf_x86_64_only_phone-trunk_staging-userdebug",
-          "build_id": "16229963"
+          "build_id": "latest"
         },
         "kb": {
           "branch": "aosp_kernel-common-android16-6.12",
           "target": "kernel_virt_x86_64",
-          "build_id": "16232142"
-        }
-      }
-    },
-    {
-      "job_id": "cf_15_6_6",
-      "display_name": "LTP on CF (15-6.6)",
-      "device_type": "virtual",
-      "builds": {
-        "pb": {
-          "branch": "git_26Q1-release",
-          "target": "aosp_cf_x86_64_phone-userdebug",
-          "build_id": "15911731"
-        },
-        "kb": {
-          "branch": "aosp_kernel-common-android15-6.6",
-          "target": "kernel_virt_x86_64",
-          "build_id": "16055642"
+          "build_id": "latest"
         }
       }
     },
@@ -79,12 +52,12 @@
         "pb": {
           "branch": "aosp-android14-gsi",
           "target": "aosp_cf_x86_64_phone-userdebug",
-          "build_id": "15944465"
+          "build_id": "latest"
         },
         "kb": {
           "branch": "aosp_kernel-common-android14-6.1",
           "target": "kernel_virt_x86_64",
-          "build_id": "16011921"
+          "build_id": "latest"
         }
       }
     },
@@ -96,12 +69,12 @@
         "pb": {
           "branch": "aosp-android14-gsi",
           "target": "aosp_cf_x86_64_phone-userdebug",
-          "build_id": "15944465"
+          "build_id": "latest"
         },
         "kb": {
           "branch": "aosp_kernel-common-android14-5.15",
           "target": "kernel_virt_x86_64",
-          "build_id": "16038098"
+          "build_id": "latest"
         }
       }
     },
@@ -113,12 +86,12 @@
         "pb": {
           "branch": "aosp-android14-gsi",
           "target": "aosp_cf_x86_64_phone-userdebug",
-          "build_id": "15944465"
+          "build_id": "latest"
         },
         "kb": {
           "branch": "aosp_kernel-common-android13-5.15",
           "target": "kernel_virt_x86_64",
-          "build_id": "16041147"
+          "build_id": "latest"
         }
       }
     },
@@ -130,12 +103,12 @@
         "pb": {
           "branch": "aosp-android14-gsi",
           "target": "aosp_cf_x86_64_phone-userdebug",
-          "build_id": "15944465"
+          "build_id": "latest"
         },
         "kb": {
           "branch": "aosp_kernel-common-android13-5.10",
           "target": "kernel_virt_x86_64",
-          "build_id": "15962766"
+          "build_id": "latest"
         }
       }
     },
@@ -147,12 +120,12 @@
         "pb": {
           "branch": "aosp-android14-gsi",
           "target": "aosp_cf_x86_64_phone-userdebug",
-          "build_id": "15944465"
+          "build_id": "latest"
         },
         "kb": {
           "branch": "aosp_kernel-common-android12-5.10",
           "target": "kernel_virt_x86_64",
-          "build_id": "15962663"
+          "build_id": "latest"
         }
       }
     }

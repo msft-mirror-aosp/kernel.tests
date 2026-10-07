@@ -12,7 +12,8 @@ to *work on* the code.
 | Path | What it is |
 | :--- | :--- |
 | `build_matrix_runner.sh` | the runner itself, plain bash |
-| `configs/*.json` | matrix definitions |
+| `configs/*.template.json` | example matrices; the only tracked configs, mirrored to AOSP, so placeholders and `"latest"` only |
+| `configs/*.json` (others) | personal matrices, gitignored |
 | `reporter/` | Python package that renders the HTML report |
 | `tests/` | shell suites for the runner |
 | `../tests/` | shell suites for `common_lib.sh`, `device_util.sh`, `launch_cvd.sh`, `flash_device.sh` |
