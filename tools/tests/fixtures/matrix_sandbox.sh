@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Builds a throwaway copy of kernel/tests/tools where every external command
-# is a stub, so build_matrix_runner.sh can be driven end to end without
+# is a stub, so mixed_build_test_runner.sh can be driven end to end without
 # touching a real device or the cloud.
 #
 # Usage: source this file, then call make_sandbox <dir>.
 #
 # Layout created under <dir>:
-#   tools/                      real common_lib.sh and lib/device_util.sh
-#   tools/launch_cvd.sh         stub, behaviour from LAUNCH_STUB_MODE
-#   tools/flash_device.sh       stub, behaviour from FLASH_STUB_MODE
-#   tools/run_test_only.sh      stub, always reports a passing run
-#   tools/build_matrix_runner/  the script under test
-#   bin/                        stubs for adb, acloud, pontis (put on PATH)
-#   state/                      scratch space the stubs write to
+#   tools/                          real common_lib.sh and lib/device_util.sh
+#   tools/launch_cvd.sh             stub, behaviour from LAUNCH_STUB_MODE
+#   tools/flash_device.sh           stub, behaviour from FLASH_STUB_MODE
+#   tools/run_test_only.sh          stub, always reports a passing run
+#   tools/mixed_build_test_runner/  the script under test
+#   bin/                            stubs for adb, acloud, pontis (put on PATH)
+#   state/                          scratch space the stubs write to
 
 # The caller must export TOOLS_DIR (kernel/tests/tools).
 REAL_TOOLS="${TOOLS_DIR:?matrix_sandbox.sh needs TOOLS_DIR}"
@@ -20,14 +20,14 @@ REAL_TOOLS="${TOOLS_DIR:?matrix_sandbox.sh needs TOOLS_DIR}"
 function make_sandbox() {
     local root="$1"
     rm -rf "$root"
-    mkdir -p "$root/tools/lib" "$root/tools/build_matrix_runner" \
+    mkdir -p "$root/tools/lib" "$root/tools/mixed_build_test_runner" \
              "$root/bin" "$root/state"
 
     cp "$REAL_TOOLS/common_lib.sh" "$root/tools/"
     cp "$REAL_TOOLS/lib/device_util.sh" "$root/tools/lib/"
-    cp "$REAL_TOOLS/build_matrix_runner/build_matrix_runner.sh" \
-       "$root/tools/build_matrix_runner/"
-    chmod +x "$root/tools/build_matrix_runner/build_matrix_runner.sh"
+    cp "$REAL_TOOLS/mixed_build_test_runner/mixed_build_test_runner.sh" \
+       "$root/tools/mixed_build_test_runner/"
+    chmod +x "$root/tools/mixed_build_test_runner/mixed_build_test_runner.sh"
 
     # --- launch_cvd.sh stub -------------------------------------------------
     # 'hang' starts a grandchild too, so a test can prove the timeout kills the

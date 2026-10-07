@@ -823,12 +823,12 @@ else
     fi
     log_info "Reports are saved in ${REPORTS_DIR}/${RUN_ID}"
 
-    REPORTER_BIN="${TOOLS_DIR}/build_matrix_runner/reporter/venv/bin/matrix-reporter"
+    REPORTER_BIN="${SCRIPT_DIR}/reporter/venv/bin/matrix-reporter"
     if [[ -x "$REPORTER_BIN" ]]; then
         log_info "Generating Matrix Report..."
         "$REPORTER_BIN" --report-dir "${REPORTS_DIR}/${RUN_ID}" --config "$JSON_FILE" || log_warn "Failed to generate matrix report."
     else
-        log_warn "Matrix reporter not found. To enable it, run 'make setup' in the build_matrix_runner directory."
+        log_warn "Matrix reporter not found. To enable it, run 'make setup' in the mixed_build_test_runner directory."
     fi
 fi
 

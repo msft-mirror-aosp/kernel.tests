@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the launch and flash timeouts in build_matrix_runner.sh.
+# Tests for the launch and flash timeouts in mixed_build_test_runner.sh.
 #
 # The runner is driven end to end inside a sandbox where launch_cvd.sh,
 # flash_device.sh, run_test_only.sh, adb, acloud and pontis are all stubs, so
@@ -23,7 +23,7 @@ TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 SANDBOX="${TMPROOT}/sandbox"
 
-# Runs the matrix runner in the sandbox. Echoes elapsed whole seconds; the log
+# Runs the runner in the sandbox. Echoes elapsed whole seconds; the log
 # lands in $SANDBOX/state/run.log and the exit code in $SANDBOX/state/run.rc.
 function run_matrix() {
     local config="$1"
@@ -33,7 +33,7 @@ function run_matrix() {
     (
         export PATH="${SANDBOX}/bin:${PATH}"
         export STUB_STATE_DIR="${SANDBOX}/state"
-        "$@" "${SANDBOX}/tools/build_matrix_runner/build_matrix_runner.sh" \
+        "$@" "${SANDBOX}/tools/mixed_build_test_runner/mixed_build_test_runner.sh" \
             -c "$config" > "${SANDBOX}/state/run.log" 2>&1
         echo "$?" > "${SANDBOX}/state/run.rc"
     )

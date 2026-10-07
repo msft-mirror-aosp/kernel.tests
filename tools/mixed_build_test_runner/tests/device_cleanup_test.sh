@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for precise Cuttlefish teardown in build_matrix_runner.sh.
+# Tests for precise Cuttlefish teardown in mixed_build_test_runner.sh.
 #
 # The property that matters most: instances this run did not create must never
 # be deleted, and 'acloud delete --all' must never be issued. Getting this
@@ -39,7 +39,7 @@ function reset_cloud() {
     : > "${SANDBOX}/state/launch_argv.log"
 }
 
-# Runs the matrix runner. Arguments after the config are environment overrides;
+# Runs the runner. Arguments after the config are environment overrides;
 # extra runner flags go in RUNNER_ARGS, because mixing the two would make 'env'
 # treat a flag as the command to execute.
 RUNNER_ARGS=()
@@ -49,7 +49,7 @@ function run_matrix() {
     (
         export PATH="${SANDBOX}/bin:${PATH}"
         export STUB_STATE_DIR="${SANDBOX}/state"
-        "$@" "${SANDBOX}/tools/build_matrix_runner/build_matrix_runner.sh" \
+        "$@" "${SANDBOX}/tools/mixed_build_test_runner/mixed_build_test_runner.sh" \
             -c "$config" "${RUNNER_ARGS[@]}" > "${SANDBOX}/state/run.log" 2>&1
         echo "$?" > "${SANDBOX}/state/run.rc"
     )
@@ -230,14 +230,14 @@ make_config "$CONFIG" virtual
 reset_cloud
 RUNNER_ARGS=(--reuse-device)
 # Pre-seed the state file so the reuse branch is taken and no launch happens.
-mkdir -p "${SANDBOX}/tools/build_matrix_runner/out"
-echo "job_one=127.0.0.1:6520" > "${SANDBOX}/tools/build_matrix_runner/out/.matrix_active_devices"
+mkdir -p "${SANDBOX}/tools/mixed_build_test_runner/out"
+echo "job_one=127.0.0.1:6520" > "${SANDBOX}/tools/mixed_build_test_runner/out/.matrix_active_devices"
 LAUNCH_STUB_MODE=success run_matrix "$CONFIG" env
 RUNNER_ARGS=()
 check "reuse-device: the launch is skipped" "no" "$(log_has 'Launching virtual device')"
 check "reuse-device: nothing is deleted" "" "$(delete_cmds)"
 check "reuse-device: a bystander is not reported as ours" "no" "$(log_has "$BYSTANDER_B")"
-rm -f "${SANDBOX}/tools/build_matrix_runner/out/.matrix_active_devices"
+rm -f "${SANDBOX}/tools/mixed_build_test_runner/out/.matrix_active_devices"
 
 section "untouched paths"
 
