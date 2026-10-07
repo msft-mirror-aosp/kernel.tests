@@ -5,3 +5,7 @@
 # Ignore user's local or temporary configurations
 /configs/local_*.json
 /configs/temp_*.json
+
+# Work-in-progress notes for the next session. Deliberately local: the git
+# history is the changelog, this is a scratchpad. See AGENTS.md.
+/HANDOFF.md

@@ -2,8 +2,9 @@
 
 # --- Test Configuration ---
 readonly SCRIPT_DIR=$(dirname $(realpath "${BASH_SOURCE[0]}"))
-readonly COMMON_LIB_PATH="${SCRIPT_DIR}/common_lib.sh"
-readonly SHUNIT2_PATH="${SCRIPT_DIR}/../../../external/shflags/lib/shunit2"
+readonly TOOLS_DIR="$(dirname "${SCRIPT_DIR}")"
+readonly COMMON_LIB_PATH="${TOOLS_DIR}/common_lib.sh"
+readonly SHUNIT2_PATH="${TOOLS_DIR}/../../../external/shflags/lib/shunit2"
 
 # --- Global Test Variables ---
 TEST_TEMP_DIR=""
@@ -71,8 +72,11 @@ oneTimeTearDown() {
     fi
     # Restore original PATH
     PATH="$ORIGINAL_PATH"
-    # Unset any global variables
-    unset TEST_TEMP_DIR MOCK_REPO_DIR MOCK_PLATFORM_DIR ORIGINAL_PATH
+    # Unset any global variables.
+    # ORIGINAL_PATH deliberately survives: shunit2 calls tearDown once more
+    # after this, and that assigns PATH from it. Unsetting it here left PATH
+    # empty, so shunit2's own 'rm' cleanup could no longer be found.
+    unset TEST_TEMP_DIR MOCK_REPO_DIR MOCK_PLATFORM_DIR
 }
 
 setUp() {
