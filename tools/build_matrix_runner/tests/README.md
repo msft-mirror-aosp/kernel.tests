@@ -33,6 +33,7 @@ bash tests/device_cleanup_test.sh
 | `launch_timeout_test.sh` | launch and flash deadlines fire, and a killed launch takes its whole process group with it |
 | `atest_log_parse_test.sh` | a missing "Test logs:" line degrades the job instead of aborting the run and leaking a device |
 | `device_cleanup_test.sh` | only instances this run created are deleted, and `acloud delete --all` is never issued |
+| `config_template_test.sh` (shunit2) | the tracked templates carry no serial, pinned build id or real internal branch name (the repo is mirrored to AOSP), and `--generate-config` prints exactly those templates |
 
 `device_cleanup_test.sh` is the one to keep green. The scenarios in it come
 from a real incident where somebody else's Cuttlefish instance was deleted.

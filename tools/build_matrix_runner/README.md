@@ -19,58 +19,54 @@
    make setup
    ```
 
-3. **Run a basic matrix test**:
-   Pass your matrix configuration JSON file using the `-c` flag.
+3. **Create your own matrix from a template**:
+   Only the templates are tracked by git. Copy one to `configs/local_<name>.json`
+   (gitignored) and fill it in; see [Configuration File](#configuration-file-json).
    ```bash
-   ./build_matrix_runner.sh -c configs/ltp.json
+   cp configs/ltp_virtual.template.json configs/local_ltp.json
    ```
 
-4. **Run and reuse the same virtual device**:
+4. **Run a basic matrix test**:
+   Pass your matrix configuration JSON file using the `-c` flag.
+   ```bash
+   ./build_matrix_runner.sh -c configs/local_ltp.json
+   ```
+
+5. **Run and reuse the same virtual device**:
    If you are testing locally and want to save time launching and deleting Cuttlefish, you can tell the script to reuse the device across jobs.
    ```bash
-   ./build_matrix_runner.sh -c configs/ltp.json --reuse-device
+   ./build_matrix_runner.sh -c configs/local_ltp.json --reuse-device
    ```
 
 ---
 
 ## Configuration File (JSON)
 
-The tool relies on a JSON configuration file to define the execution matrix. You can generate a template config by running:
+The tool relies on a JSON configuration file to define the execution matrix.
+Start from one of the two templates in `configs/`:
+
+| Template | Use it for |
+| :--- | :--- |
+| [`ltp_virtual.template.json`](configs/ltp_virtual.template.json) | Cuttlefish across the GKI branches. Runs as-is. |
+| [`ltp_physical.template.json`](configs/ltp_physical.template.json) | A physical device. Replace every `<PLACEHOLDER>` and set `serial_port` (or pass `-s`). |
+
+Copy a template to `configs/local_<name>.json` before editing, or print it with
+`--generate-config`:
 ```bash
-./build_matrix_runner.sh --generate-config > my_matrix.json
+./build_matrix_runner.sh --generate-config physical > configs/local_phys.json
 ```
 
-A standard configuration looks like this:
-```json
-{
-  "global_config": {
-    "test_suite": "vts_ltp_test_x86_64",
-    "flash_timeout": "30m",
-    "launch_timeout": "30m",
-    "test_timeout": "3h",
-    "device_wait_timeout": "3m"
-  },
-  "jobs": [
-    {
-      "job_id": "cf_mainline",
-      "display_name": "LTP on CF (mainline)",
-      "device_type": "virtual",
-      "builds": {
-        "pb": {
-          "branch": "git_main",
-          "target": "aosp_cf_x86_64_only_phone-trunk_staging-userdebug",
-          "build_id": "latest"
-        },
-        "kb": {
-          "branch": "aosp_kernel-common-android-mainline",
-          "target": "kernel_virt_x86_64",
-          "build_id": "latest"
-        }
-      }
-    }
-  ]
-}
-```
+> [!IMPORTANT]
+> Only `configs/*.template.json` is tracked; every other file in `configs/` is
+> gitignored. This repository is mirrored to AOSP, so keep device serials,
+> pinned build ids and internal branch or device names in your local copy,
+> never in a template.
+
+* **`build_id`**: `"latest"` or a numeric id. Templates always use `"latest"`;
+  pin ids in your local copy when you need a reproducible run.
+* **`serial_port`** *(physical only)*: required unless passed via `-s`. Empty in
+  the template on purpose, so an unfilled copy fails instead of flashing the
+  wrong device.
 * **`device_type`**: Must be `"virtual"` (Cuttlefish) or `"physical"`.
 * **`builds`**: Defines the artifacts to fetch (`pb`: Platform Build, `kb`: Kernel Build, `vkb`: Vendor Kernel Build, `sb`: System Build).
 * **`flash_timeout`** *(optional, default `30m`)*: Upper bound on a single
@@ -129,6 +125,7 @@ The script tracks the outcome of every job and categorizes them into three disti
 | Flag | Description |
 | :--- | :--- |
 | `-c, --config <file>` | **[Required]** Path to your JSON matrix configuration file. |
+| `--generate-config [virtual\|physical]` | Print the matching template from `configs/` to stdout and exit. (Default: `virtual`) |
 | `-od, --output-dir <dir>` | Directory to save logs and reports. (Default: `reports/`) |
 | `-j, --job-id <id>` | Run **only** the specific job matching this ID from the JSON. |
 | `-t, --test <suite>` | Override the test suite specified in the JSON config. |
@@ -183,7 +180,7 @@ If your machine restarts or a job crashes midway (e.g., Cuttlefish fails to boot
 ### 1. The Auto-Resume (`--resume`)
 The smartest and most common way to recover.
 ```bash
-./build_matrix_runner.sh -c configs/ltp.json --resume
+./build_matrix_runner.sh -c configs/local_ltp.json --resume
 ```
 * **What it does**: It reads the state file and groups logs under the original `RUN_ID`.
 * **Skipping logic**: It will **skip** any job marked as `SUCCESS` or `COMPLETED_WITH_FAILURES` (since we already have their reports). It will automatically retry jobs marked as `ERROR` and continue to the unexecuted jobs.
@@ -191,7 +188,7 @@ The smartest and most common way to recover.
 ### 2. Manual Resume (`--resume-from <job_id>`)
 Use this when you want to forcefully dictate where to restart.
 ```bash
-./build_matrix_runner.sh -c configs/ltp.json --resume-from cf_15_6_6
+./build_matrix_runner.sh -c configs/local_ltp.json --resume-from cf_14_6_1
 ```
 * **What it does**: It skips all jobs preceding the specified `job_id` and begins execution exactly at that job.
 * **Pre-flight Safety**: To prevent generating incomplete "ghost" reports, the script will strictly verify that all jobs preceding your target were completed (either `SUCCESS` or `COMPLETED_WITH_FAILURES`). If an earlier job was skipped or had an `ERROR`, the script will abort and warn you.

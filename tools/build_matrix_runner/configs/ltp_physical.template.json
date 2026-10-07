@@ -1,0 +1,51 @@
+{
+  "_comment": "Template: LTP on a physical device. Copy to configs/local_<name>.json and replace every <PLACEHOLDER>; only *.template.json is tracked by git.",
+  "_comment_build_id": "build_id may be 'latest' or a numeric id. Pin ids in your local copy when you need a reproducible run.",
+  "_comment_serial": "serial_port is left empty on purpose. Fill it in your local copy or pass -s <serial>; a physical job with neither fails.",
+  "_comment_builds": "pb = platform build, kb = GKI kernel build, vkb = vendor kernel build, sb = system build. Use kb or vkb, whichever matches your device.",
+  "global_config": {
+    "test_suite": "vts_ltp_test_arm_64",
+    "_comment_timeouts": "Optional. GNU timeout duration strings. See README.md.",
+    "flash_timeout": "30m",
+    "test_timeout": "3h",
+    "device_wait_timeout": "3m"
+  },
+  "jobs": [
+    {
+      "job_id": "phys_<device>_vendor_kernel",
+      "display_name": "LTP on <DEVICE> (vendor kernel)",
+      "device_type": "physical",
+      "serial_port": "",
+      "builds": {
+        "pb": {
+          "branch": "<PLATFORM_BRANCH>",
+          "target": "<PLATFORM_TARGET>",
+          "build_id": "latest"
+        },
+        "vkb": {
+          "branch": "<VENDOR_KERNEL_BRANCH>",
+          "target": "<VENDOR_KERNEL_TARGET>",
+          "build_id": "latest"
+        }
+      }
+    },
+    {
+      "job_id": "phys_<device>_gki",
+      "display_name": "LTP on <DEVICE> (GKI kernel)",
+      "device_type": "physical",
+      "serial_port": "",
+      "builds": {
+        "pb": {
+          "branch": "<PLATFORM_BRANCH>",
+          "target": "<PLATFORM_TARGET>",
+          "build_id": "latest"
+        },
+        "kb": {
+          "branch": "<GKI_KERNEL_BRANCH>",
+          "target": "<GKI_KERNEL_TARGET>",
+          "build_id": "latest"
+        }
+      }
+    }
+  ]
+}

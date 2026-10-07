@@ -71,55 +71,21 @@ LAUNCH_ATTEMPTED=false
 # Instances left running because of --keep-device, reported at the end.
 KEPT_INSTANCES=()
 
-
+# The templates in configs/ are the only copy of the example matrices. The
+# README and --generate-config both point at them instead of carrying their own.
+readonly CONFIG_TEMPLATE_DIR="${SCRIPT_DIR}/configs"
 
 function generate_config_template() {
-    cat << 'EOF'
-{
-  "_comment": "Template for build_matrix_runner.sh",
-  "global_config": {
-    "test_suite": "vts_ltp_test_x86_64",
-    "_comment_timeouts": "Optional. GNU timeout duration strings. See README.md.",
-    "flash_timeout": "30m",
-    "launch_timeout": "30m",
-    "test_timeout": "3h",
-    "device_wait_timeout": "3m"
-  },
-  "jobs": [
-    {
-      "job_id": "example_virtual_device",
-      "display_name": "Cuttlefish with Mainline Platform & GKI",
-      "device_type": "virtual",
-      "_comment_device": "device_type MUST be 'virtual' or 'physical'",
-      "builds": {
-        "pb": {
-          "branch": "aosp-main",
-          "target": "aosp_cf_x86_64_phone-trunk_staging-userdebug",
-          "build_id": "latest"
-        },
-        "kb": {
-          "branch": "aosp_kernel-common-android15-6.6",
-          "target": "kernel_x86_64",
-          "build_id": "11223344"
-        }
-      }
-    },
-    {
-      "job_id": "example_physical_device",
-      "device_type": "physical",
-      "serial_port": "127.0.0.1:40465",
-      "_comment_serial": "serial_port is required for physical devices unless passed via -s",
-      "builds": {
-        "pb": {
-          "branch": "aosp-main",
-          "target": "aosp_panther-userdebug",
-          "build_id": "latest"
-        }
-      }
-    }
-  ]
-}
-EOF
+    local kind="${1:-virtual}"
+    case "$kind" in
+        virtual|physical) ;;
+        *) abort "Unknown template '$kind'. Use 'virtual' or 'physical'." ;;
+    esac
+    local template="${CONFIG_TEMPLATE_DIR}/ltp_${kind}.template.json"
+    if [[ ! -f "$template" ]]; then
+        abort "Template not found: $template"
+    fi
+    cat "$template"
 }
 
 function print_help() {
@@ -128,7 +94,8 @@ function print_help() {
     echo "Run ATest against a matrix of device builds specified in a JSON file."
     echo ""
     echo "Options:"
-    echo "  --generate-config          Print a template JSON configuration to stdout and exit"
+    echo "  --generate-config [virtual|physical]"
+    echo "                             Print a template JSON configuration to stdout and exit (default: virtual)"
     echo "  -c, --config <file>        Path to the JSON configuration file"
     echo "  -od, --output-dir <dir>    Directory to save reports (default: reports)"
     echo "  -j, --job-id <job_id>      Only run a specific job_id from the JSON config"
@@ -344,7 +311,12 @@ function parse_args() {
                 exit 0
                 ;;
             --generate-config)
-                generate_config_template
+                # The template kind is optional; do not swallow the next flag.
+                if [[ -n "${2:-}" && "$2" != -* ]]; then
+                    generate_config_template "$2"
+                else
+                    generate_config_template
+                fi
                 exit 0
                 ;;
             -c|--config)

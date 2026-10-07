@@ -54,7 +54,7 @@ cd reporter
 # Regenerate the HTML, CSV, and Markdown reports using the raw logs and the original config
 ./venv/bin/matrix-reporter \
     --report-dir ../reports/run_yesterday \
-    --config ../configs/ltp.json
+    --config ../configs/local_ltp.json
 ```
 
 ---
