@@ -71,6 +71,7 @@ function generate_config_template() {
     "test_suite": "vts_ltp_test_x86_64",
     "_comment_timeouts": "Optional. GNU timeout duration strings. See README.md.",
     "flash_timeout": "30m",
+    "launch_timeout": "30m",
     "test_timeout": "3h",
     "device_wait_timeout": "3m"
   },
@@ -333,14 +334,19 @@ log_info "Test Suite: $TEST_SUITE"
 # of minutes because of the artifact download.
 FLASH_TIMEOUT=$(jq -r '.global_config.flash_timeout // empty' "$JSON_FILE")
 FLASH_TIMEOUT="${FLASH_TIMEOUT:-$DEFAULT_FLASH_TIMEOUT}"
+# The same idea for virtual devices. This one is not optional in practice:
+# several of the SSH calls acloud makes while booting a device have no timeout
+# of their own, so a half dead connection can hold a job forever.
+LAUNCH_TIMEOUT=$(jq -r '.global_config.launch_timeout // empty' "$JSON_FILE")
+LAUNCH_TIMEOUT="${LAUNCH_TIMEOUT:-$DEFAULT_LAUNCH_TIMEOUT}"
 TEST_TIMEOUT=$(jq -r '.global_config.test_timeout // empty' "$JSON_FILE")
 TEST_TIMEOUT="${TEST_TIMEOUT:-$DEFAULT_TEST_TIMEOUT}"
 # How long to keep looking for the device after it has been flashed and
 # rebooted. A bridged device (Pontis) can take tens of seconds to come back.
 DEVICE_WAIT_TIMEOUT=$(jq -r '.global_config.device_wait_timeout // empty' "$JSON_FILE")
 DEVICE_WAIT_TIMEOUT="${DEVICE_WAIT_TIMEOUT:-$DEFAULT_DEVICE_WAIT_TIMEOUT}"
-log_info "Timeouts: flash=${FLASH_TIMEOUT}, test=${TEST_TIMEOUT}, \
-device_wait=${DEVICE_WAIT_TIMEOUT}"
+log_info "Timeouts: flash=${FLASH_TIMEOUT}, launch=${LAUNCH_TIMEOUT}, \
+test=${TEST_TIMEOUT}, device_wait=${DEVICE_WAIT_TIMEOUT}"
 
 # Get number of jobs
 NUM_JOBS=$(jq '.jobs | length' "$JSON_FILE")
@@ -485,14 +491,17 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
 
         if [[ "$skip_launch" == "false" ]]; then
             CVD_SERIAL_FILE=$(mktemp)
-            log_info "Launching virtual device..."
+            log_info "Launching virtual device (timeout ${LAUNCH_TIMEOUT})..."
 
             set +e
-            "${LAUNCH_CVD_SCRIPT}" "${LAUNCH_ARGS[@]}" -so "$CVD_SERIAL_FILE"
+            run_with_timeout "$LAUNCH_TIMEOUT" \
+                "${LAUNCH_CVD_SCRIPT}" "${LAUNCH_ARGS[@]}" -so "$CVD_SERIAL_FILE"
             LAUNCH_STATUS=$?
             set -e
 
-            if [[ $LAUNCH_STATUS -ne 0 ]] || [[ ! -f "$CVD_SERIAL_FILE" ]] || [[ ! -s "$CVD_SERIAL_FILE" ]]; then
+            if (( LAUNCH_STATUS == EXIT_TIMEOUT )); then
+                fail_job "Launching virtual device timed out after ${LAUNCH_TIMEOUT}."
+            elif [[ $LAUNCH_STATUS -ne 0 ]] || [[ ! -f "$CVD_SERIAL_FILE" ]] || [[ ! -s "$CVD_SERIAL_FILE" ]]; then
                 fail_job "Failed to obtain Cuttlefish serial number or launch failed."
             else
                 SERIAL=$(cat "$CVD_SERIAL_FILE")
