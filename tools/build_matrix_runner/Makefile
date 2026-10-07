@@ -1,4 +1,4 @@
-.PHONY: setup clean format lint typecheck test build
+.PHONY: setup clean format lint typecheck test test-py test-sh test-fast test-one build
 
 VENV = reporter/venv
 PYTHON = $(VENV)/bin/python
@@ -26,8 +26,23 @@ lint:
 typecheck:
 	$(PYTHON) -m mypy reporter/src/ reporter/tests/
 
-test:
+# 'test' covers both languages. The shell suites need no venv.
+test: test-py test-sh
+
+test-py:
 	$(PYTHON) -m pytest reporter/tests/
+
+test-sh:
+	@tests/run_all.sh
+
+# Skips the cases that wait for real timeouts to fire.
+test-fast:
+	@SKIP_SLOW=1 tests/run_all.sh
+
+# Runs only the shell suites whose filename contains $(T), e.g.
+#   make test-one T=cleanup
+test-one:
+	@tests/run_all.sh $(T)
 
 build:
 	cd reporter && ../$(PYTHON) -m build
