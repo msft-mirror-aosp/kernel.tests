@@ -5,7 +5,7 @@
 #   make test-one T=device_util
 #                    run only suites whose filename contains 'device_util'
 #
-# build_matrix_runner/ has its own Makefile for its shell suites and the
+# mixed_build_test_runner/ has its own Makefile for its shell suites and the
 # Python reporter; 'make test-matrix' delegates to it.
 
 .PHONY: test test-sh test-fast test-one test-matrix test-all
@@ -24,6 +24,6 @@ test-one:
 	@$(TESTS) $(T)
 
 test-matrix:
-	@$(MAKE) -C build_matrix_runner test-sh
+	@$(MAKE) -C mixed_build_test_runner test-sh
 
 test-all: test-sh test-matrix

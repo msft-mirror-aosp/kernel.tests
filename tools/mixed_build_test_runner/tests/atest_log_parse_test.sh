@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the atest log directory parsing in build_matrix_runner.sh.
+# Tests for the atest log directory parsing in mixed_build_test_runner.sh.
 #
 # The property that matters: when atest prints no "Test logs:" line, the job
 # must degrade on its own and the matrix run must carry on. Before the fix the
@@ -23,7 +23,7 @@ require_cmd jq python3
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 SANDBOX="${TMPROOT}/sandbox"
-RUNNER="${SANDBOX}/tools/build_matrix_runner/build_matrix_runner.sh"
+RUNNER="${SANDBOX}/tools/mixed_build_test_runner/mixed_build_test_runner.sh"
 OURS="ins-cccc3333-16407304-aosp-cf-x86-64-only-phone"
 RUN_ID="fixedrun"
 
