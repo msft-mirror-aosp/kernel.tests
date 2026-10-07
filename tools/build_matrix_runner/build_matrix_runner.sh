@@ -60,6 +60,16 @@ SERIAL_OVERRIDE=""
 # Trap for cleaning up temporary files on exit/interrupt
 CVD_SERIAL_FILE=""
 ATEST_LOG_FILE=""
+# Written by launch_cvd.sh. Names the instance acloud created, which is how
+# teardown knows what to delete when the launch did not return a serial.
+CVD_REPORT_FILE=""
+# Instances that already existed when the current job started launching, and
+# whether that snapshot was actually taken. An empty snapshot from a job that
+# never launched would make every running instance look new.
+INSTANCES_BEFORE_LAUNCH=""
+LAUNCH_ATTEMPTED=false
+# Instances left running because of --keep-device, reported at the end.
+KEPT_INSTANCES=()
 
 
 
@@ -162,7 +172,167 @@ function fail_job() {
 
 function cleanup_temp_files() {
     [[ -n "${CVD_SERIAL_FILE:-}" && -f "$CVD_SERIAL_FILE" ]] && rm -f "$CVD_SERIAL_FILE"
+    [[ -n "${CVD_REPORT_FILE:-}" && -f "$CVD_REPORT_FILE" ]] && rm -f "$CVD_REPORT_FILE"
     [[ -n "${ATEST_LOG_FILE:-}" && -f "$ATEST_LOG_FILE" ]] && rm -f "$ATEST_LOG_FILE"
+    return 0
+}
+
+# --- Cuttlefish cleanup ------------------------------------------------------
+#
+# 'acloud delete --all' is never used here. It removes every Cuttlefish device
+# the user owns, including ones started by hand that have nothing to do with
+# this run. The instances belonging to the current job are identified first,
+# and when that is not possible nothing is deleted.
+
+# Echoes the acloud binary to use, or nothing if it cannot be found.
+function acloud_bin() {
+    if command -v acloud > /dev/null 2>&1; then
+        printf 'acloud'
+        return 0
+    fi
+    local prebuilt="${WORKSPACE_DIR}/../../prebuilts/asuite/acloud/linux-x86/acloud"
+    if [[ -x "$prebuilt" ]]; then
+        printf '%s' "$prebuilt"
+        return 0
+    fi
+    return 1
+}
+
+# Echoes the remote instance names acloud currently knows about, sorted, one
+# per line.
+#
+# 'acloud list' accepts --report-file but never writes it, so there is no
+# machine readable form and the name has to be read out of the parentheses:
+#   [1]device serial: 127.0.0.1:6520 cvd-1 (ins-abc-123-target) elapsed time: ...
+function acloud_instance_names() {
+    local bin
+    bin=$(acloud_bin) || return 0
+    run_with_timeout "$DEFAULT_ACLOUD_QUERY_TIMEOUT" "$bin" list 2> /dev/null \
+        | sed -n 's/.*(\(ins-[^)]*\)).*/\1/p' | sort -u || true
+}
+
+# Echoes the instance names recorded in an acloud report file.
+#
+# acloud writes the report once 'create' returns, so this works for a clean
+# failure such as acloud stopping on its own, but not for a process that was
+# killed from the outside.
+function report_instance_names() {
+    local report="${1:-}"
+    [[ -n "$report" && -s "$report" ]] || return 0
+    jq -r '((.data.devices // []) + (.data.devices_failing_boot // []))[]
+           | .instance_name // empty' "$report" 2> /dev/null \
+        | grep -v '^[[:space:]]*$' | sort -u || true
+}
+
+# Echoes the instance that appeared while this job was launching and that
+# carries this job's build id. Last resort, for when the launch was killed and
+# no report was ever written.
+#
+# Both conditions are required. "New since the launch started" on its own would
+# also match a device the user happened to start in another terminal.
+function new_instance_names() {
+    local before="${1:-}" build_id="${2:-}"
+    # Without a snapshot there is no "before" to compare against, so everything
+    # would look new. That happens when the job reused an existing device.
+    if [[ "$LAUNCH_ATTEMPTED" != "true" ]]; then
+        return 0
+    fi
+    # 'latest' is resolved by acloud, so the real id never reaches this script
+    # and there is nothing safe to match on.
+    if [[ -z "$build_id" || "$build_id" == "latest" ]]; then
+        return 0
+    fi
+    local after
+    after=$(acloud_instance_names)
+    local -a candidates=()
+    # acloud names remote instances 'ins-{uuid}-{build_id}-{build_target}'.
+    # That pattern is configurable, so no match simply means no candidates.
+    mapfile -t candidates < <(
+        comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") \
+            | grep -F -- "-${build_id}-" || true
+    )
+    # A launch creates exactly one instance. Seeing several means somebody else
+    # started a device with the same build id while this job was launching, and
+    # there is no way to tell which one is ours. Guessing here once deleted a
+    # device somebody was still using, so say nothing instead.
+    if (( ${#candidates[@]} != 1 )); then
+        if (( ${#candidates[@]} > 1 )); then
+            log_warn "Several devices with build id ${build_id} appeared while job ${JOB_ID} was launching: ${candidates[*]}"
+            log_warn "Cannot tell which one belongs to this job, so none of them will be touched."
+        fi
+        return 0
+    fi
+    printf '%s\n' "${candidates[0]}"
+}
+
+# Deletes the Cuttlefish instances created by the job that just finished.
+#
+# Three ways to identify them are tried, most reliable first. If none of them
+# produces a target, nothing is deleted and the user is told how to clean up.
+function teardown_virtual_device() {
+    local -a delete_args=()
+    local -a names=()
+
+    # 1. The launch succeeded, so the adb port identifies the device exactly.
+    if [[ -n "${SERIAL:-}" ]]; then
+        local adb_port="${SERIAL##*:}"
+        if [[ "$adb_port" =~ ^[0-9]+$ ]]; then
+            delete_args=("--adb-port" "$adb_port")
+            log_info "Deleting virtual device with adb port $adb_port."
+        else
+            log_warn "Cannot read an adb port from serial '$SERIAL'."
+        fi
+    fi
+
+    # 2. acloud stopped on its own and left a report naming the instance.
+    if (( ${#delete_args[@]} == 0 )); then
+        mapfile -t names < <(report_instance_names "${CVD_REPORT_FILE:-}")
+        if (( ${#names[@]} > 0 )); then
+            delete_args=("--instance-names" "${names[@]}")
+            log_info "Deleting instance(s) named in the acloud report: ${names[*]}"
+        fi
+    fi
+
+    # 3. No report, so fall back to what appeared during this launch.
+    if (( ${#delete_args[@]} == 0 )); then
+        mapfile -t names < <(new_instance_names "$INSTANCES_BEFORE_LAUNCH" "${PB_BUILD_ID:-}")
+        if (( ${#names[@]} > 0 )); then
+            delete_args=("--instance-names" "${names[@]}")
+            log_warn "No acloud report available. Deleting instance(s) that appeared during this launch: ${names[*]}"
+        fi
+    fi
+
+    if (( ${#delete_args[@]} == 0 )); then
+        log_warn "Could not work out which virtual device belongs to job ${JOB_ID}, so nothing was deleted."
+        log_warn "Check 'acloud list' and remove leftovers with 'acloud delete --instance-names <name>'."
+        return 0
+    fi
+
+    local bin
+    if ! bin=$(acloud_bin); then
+        log_warn "Could not find the acloud binary, so the virtual device was not deleted."
+        return 0
+    fi
+
+    log_info "Tearing down virtual device..."
+    # acloud raises an uncaught exception when an instance has already gone
+    # away, so a non-zero status here is normal and must not stop the run.
+    run_with_timeout "$DEFAULT_ACLOUD_DELETE_TIMEOUT" "$bin" delete "${delete_args[@]}" \
+        || log_warn "acloud delete did not finish cleanly. Check 'acloud list' for leftovers."
+    return 0
+}
+
+# Remembers the instances this job left running, so the summary can name them
+# instead of telling the user to delete everything.
+function record_kept_instances() {
+    local -a names=()
+    mapfile -t names < <(report_instance_names "${CVD_REPORT_FILE:-}")
+    if (( ${#names[@]} == 0 )); then
+        mapfile -t names < <(new_instance_names "$INSTANCES_BEFORE_LAUNCH" "${PB_BUILD_ID:-}")
+    fi
+    if (( ${#names[@]} > 0 )); then
+        KEPT_INSTANCES+=("${names[@]}")
+    fi
     return 0
 }
 
@@ -470,6 +640,8 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
     SERIAL=""
     JOB_FAILED=false
     TESTS_FAILED=false
+    INSTANCES_BEFORE_LAUNCH=""
+    LAUNCH_ATTEMPTED=false
 
     if [[ "$DEVICE_TYPE" == "virtual" ]]; then
         skip_launch=false
@@ -491,11 +663,18 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
 
         if [[ "$skip_launch" == "false" ]]; then
             CVD_SERIAL_FILE=$(mktemp)
+            CVD_REPORT_FILE=$(mktemp)
+            # Note what is already running. If the launch has to be killed there
+            # will be no acloud report, and this is the only way left to tell
+            # which instance it created.
+            INSTANCES_BEFORE_LAUNCH=$(acloud_instance_names)
+            LAUNCH_ATTEMPTED=true
             log_info "Launching virtual device (timeout ${LAUNCH_TIMEOUT})..."
 
             set +e
             run_with_timeout "$LAUNCH_TIMEOUT" \
-                "${LAUNCH_CVD_SCRIPT}" "${LAUNCH_ARGS[@]}" -so "$CVD_SERIAL_FILE"
+                "${LAUNCH_CVD_SCRIPT}" "${LAUNCH_ARGS[@]}" \
+                -so "$CVD_SERIAL_FILE" -rf "$CVD_REPORT_FILE"
             LAUNCH_STATUS=$?
             set -e
 
@@ -603,32 +782,15 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
     if [[ "$DEVICE_TYPE" == "virtual" ]]; then
         if [[ "$KEEP_DEVICE" == "true" ]]; then
             log_info "Skipping virtual device teardown (--keep-device)."
+            record_kept_instances
         else
-            log_info "Tearing down virtual device..."
-            DELETE_ARGS=("--all")
-            if [[ -n "${SERIAL:-}" ]]; then
-                ADB_PORT="${SERIAL##*:}"
-                if [[ "$ADB_PORT" =~ ^[0-9]+$ ]]; then
-                    DELETE_ARGS=("--adb-port" "$ADB_PORT")
-                    log_info "Targeting device with adb port: $ADB_PORT"
-                else
-                    log_warn "Cannot extract port from serial '$SERIAL', falling back to --all"
-                fi
-            fi
-
-            if check_command "acloud"; then
-                acloud delete "${DELETE_ARGS[@]}"
-            else
-                log_warn "acloud not found in PATH, trying to locate..."
-                # Try to find acloud in platform repo if possible, or skip
-                ACLOUD_PREBUILT="${WORKSPACE_DIR}/../../prebuilts/asuite/acloud/linux-x86/acloud"
-                if [[ -x "$ACLOUD_PREBUILT" ]]; then
-                    "$ACLOUD_PREBUILT" delete "${DELETE_ARGS[@]}"
-                else
-                    log_warn "Could not find acloud binary to delete CVD."
-                fi
-            fi
+            teardown_virtual_device
         fi
+    fi
+
+    if [[ -n "$CVD_REPORT_FILE" ]]; then
+        rm -f "$CVD_REPORT_FILE"
+        CVD_REPORT_FILE=""
     fi
 
     if [[ "$JOB_FAILED" == "false" && "$TESTS_FAILED" == "false" ]]; then
@@ -695,7 +857,15 @@ fi
 
 if [[ "$KEEP_DEVICE" == "true" ]]; then
     log_warn "Virtual devices were kept alive due to --keep-device or --reuse-device."
-    log_warn "Please run 'acloud delete --all' manually when you are done to free resources."
+    if (( ${#KEPT_INSTANCES[@]} > 0 )); then
+        mapfile -t KEPT_INSTANCES < <(printf '%s\n' "${KEPT_INSTANCES[@]}" | sort -u)
+        # Naming them explicitly matters: 'acloud delete --all' would also take
+        # out devices this run never touched.
+        log_warn "Free them when you are done with:"
+        log_warn "  acloud delete --instance-names ${KEPT_INSTANCES[*]}"
+    else
+        log_warn "Run 'acloud list' to find them, then free each one with 'acloud delete --instance-names <name>'."
+    fi
 fi
 echo "==========================================================="
 

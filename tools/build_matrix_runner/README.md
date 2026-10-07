@@ -143,6 +143,35 @@ The script tracks the outcome of every job and categorizes them into three disti
 | `--reuse-device` | Look for an existing, running virtual device from a previous job and reuse it instead of launching a new one. **Implies `--keep-device`**. This massively speeds up testing on the same machine. |
 | `--skip-initial-flash` | Skip the physical device flashing step (`flash_device.sh`) **only** for the first physical job in the queue. Extremely useful when resuming a matrix on a device that is already flashed. |
 
+### How virtual devices are cleaned up
+
+The runner never issues `acloud delete --all`. That would remove every
+Cuttlefish device you own, including ones you started by hand in another
+terminal. Instead it works out which instance belongs to the job, trying three
+things in order:
+
+1. **The adb port**, when the launch succeeded and returned a serial. This is
+   exact.
+2. **The acloud report file**, when acloud stopped on its own — for example
+   because it hit its own boot timeout. The report names the instance.
+3. **The one instance that appeared during the launch and carries this job's
+   build id.** This is the only evidence left when the launch had to be killed,
+   because acloud writes its report after `create` returns and never gets that
+   far. A launch creates exactly one instance, so if several matching devices
+   appeared at once — which happens when you start a device with the same build
+   id in another terminal — the runner cannot tell them apart and **leaves all
+   of them alone**.
+
+If none of these identifies an instance, **nothing is deleted** and the run
+prints the `acloud delete --instance-names` command to finish the job by hand.
+The same applies with `--keep-device`: the summary at the end names the
+instances that were left running.
+
+> A launch that is killed by `launch_timeout` leaves the remote instance behind
+> for a moment. Killing the process cannot reach into the cloud, which is why
+> step 3 above exists. If you interrupt the runner with Ctrl-C the teardown does
+> not run at all, so check `acloud list` afterwards.
+
 ---
 
 ## Resuming Interrupted Runs
