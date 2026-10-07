@@ -68,7 +68,11 @@ function generate_config_template() {
 {
   "_comment": "Template for build_matrix_runner.sh",
   "global_config": {
-    "test_suite": "vts_ltp_test_x86_64"
+    "test_suite": "vts_ltp_test_x86_64",
+    "_comment_timeouts": "Optional. GNU timeout duration strings. See README.md.",
+    "flash_timeout": "30m",
+    "test_timeout": "3h",
+    "device_wait_timeout": "3m"
   },
   "jobs": [
     {
@@ -324,6 +328,20 @@ if [[ -z "$TEST_SUITE" ]]; then
 fi
 log_info "Test Suite: $TEST_SUITE"
 
+# Per-job safety nets. These are backstops against a wedged device or transport,
+# not normal-path budgets: a healthy cold-cache flash can legitimately take tens
+# of minutes because of the artifact download.
+FLASH_TIMEOUT=$(jq -r '.global_config.flash_timeout // empty' "$JSON_FILE")
+FLASH_TIMEOUT="${FLASH_TIMEOUT:-$DEFAULT_FLASH_TIMEOUT}"
+TEST_TIMEOUT=$(jq -r '.global_config.test_timeout // empty' "$JSON_FILE")
+TEST_TIMEOUT="${TEST_TIMEOUT:-$DEFAULT_TEST_TIMEOUT}"
+# How long to keep looking for the device after it has been flashed and
+# rebooted. A bridged device (Pontis) can take tens of seconds to come back.
+DEVICE_WAIT_TIMEOUT=$(jq -r '.global_config.device_wait_timeout // empty' "$JSON_FILE")
+DEVICE_WAIT_TIMEOUT="${DEVICE_WAIT_TIMEOUT:-$DEFAULT_DEVICE_WAIT_TIMEOUT}"
+log_info "Timeouts: flash=${FLASH_TIMEOUT}, test=${TEST_TIMEOUT}, \
+device_wait=${DEVICE_WAIT_TIMEOUT}"
+
 # Get number of jobs
 NUM_JOBS=$(jq '.jobs | length' "$JSON_FILE")
 
@@ -503,12 +521,15 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
                 SKIP_INITIAL_FLASH=false # Turn it off after the first use
             fi
             if [[ "$skip_flash" == "false" ]]; then
-                log_info "Flashing physical device with serial: $SERIAL..."
+                log_info "Flashing physical device with serial: $SERIAL (timeout ${FLASH_TIMEOUT})..."
                 set +e
-                "${FLASH_DEVICE_SCRIPT}" -s "$SERIAL" "${LAUNCH_ARGS[@]}"
+                run_with_timeout "$FLASH_TIMEOUT" \
+                    "${FLASH_DEVICE_SCRIPT}" -s "$SERIAL" "${LAUNCH_ARGS[@]}"
                 LAUNCH_STATUS=$?
                 set -e
-                if [[ $LAUNCH_STATUS -ne 0 ]]; then
+                if (( LAUNCH_STATUS == EXIT_TIMEOUT )); then
+                    fail_job "Flashing physical device timed out after ${FLASH_TIMEOUT}."
+                elif (( LAUNCH_STATUS != 0 )); then
                     fail_job "Flashing physical device failed."
                 fi
             fi
@@ -518,20 +539,21 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
     fi
 
     if [[ "$JOB_FAILED" == "false" && -n "$SERIAL" ]]; then
-        log_info "Initializing device context for $SERIAL..."
-        if ! device_util::init "$SERIAL"; then
+        log_info "Initializing device context for $SERIAL (wait up to ${DEVICE_WAIT_TIMEOUT})..."
+        if ! device_util::init "$SERIAL" "$DEVICE_WAIT_TIMEOUT"; then
             fail_job "Failed to initialize device_util for serial $SERIAL"
         else
             adb_serial=$(device_util::get_adb_serial)
             if [[ -z "$adb_serial" ]]; then
                 fail_job "Could not resolve ADB serial for device $SERIAL"
             else
-                log_info "Running tests on ADB device $adb_serial..."
+                log_info "Running tests on ADB device $adb_serial (timeout ${TEST_TIMEOUT})..."
                 ATEST_LOG_FILE=$(mktemp)
 
                 # Run test
                 set +e
-                "${RUN_TEST_SCRIPT}" --no-force-wifi-connection -ta --no-fail-fast -s "$adb_serial" -t "$TEST_SUITE" 2>&1 | tee "$ATEST_LOG_FILE"
+                run_with_timeout "$TEST_TIMEOUT" \
+                    "${RUN_TEST_SCRIPT}" --no-force-wifi-connection -ta --no-fail-fast -s "$adb_serial" -t "$TEST_SUITE" 2>&1 | tee "$ATEST_LOG_FILE"
                 TEST_STATUS=${PIPESTATUS[0]}
                 set -e
 
@@ -539,6 +561,8 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
                     if grep -q -E "Passed: [0-9]+, Failed: [0-9]+" "$ATEST_LOG_FILE"; then
                         log_warn "Tests completed with failures for job $JOB_ID."
                         TESTS_FAILED=true
+                    elif (( TEST_STATUS == EXIT_TIMEOUT )); then
+                        fail_job "Tests timed out after ${TEST_TIMEOUT} for job $JOB_ID."
                     else
                         fail_job "run_test_only.sh crashed or failed to run tests for job $JOB_ID (Exit $TEST_STATUS)."
                     fi

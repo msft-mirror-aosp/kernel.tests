@@ -34,7 +34,7 @@ DEVICE_KERNEL_VERSION=
 LOCAL_FLASH_CLI=
 CL_FLASH_CLI=
 SYSTEM_DLKM_INFO=
-readonly REQUIRED_COMMANDS=("adb" "dirname" "fastboot")
+readonly REQUIRED_COMMANDS=("adb" "dirname" "fastboot" "timeout")
 THROUGH_PONTIS=false
 USE_DSU=false
 FORCE_DEBUGGABLE=true
@@ -1207,6 +1207,27 @@ function is_device_in_adb() {
             log_info "Success: Device '$target_serial' is connected in adb."
             return 0 # Succeed. Device is in adb
         fi
+    done
+
+    # Pontis bridges remote devices onto localhost, so they appear as
+    # 'tcp:127.0.0.1:<port>' rather than as the hardware serial. Resolve that
+    # mapping directly instead of getprop-probing every attached device.
+    if [[ -z "$ADB_SERIAL_NUMBER" ]]; then
+        local pontis_ep
+        if pontis_ep=$(pontis_endpoint_for "$target_serial" "ADB"); then
+            if printf '%s\n' "${adb_serials[@]}" | grep -qxF -- "$pontis_ep"; then
+                DEVICE_SERIAL_NUMBER="$target_serial"
+                ADB_SERIAL_NUMBER="$pontis_ep"
+                THROUGH_PONTIS=true
+                log_info "Success: Device '$target_serial' resolved via Pontis to '$pontis_ep'."
+                return 0
+            fi
+            log_warn "Pontis reports '$target_serial' at '$pontis_ep', but it is \
+not an available adb device. Falling back to probing."
+        fi
+    fi
+
+    for adb_serial in "${adb_serials[@]}"; do
         if [[ -z "$ADB_SERIAL_NUMBER" ]]; then
             local hw_serial
             hw_serial=$(adb_getprop "$adb_serial" "ro.serialno")
@@ -1243,9 +1264,30 @@ function is_device_in_fastboot() {
             log_info "Success: Device '$target_serial' found in fastboot mode."
             return 0 # Succeed. Device is in fastboot
         fi
+    done
+
+    # Same Pontis mapping as in is_device_in_adb. Doing this before the probe
+    # loop below matters: 'fastboot getvar' over a TCP transport is slow at best
+    # and hangs outright when the Pontis tunnel is stale.
+    if [[ -z "$FASTBOOT_SERIAL_NUMBER" ]]; then
+        local pontis_ep
+        if pontis_ep=$(pontis_endpoint_for "$target_serial" "Fastboot"); then
+            if printf '%s\n' "${fastboot_serials[@]}" | grep -qxF -- "$pontis_ep"; then
+                DEVICE_SERIAL_NUMBER="$target_serial"
+                FASTBOOT_SERIAL_NUMBER="$pontis_ep"
+                THROUGH_PONTIS=true
+                log_info "Success: Device '$target_serial' resolved via Pontis to '$pontis_ep'."
+                return 0
+            fi
+            log_warn "Pontis reports '$target_serial' at '$pontis_ep', but \
+'fastboot devices' does not list it. Falling back to probing."
+        fi
+    fi
+
+    for fastboot_serial in "${fastboot_serials[@]}"; do
         if [[ -z "$FASTBOOT_SERIAL_NUMBER" ]]; then
             local hw_serial
-            hw_serial=$(_parse_fastboot_var "$(fastboot -s "$fastboot_serial" getvar serialno 2>&1)")
+            hw_serial=$(fastboot_getvar "$fastboot_serial" "serialno") || continue
             if [[ -n "$hw_serial" && "$hw_serial" == "$target_serial" ]]; then
                 DEVICE_SERIAL_NUMBER="$hw_serial"
                 FASTBOOT_SERIAL_NUMBER="$fastboot_serial"
@@ -1547,9 +1589,10 @@ function flash_gsi_build() {
     else
         log_info "Flashing GSI build $GSI_BUILD with fastboot"
         reboot_device_into_bootloader
-        local _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar current-slot 2>&1)
-        local _current_slot=$(echo "$_output" | grep "^current-slot:" | awk '{print $2}')
-        local _pvmfw_partition_output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar has-slot:pvmfw 2>&1)
+        local _current_slot
+        _current_slot=$(fastboot_getvar "$FASTBOOT_SERIAL_NUMBER" "current-slot") || _current_slot=""
+        local _pvmfw_partition_output
+        _pvmfw_partition_output=$(fastboot_getvar "$FASTBOOT_SERIAL_NUMBER" "has-slot:pvmfw") || _pvmfw_partition_output=""
         _flash_cmd="fastboot -s $FASTBOOT_SERIAL_NUMBER -w"
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER reboot-fastboot && sleep 3"
         _flash_cmd+=" && fastboot -s $FASTBOOT_SERIAL_NUMBER delete-logical-partition product_$_current_slot"
@@ -1911,13 +1954,6 @@ BUILD_TYPE=$BUILD_TYPE, SYSTEM_DLKM_INFO=$SYSTEM_DLKM_INFO, DEVICE_KERNEL_STRING
     extract_device_kernel_version "$DEVICE_KERNEL_STRING"
 }
 
-# Helper function to robustly parse output from 'fastboot getvar'
-_parse_fastboot_var() {
-    local raw_output="$1"
-    # Use awk to find the first line, split by ':', trail whitespance and print the value.
-    echo "$raw_output" | awk 'NR=1{print; exit}' | cut -d ':' -f 2 | tr -d '[:space:]'
-}
-
 function get_device_info_from_fastboot() {
     # Only get DEVICE_SERIAL_NUMBER if it's not already set
     if [[ -z "$DEVICE_SERIAL_NUMBER" ]]; then
@@ -1925,9 +1961,9 @@ function get_device_info_from_fastboot() {
 
         # Use a loop to handle the retry logic cleanly
         for attempt in 1 2; do
-            local _output
-            _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar serialno 2>&1)
-            DEVICE_SERIAL_NUMBER=$(_parse_fastboot_var "$_output")
+            local _getvar_status=0
+            DEVICE_SERIAL_NUMBER=$(fastboot_getvar "$FASTBOOT_SERIAL_NUMBER" "serialno") \
+                || _getvar_status=$?
 
             # If we got a serial number, break the loop
             if [[ -n "$DEVICE_SERIAL_NUMBER" ]]; then
@@ -1935,8 +1971,16 @@ function get_device_info_from_fastboot() {
                 break
             fi
 
-            # If it's the first failed attempt, reboot and retry
+            # If it's the first failed attempt, reboot and retry. A timeout means
+            # the transport itself is unresponsive, so rebooting via that same
+            # transport cannot help; fail fast instead of waiting twice.
             if (( attempt == 1 )); then
+                if (( _getvar_status == EXIT_TIMEOUT )); then
+                    log_error "Fastboot transport '$FASTBOOT_SERIAL_NUMBER' is not responding. \
+If this is a Pontis endpoint, check the bridge at https://pontis.corp.google.com/ on the host \
+the device is physically attached to."
+                    break
+                fi
                 log_warn "Command returned nothing. Rebooting into bootloader and retrying..."
                 reboot_device_into_bootloader
             fi
@@ -1952,9 +1996,7 @@ function get_device_info_from_fastboot() {
     # Only get PRODUCT if it's not already set
     if [[ -z "$PRODUCT" ]]; then
         log_info "Attempting to get product name from $FASTBOOT_SERIAL_NUMBER..."
-        local _output
-        _output=$(fastboot -s "$FASTBOOT_SERIAL_NUMBER" getvar product 2>&1)
-        PRODUCT=$(_parse_fastboot_var "$_output")
+        PRODUCT=$(fastboot_getvar "$FASTBOOT_SERIAL_NUMBER" "product") || PRODUCT=""
 
         if [[ -z "$PRODUCT" ]]; then
             log_error "Could not get a valid product value for $FASTBOOT_SERIAL_NUMBER."

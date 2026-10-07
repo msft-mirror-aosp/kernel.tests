@@ -16,10 +16,26 @@ readonly __COMMON_LIB_SOURCED__=1
 readonly EXIT_SUCCESS=0
 readonly EXIT_FAILURE=1
 readonly EXIT_SETUP_FAILED=255
+# Matches the convention of GNU coreutils 'timeout', which exits 124 when the
+# command times out (and 128+SIGKILL=137 when --kill-after has to step in).
+readonly EXIT_TIMEOUT=124
 
 # Test specific status codes (aliases for readability)
 readonly TEST_PASSED=0
 readonly TEST_FAILED=1
+
+# --- Timeout Defaults ---
+# Deliberately NOT readonly: callers (and the environment) may tune these.
+# Every value is a GNU 'timeout' DURATION string (e.g. '5s', '30m', '3h').
+TIMEOUT_KILL_GRACE="${TIMEOUT_KILL_GRACE:-10s}"       # SIGTERM -> SIGKILL grace
+DEFAULT_ADB_TIMEOUT="${DEFAULT_ADB_TIMEOUT:-5s}"      # single adb query
+DEFAULT_FASTBOOT_TIMEOUT="${DEFAULT_FASTBOOT_TIMEOUT:-15s}"  # single fastboot query
+DEFAULT_FLASH_TIMEOUT="${DEFAULT_FLASH_TIMEOUT:-30m}" # whole flash_device.sh run
+DEFAULT_TEST_TIMEOUT="${DEFAULT_TEST_TIMEOUT:-3h}"    # whole atest run
+# How long to keep waiting for a device to show up, and how often to re-check.
+# A bridged device (Pontis) can take tens of seconds to reappear after a reboot.
+DEFAULT_DEVICE_WAIT_TIMEOUT="${DEFAULT_DEVICE_WAIT_TIMEOUT:-3m}"
+DEFAULT_DEVICE_POLL_INTERVAL="${DEFAULT_DEVICE_POLL_INTERVAL:-5s}"
 
 # --- Constants ---
 readonly FETCH_SCRIPT_PATH_IN_REPO="kernel/tests/tools/fetch_artifact.sh"
@@ -65,6 +81,12 @@ fi
 
 if ! command -v date &> /dev/null; then
     echo "[ERROR] common_lib.sh: Required command 'date' not found. Timestamping will fail." >&2
+    return $EXIT_FAILURE
+fi
+
+if ! command -v timeout &> /dev/null; then
+    echo "[ERROR] common_lib.sh: Required command 'timeout' (coreutils) not found. \
+run_with_timeout() and every adb/fastboot guard depend on it." >&2
     return $EXIT_FAILURE
 fi
 
@@ -697,6 +719,170 @@ function run_command() {
     fi
 
     return $status_code
+}
+
+# Runs a command under a hard wall-clock timeout.
+#
+# Arguments:
+#   $1 - Timeout duration, a GNU 'timeout' DURATION string (e.g. '15s', '30m').
+#   $@ - The command and its arguments.
+#
+# Returns:
+#   The command's own exit code, or $EXIT_TIMEOUT if it had to be killed.
+#
+# Notes:
+#   * stdout/stderr are passed straight through, so this works both bare
+#     (streaming, e.g. piped to tee) and inside $(...) (capturing).
+#   * On success this function emits NO log output of its own, so capturing
+#     callers never get log noise mixed into the captured value.
+#   * '--foreground' is intentionally NOT used. Without it, 'timeout' places the
+#     child in its own process group and signals the entire group, so
+#     grandchildren (fetch_artifact, fastboot, ...) are cleaned up too. With
+#     '--foreground' they survive and keep holding the device.
+#   * Returns non-zero on timeout, so under 'set -e' callers MUST invoke this in
+#     a condition or append '|| rc=$?'.
+function run_with_timeout() {
+    local duration="$1"
+    shift
+
+    if [[ -z "$duration" ]] || (( $# == 0 )); then
+        log_error "Usage: run_with_timeout <duration> <command> [args...]"
+        return $EXIT_FAILURE
+    fi
+
+    local status_code=0
+    timeout -k "$TIMEOUT_KILL_GRACE" "$duration" "$@" || status_code=$?
+
+    # 124: terminated by SIGTERM at the deadline.
+    # 137: 128+9, the --kill-after SIGKILL had to be used.
+    if (( status_code == 124 || status_code == 137 )); then
+        log_warn "Timed out after ${duration}: $*"
+        return $EXIT_TIMEOUT
+    fi
+
+    return $status_code
+}
+
+# Converts a GNU 'timeout' style DURATION string into whole seconds.
+#
+# Arguments:
+#   $1 - Duration string: a non-negative integer with an optional s/m/h/d
+#        suffix, e.g. '30', '45s', '3m', '2h', '1d'.
+#
+# Returns:
+#   $EXIT_SUCCESS and writes the number of seconds to stdout, or $EXIT_FAILURE
+#   for anything it cannot parse.
+#
+# Notes:
+#   * Fractional durations such as '1.5m' are rejected on purpose. Everything in
+#     this tree uses whole units, and accepting floats would mean callers could
+#     not do integer arithmetic on the result.
+function duration_to_seconds() {
+    local spec="$1"
+
+    if [[ ! "$spec" =~ ^([0-9]+)([smhd]?)$ ]]; then
+        log_error "Invalid duration '$spec'. Expected e.g. '30', '45s', '3m', '2h'."
+        return $EXIT_FAILURE
+    fi
+
+    # Force base 10: a zero-padded value like '08' would otherwise be read as an
+    # invalid octal literal and abort the arithmetic.
+    local value=$(( 10#${BASH_REMATCH[1]} ))
+
+    case "${BASH_REMATCH[2]}" in
+        ""|s) printf '%s' "$value" ;;
+        m)    printf '%s' "$(( value * 60 ))" ;;
+        h)    printf '%s' "$(( value * 3600 ))" ;;
+        d)    printf '%s' "$(( value * 86400 ))" ;;
+    esac
+    return $EXIT_SUCCESS
+}
+
+# Polls a command until it succeeds or the budget runs out.
+#
+# This is the counterpart to run_with_timeout(): that one bounds a single slow
+# command, this one retries a fast command that is expected to fail for a while
+# and then recover (a device rebooting, a bridge reconnecting, a service warming
+# up).
+#
+# Arguments:
+#   $1 - Total budget, a DURATION string. '0' means "try exactly once and do not
+#        wait", which keeps this usable at call sites that must not block.
+#   $2 - Delay between attempts, a DURATION string.
+#   $3 - Human readable description of what is being waited for, used in logs.
+#   $@ - The command and its arguments.
+#
+# Returns:
+#   $EXIT_SUCCESS as soon as the command succeeds, $EXIT_TIMEOUT if the budget
+#   ran out, or $EXIT_FAILURE if the arguments were invalid.
+#
+# Notes:
+#   * The command runs in the CURRENT shell, not a subshell, so a shell function
+#     passed here can still set global variables. Do not "tidy" this into
+#     $(...) or a pipeline.
+#   * The command is always attempted at least once, even with a budget of 0.
+#   * No sleep happens after the final attempt, so this returns as soon as the
+#     budget is spent rather than one interval later.
+#   * Returns non-zero on timeout, so under 'set -e' callers MUST invoke this in
+#     a condition or append '|| rc=$?'.
+function wait_for_condition() {
+    local timeout_spec="$1"
+    local interval_spec="$2"
+    local description="$3"
+    shift 3
+
+    if [[ -z "$timeout_spec" || -z "$interval_spec" || -z "$description" ]] \
+            || (( $# == 0 )); then
+        log_error "Usage: wait_for_condition <timeout> <interval> <description> \
+<command> [args...]"
+        return $EXIT_FAILURE
+    fi
+
+    local timeout_sec interval_sec
+    timeout_sec=$(duration_to_seconds "$timeout_spec") || return $EXIT_FAILURE
+    interval_sec=$(duration_to_seconds "$interval_spec") || return $EXIT_FAILURE
+
+    if (( interval_sec <= 0 )); then
+        log_error "wait_for_condition interval must be greater than zero."
+        return $EXIT_FAILURE
+    fi
+
+    local deadline=$(( $(date +%s) + timeout_sec ))
+    local attempt=0
+
+    while true; do
+        # Plain assignment, not '(( attempt++ ))'. An arithmetic command whose
+        # expression evaluates to zero returns exit status 1, and a
+        # post-increment from 0 does exactly that, which would abort the first
+        # iteration for anyone running under 'set -e'.
+        attempt=$(( attempt + 1 ))
+
+        if "$@"; then
+            if (( attempt > 1 )); then
+                log_info "Success after ${attempt} attempts: ${description}"
+            fi
+            return $EXIT_SUCCESS
+        fi
+
+        local now
+        now=$(date +%s)
+        # Stop if the next attempt would land past the deadline. Sleeping first
+        # and checking afterwards would overshoot the budget every time.
+        if (( now + interval_sec > deadline )); then
+            break
+        fi
+
+        log_info "Still waiting for ${description}. Retrying in ${interval_sec}s \
+($(( deadline - now ))s left)."
+        sleep "$interval_sec"
+    done
+
+    # A budget of 0 is an explicit "just check once", so do not dress the result
+    # up as a timeout in the logs.
+    if (( timeout_sec > 0 )); then
+        log_error "Gave up after ${timeout_spec} waiting for ${description}."
+    fi
+    return $EXIT_TIMEOUT
 }
 
 function common_lib::validate_manifest_build_type() {
