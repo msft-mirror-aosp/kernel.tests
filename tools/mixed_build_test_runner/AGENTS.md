@@ -1,4 +1,4 @@
-# Working on `build_matrix_runner`
+# Working on `mixed_build_test_runner`
 
 Rules for anyone — human or agent — changing anything under
 `kernel/tests/tools/`. This file is loaded automatically when you edit files in
@@ -11,7 +11,7 @@ to *work on* the code.
 
 | Path | What it is |
 | :--- | :--- |
-| `build_matrix_runner.sh` | the runner itself, plain bash |
+| `mixed_build_test_runner.sh` | the runner itself, plain bash |
 | `configs/*.template.json` | example matrices; the only tracked configs, mirrored to AOSP, so placeholders and `"latest"` only |
 | `configs/*.json` (others) | personal matrices, gitignored |
 | `reporter/` | Python package that renders the HTML report |
@@ -35,7 +35,7 @@ While iterating, `make test-fast` skips the cases that wait for real timeouts.
 For the Python reporter:
 
 ```bash
-cd kernel/tests/tools/build_matrix_runner
+cd kernel/tests/tools/mixed_build_test_runner
 make setup           # once
 make lint typecheck test-py
 ```

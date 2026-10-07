@@ -1,4 +1,4 @@
-# Shell tests for `build_matrix_runner.sh`
+# Shell tests for `mixed_build_test_runner.sh`
 
 These drive the runner end to end inside a sandbox where `launch_cvd.sh`,
 `flash_device.sh`, `run_test_only.sh`, `adb`, `acloud` and `pontis` are all
@@ -11,7 +11,7 @@ from there too.
 ## Running them
 
 ```bash
-cd kernel/tests/tools/build_matrix_runner
+cd kernel/tests/tools/mixed_build_test_runner
 
 make test          # shell suites + the Python reporter tests
 make test-sh       # shell suites only (no venv needed)

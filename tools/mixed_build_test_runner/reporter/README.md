@@ -1,8 +1,8 @@
 # Matrix Reporter
 
-`matrix-reporter` is the Python-based data processing and visualization engine used by the `build_matrix_runner`.
+`matrix-reporter` is the Python-based data processing and visualization engine used by the `mixed_build_test_runner`.
 
-While the main bash script (`build_matrix_runner.sh`) handles device provisioning and running the actual tests, this module is strictly responsible for parsing the resulting ATest JSON logs, aggregating the data, and generating the final Terminal, HTML, CSV, and Markdown reports.
+While the main bash script (`mixed_build_test_runner.sh`) handles device provisioning and running the actual tests, this module is strictly responsible for parsing the resulting ATest JSON logs, aggregating the data, and generating the final Terminal, HTML, CSV, and Markdown reports.
 
 You can use this tool as a standalone CLI to **manually regenerate reports** from raw logs without needing to rerun the tests.
 
@@ -12,7 +12,7 @@ You can use this tool as a standalone CLI to **manually regenerate reports** fro
 
 This module runs in an isolated Python Virtual Environment to avoid dependency conflicts. The setup process is fully automated by the parent directory's Makefile.
 
-To install it, simply go to the parent directory (`build_matrix_runner`) and run:
+To install it, simply go to the parent directory (`mixed_build_test_runner`) and run:
 ```bash
 make setup
 ```
@@ -63,7 +63,7 @@ cd reporter
 
 If you want to modify how the HTML looks (in `templates/matrix_report.html.j2`) or change the Python parsing logic (`src/matrix_reporter/`), please ensure your code passes all checks before submitting a CL.
 
-All development commands should be executed from the **parent directory** (`build_matrix_runner/`):
+All development commands should be executed from the **parent directory** (`mixed_build_test_runner/`):
 
 ```bash
 # Auto-format code

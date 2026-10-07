@@ -4,8 +4,8 @@ Tests for the scripts that live one directory up: `common_lib.sh`,
 `lib/device_util.sh`, `launch_cvd.sh` and the device-detection helpers in
 `flash_device.sh`.
 
-Tests for `build_matrix_runner.sh` itself live in
-[`../build_matrix_runner/tests/`](../build_matrix_runner/tests/).
+Tests for `mixed_build_test_runner.sh` itself live in
+[`../mixed_build_test_runner/tests/`](../mixed_build_test_runner/tests/).
 
 ## Running them
 
@@ -15,7 +15,7 @@ cd kernel/tests/tools
 make test                  # everything
 make test-fast             # skip the cases that wait for real timeouts
 make test-one T=device_util   # only suites matching 'device_util'
-make test-all              # also runs the build_matrix_runner suites
+make test-all              # also runs the mixed_build_test_runner suites
 ```
 
 Or directly:
@@ -49,7 +49,7 @@ the framework this repository already had.
 Everything else uses the lightweight harness in `lib/test_common.sh`. Those
 suites grew out of debugging sessions and were adopted as regression tests
 as-is; porting them to shunit2 is tracked as follow-up work in
-[`../build_matrix_runner/HANDOFF.md`](../build_matrix_runner/HANDOFF.md).
+[`../mixed_build_test_runner/HANDOFF.md`](../mixed_build_test_runner/HANDOFF.md).
 
 **New tests should prefer shunit2.**
 

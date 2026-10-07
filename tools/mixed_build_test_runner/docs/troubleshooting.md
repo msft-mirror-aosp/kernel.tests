@@ -113,7 +113,7 @@ was found. Two instances appearing at once, because a colleague started one
 during our launch, must never be resolved by guessing. "--all" is never
 correct.
 
-**Guarded by** [tools/build_matrix_runner/tests/device_cleanup_test.sh](../tests/device_cleanup_test.sh).
+**Guarded by** [tools/mixed_build_test_runner/tests/device_cleanup_test.sh](../tests/device_cleanup_test.sh).
 
 ---
 
@@ -127,7 +127,7 @@ A timeout is necessary but never sufficient. Teardown has to run as well, and
 it has to run even when the job failed, which is why a failing step must not
 abort the script (see section 6).
 
-**Guarded by** [tools/build_matrix_runner/tests/device_cleanup_test.sh](../tests/device_cleanup_test.sh),
+**Guarded by** [tools/mixed_build_test_runner/tests/device_cleanup_test.sh](../tests/device_cleanup_test.sh),
 which asserts teardown still happens after every failure mode.
 
 ---
@@ -142,7 +142,7 @@ instance leaked.
 **Rule.** A job may fail. The run may not. Anything that can legitimately find
 nothing needs "|| true" and an explicit check afterwards.
 
-**Guarded by** [tools/build_matrix_runner/tests/atest_log_parse_test.sh](../tests/atest_log_parse_test.sh),
+**Guarded by** [tools/mixed_build_test_runner/tests/atest_log_parse_test.sh](../tests/atest_log_parse_test.sh),
 which also patches the old line back into a sandbox copy to prove the bug was
 real.
 

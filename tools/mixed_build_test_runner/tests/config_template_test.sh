@@ -12,7 +12,7 @@
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER_DIR="$(dirname "${TESTS_DIR}")"
 TOOLS_DIR="$(dirname "${RUNNER_DIR}")"
-RUNNER="${RUNNER_DIR}/build_matrix_runner.sh"
+RUNNER="${RUNNER_DIR}/mixed_build_test_runner.sh"
 CONFIGS_DIR="${RUNNER_DIR}/configs"
 VIRTUAL_TEMPLATE="${CONFIGS_DIR}/ltp_virtual.template.json"
 PHYSICAL_TEMPLATE="${CONFIGS_DIR}/ltp_physical.template.json"
