@@ -758,7 +758,12 @@ for (( i=0; i<$NUM_JOBS; i++ )); do
 
                 # Parse ATest stdout for log directory
                 # Expected format: Test logs: /tmp/atest_result_chihsheng/20260901_151720_7bzv8uvp/log
-                ATEST_LOG_DIR=$(grep 'Test logs:' "$ATEST_LOG_FILE" | awk '{print $3}' | sed 's|/log$||' | head -n 1)
+                # Finding nothing is normal when atest timed out or crashed
+                # before printing that line. The script runs under 'set -e'
+                # with 'pipefail', so the failing grep would end the whole run
+                # instead of just this job. Keep going with an empty path.
+                ATEST_LOG_DIR=$(grep 'Test logs:' "$ATEST_LOG_FILE" \
+                    | awk '{print $3}' | sed 's|/log$||' | head -n 1) || true
 
                 REPORT_DEST="${REPORTS_DIR}/${RUN_ID}/${JOB_ID}"
                 mkdir -p "$REPORT_DEST"
