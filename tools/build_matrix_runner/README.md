@@ -44,7 +44,10 @@ A standard configuration looks like this:
 ```json
 {
   "global_config": {
-    "test_suite": "vts_ltp_test_x86_64"
+    "test_suite": "vts_ltp_test_x86_64",
+    "flash_timeout": "30m",
+    "test_timeout": "3h",
+    "device_wait_timeout": "3m"
   },
   "jobs": [
     {
@@ -69,6 +72,34 @@ A standard configuration looks like this:
 ```
 * **`device_type`**: Must be `"virtual"` (Cuttlefish) or `"physical"`.
 * **`builds`**: Defines the artifacts to fetch (`pb`: Platform Build, `kb`: Kernel Build, `vkb`: Vendor Kernel Build, `sb`: System Build).
+* **`flash_timeout`** *(optional, default `30m`)*: Upper bound on a single job's
+  provisioning step.
+* **`test_timeout`** *(optional, default `3h`)*: Upper bound on a single job's
+  ATest run.
+* **`device_wait_timeout`** *(optional, default `3m`)*: How long to keep looking
+  for the device after it has been flashed and rebooted, before giving up on the
+  job.
+
+All three accept GNU `timeout` duration strings (`90s`, `45m`, `2h`) and can also
+be overridden per-invocation via the `DEFAULT_FLASH_TIMEOUT`,
+`DEFAULT_TEST_TIMEOUT` and `DEFAULT_DEVICE_WAIT_TIMEOUT` environment variables.
+The polling interval used while waiting comes from
+`DEFAULT_DEVICE_POLL_INTERVAL` (default `5s`).
+
+> `flash_timeout` and `test_timeout` are **safety nets**, not normal-path
+> budgets. Their job is to stop one wedged device from consuming an entire
+> overnight matrix run — which matters a lot when every job in the matrix shares
+> the same physical device. Don't tune them down aggressively: a healthy
+> cold-cache flash can legitimately take tens of minutes because of the artifact
+> download. Genuine hangs are caught in seconds by the per-command timeouts
+> inside `flash_device.sh`.
+
+> `device_wait_timeout` is different: it is a **tolerance window**, not a kill
+> switch. A device bridged over the network (Pontis) routinely disappears for
+> tens of seconds after a reboot while the bridge reconnects. Without this
+> window the job fails instantly even though the device is about to come back.
+> Raise it if your bridge is slow; lowering it below roughly a minute mostly
+> just makes the runner fragile.
 
 ---
 
