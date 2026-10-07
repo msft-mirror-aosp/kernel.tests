@@ -32,6 +32,13 @@ DEFAULT_ADB_TIMEOUT="${DEFAULT_ADB_TIMEOUT:-5s}"      # single adb query
 DEFAULT_FASTBOOT_TIMEOUT="${DEFAULT_FASTBOOT_TIMEOUT:-15s}"  # single fastboot query
 DEFAULT_FLASH_TIMEOUT="${DEFAULT_FLASH_TIMEOUT:-30m}" # whole flash_device.sh run
 DEFAULT_TEST_TIMEOUT="${DEFAULT_TEST_TIMEOUT:-3h}"    # whole atest run
+# Whole launch_cvd.sh run. This is the virtual device counterpart of
+# DEFAULT_FLASH_TIMEOUT and, like it, is a backstop rather than a budget.
+# A healthy Cuttlefish launch was measured at 5 to 6 minutes, but the timings
+# swing widely: waiting for the SSH server alone ranged from 27 to 200 seconds
+# across three runs. 30 minutes leaves room for a bad day while still ending a
+# launch that will clearly never finish.
+DEFAULT_LAUNCH_TIMEOUT="${DEFAULT_LAUNCH_TIMEOUT:-30m}"
 # How long to keep waiting for a device to show up, and how often to re-check.
 # A bridged device (Pontis) can take tens of seconds to reappear after a reboot.
 DEFAULT_DEVICE_WAIT_TIMEOUT="${DEFAULT_DEVICE_WAIT_TIMEOUT:-3m}"
@@ -739,6 +746,12 @@ function run_command() {
 #     child in its own process group and signals the entire group, so
 #     grandchildren (fetch_artifact, fastboot, ...) are cleaned up too. With
 #     '--foreground' they survive and keep holding the device.
+#   * stdin comes from /dev/null. That process group is not the foreground one,
+#     so a child that touches the terminal is stopped by the kernel and never
+#     wakes up: reading raises SIGTTIN, and calling tcsetattr raises SIGTTOU.
+#     'ssh -t' does call tcsetattr, which is how acloud used to freeze while
+#     booting a Cuttlefish device. With no terminal on stdin, 'ssh -t' skips
+#     that step. Anything run under a timeout is non interactive anyway.
 #   * Returns non-zero on timeout, so under 'set -e' callers MUST invoke this in
 #     a condition or append '|| rc=$?'.
 function run_with_timeout() {
@@ -751,7 +764,7 @@ function run_with_timeout() {
     fi
 
     local status_code=0
-    timeout -k "$TIMEOUT_KILL_GRACE" "$duration" "$@" || status_code=$?
+    timeout -k "$TIMEOUT_KILL_GRACE" "$duration" "$@" < /dev/null || status_code=$?
 
     # 124: terminated by SIGTERM at the deadline.
     # 137: 128+9, the --kill-after SIGKILL had to be used.

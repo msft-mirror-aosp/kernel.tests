@@ -20,6 +20,16 @@ PLATFORM_REPO_ROOT=""
 PLATFORM_VERSION=""
 SERIAL_OUT=""
 
+# Optional override for how long acloud may wait for the device to download
+# artifacts and boot, in seconds. Empty means "let acloud decide", which is the
+# default and is almost always the right choice.
+#
+# Do not give this a value here. acloud already applies its own budget of 450
+# seconds minus the time already spent downloading, so a larger number would
+# only make a device that never boots take longer to be reported. The knob
+# exists for the rare build that genuinely needs more room.
+ACLOUD_BOOT_TIMEOUT_SECS="${ACLOUD_BOOT_TIMEOUT_SECS:-}"
+
 readonly REQUIRED_COMMANDS=("adb" "grep" "basename" "dirname" "read" "realpath" "nproc" "bc" "jq")
 
 # --- Library Import ---
@@ -76,6 +86,14 @@ function print_help() {
     echo "                        Additional acloud command arg. Can be repeated."
     echo "                        For example --acloud-arg=--local-instance to launch a local cvd."
     echo "  -h, --help            Display this help message and exit"
+    echo ""
+    echo "Environment variables:"
+    echo "  ACLOUD_BOOT_TIMEOUT_SECS"
+    echo "                        Override how long acloud waits for the device to"
+    echo "                        download artifacts and boot, in seconds."
+    echo "                        Unset by default, which keeps acloud's own limit."
+    echo "                        Only raise it if a slow build is being reported as"
+    echo "                        a boot failure."
     echo ""
     echo "Examples:"
     echo "$0"
@@ -644,6 +662,20 @@ fi
 
 # 9. Execute acloud Command
 acloud_cmd_parts+=("${EXTRA_OPTIONS[@]}")
+
+# Only override acloud's own boot budget when asked. Passing nothing keeps
+# acloud's built in limit, which is tighter than anything worth hardcoding here.
+if [[ -n "$ACLOUD_BOOT_TIMEOUT_SECS" ]]; then
+    if [[ ! "$ACLOUD_BOOT_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
+        fail_error "ACLOUD_BOOT_TIMEOUT_SECS must be a whole number of seconds, got '$ACLOUD_BOOT_TIMEOUT_SECS'"
+    fi
+    # Matches both '--boot-timeout 900' and '--boot-timeout=900'.
+    if [[ " ${EXTRA_OPTIONS[*]} " == *" --boot-timeout"* ]]; then
+        log_warn "Ignoring ACLOUD_BOOT_TIMEOUT_SECS: --boot-timeout was already given via --acloud-arg."
+    else
+        acloud_cmd_parts+=("--boot-timeout" "$ACLOUD_BOOT_TIMEOUT_SECS")
+    fi
+fi
 
 tmp_report_file=""
 if [[ -n "$SERIAL_OUT" ]]; then
